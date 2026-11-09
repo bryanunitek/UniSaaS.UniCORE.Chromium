@@ -41,6 +41,8 @@ export function getHtml(this: OmniboxEverywhereOmniboxElement) {
       this.composeButtonEnabled ? html`
           <cr-searchbox-compose-button id="composeButton" slot="compose-button"
               ?dynamic="${this.ntpRealboxDynamicAiModeButtonEnabled_}"
+              ?inherit-visibility="${
+                  this.ntpRealboxDynamicAiModeButtonPreventEarlyPaint_}"
               ?has-user-input="${this.hasUserInput_}"
               ?virtual-focus-enabled="${this.virtualFocusEnabled}"
               ?has-virtual-focus="${this.isAiModeVirtualFocused()}"
@@ -120,6 +122,20 @@ export function getHtml(this: OmniboxEverywhereOmniboxElement) {
           </div>
           ` :
               ''}
+          <div class="searchbox-icon-button-container overflow ${
+              this.isOverflowMenuOpen ? 'menu-open' : ''}">
+            <button id="overflowMenuButton" class="searchbox-icon-button"
+                tabindex="${this.virtualFocusEnabled &&
+                    this.dropdownIsVisible ? -1 : 0}"
+                aria-haspopup="menu"
+                aria-expanded="${this.isOverflowMenuOpen}"
+                aria-label="${this.i18n('overflowMenuButtonLabel')}"
+                title="${this.i18n('overflowMenuButtonLabel')}"
+                @pointerdown="${this.onOverflowMenuPointerdown_}"
+                @pointercancel="${this.onOverflowMenuPointercancel_}"
+                @click="${this.onOverflowMenuClick_}">
+            </button>
+          </div>
         </div>
       </div>
     </div>

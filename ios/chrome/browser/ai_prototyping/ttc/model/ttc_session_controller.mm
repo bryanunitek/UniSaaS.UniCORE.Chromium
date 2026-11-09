@@ -17,7 +17,9 @@
 #import "base/memory/weak_ptr.h"
 #import "base/sequence_checker.h"
 #import "base/strings/to_string.h"
+#import "base/strings/utf_string_conversions.h"
 #import "base/task/sequenced_task_runner.h"
+#import "base/types/expected.h"
 #import "components/actor/public/mojom/actor_types.mojom.h"
 #import "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #import "components/ttc/app/public/error_codes.h"
@@ -30,6 +32,7 @@
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
 #import "ios/web/public/web_state.h"
 #import "url/gurl.h"
+#import "url/origin.h"
 
 namespace {
 
@@ -45,6 +48,36 @@ std::string SessionLifecycleToString(TTCSessionLifecycle lifecycle) {
   }
 }
 
+// Returns whether `response` contains a valid `AnnotatedPageContent` payload.
+bool HasAnnotatedPageContent(
+    const PageContextWrapperCallbackResponse& response) {
+  return response.has_value() && response.value() &&
+         response.value()->has_annotated_page_content();
+}
+
+// Returns whether `response` failed because the page's context is not eligible
+// to be shared with the backend (unsupported scheme/MIME type, unsafe page, or
+// force-detached context).
+bool IsPageContextIneligible(
+    const PageContextWrapperCallbackResponse& response) {
+  if (response.has_value()) {
+    return false;
+  }
+  switch (response.error()) {
+    case PageContextWrapperError::kPageNotExtractableError:
+    case PageContextWrapperError::kPageUnsafeError:
+    case PageContextWrapperError::kForceDetachError:
+      return true;
+    case PageContextWrapperError::kGenericError:
+    case PageContextWrapperError::kAPCError:
+    case PageContextWrapperError::kScreenshotError:
+    case PageContextWrapperError::kPDFDataError:
+    case PageContextWrapperError::kTimeout:
+    case PageContextWrapperError::kInnerTextError:
+      return false;
+  }
+}
+
 }  // namespace
 
 #pragma mark - TtcConversation::Delegate
@@ -55,9 +88,17 @@ void TtcSessionController::OnConversationInitialized() {
     return;
   }
   conversation_->SendToolSetUpdate(ttc::GetDefaultToolDefinitions());
+  base::WeakPtr<TtcSessionController> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   SetLifecycle(TTCSessionLifecycle::kLive);
-  if (lifecycle_ != TTCSessionLifecycle::kLive) {
+  if (!weak_this || lifecycle_ != TTCSessionLifecycle::kLive) {
     return;
+  }
+  if (conversation_->IsMicMuted()) {
+    OnConversationMicMutedChanged(true);
+    if (!weak_this || lifecycle_ != TTCSessionLifecycle::kLive) {
+      return;
+    }
   }
   // Starts tracking and extracting page context only after session setup and
   // toolset registration have completed, so `ContextUpdate` is never queued
@@ -73,6 +114,19 @@ void TtcSessionController::OnConversationInitialized() {
 
 void TtcSessionController::OnConversationClosed() {
   StopSessionAsync();
+}
+
+void TtcSessionController::OnConversationMicMutedChanged(bool muted) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (lifecycle_ != TTCSessionLifecycle::kLive ||
+      notified_mic_muted_ == muted) {
+    return;
+  }
+  notified_mic_muted_ = muted;
+  LogMicMuted(muted);
+  for (TtcSessionControllerObserver& observer : observers_) {
+    observer.OnMicMutedChanged(this, muted);
+  }
 }
 
 void TtcSessionController::OnAudioEnergyUpdated(float energy) {
@@ -108,6 +162,9 @@ void TtcSessionController::OnToolCall(
     ttc::ToolResponseCallback tool_response_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (lifecycle_ == TTCSessionLifecycle::kFinished || !actuation_handler_) {
+    if (lifecycle_ != TTCSessionLifecycle::kFinished) {
+      LogActuationUnavailable(tool_request.name);
+    }
     if (tool_response_callback) {
       std::move(tool_response_callback)
           .Run(ttc::ToolResponse::Error(
@@ -116,7 +173,11 @@ void TtcSessionController::OnToolCall(
     return;
   }
 
+  Browser* browser = voice_focused_web_state_tracker_
+                         ? voice_focused_web_state_tracker_->GetBrowser()
+                         : nullptr;
   actuation_handler_->ProcessToolCall(tool_request, GetVoiceFocusedWebState(),
+                                      browser,
                                       std::move(tool_response_callback));
 }
 
@@ -137,12 +198,13 @@ void TtcSessionController::OnVoiceFocusedWebStateChanged(
     page_context_monitor_->Disconnect();
     page_context_monitor_.reset();
   }
-  // TODO(b/555804152): Signal to the backend when page context is invalidated
-  // or cannot be extracted for the focused WebState.
-  if (web_state) {
-    page_context_monitor_ =
-        std::make_unique<TtcPageContextMonitor>(*web_state, this);
+  if (!web_state) {
+    conversation_->SendContextUpdate(GURL(), /*title=*/std::string(),
+                                     /*apc=*/{});
+    return;
   }
+  page_context_monitor_ =
+      std::make_unique<TtcPageContextMonitor>(*web_state, this, journal_.get());
 }
 
 #pragma mark - TtcPageContextMonitor::Delegate
@@ -150,26 +212,42 @@ void TtcSessionController::OnVoiceFocusedWebStateChanged(
 void TtcSessionController::OnPageContextFetched(
     PageContextWrapperCallbackResponse response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (lifecycle_ != TTCSessionLifecycle::kLive || !response.has_value()) {
+  if (lifecycle_ != TTCSessionLifecycle::kLive) {
     return;
   }
-  const optimization_guide::proto::PageContext* page_context =
-      response.value().get();
-  if (!page_context || !page_context->has_annotated_page_content()) {
+  if (!HasAnnotatedPageContent(response)) {
+    web::WebState* web_state = GetVoiceFocusedWebState();
+    if (!web_state) {
+      return;
+    }
+    // Send a tab-only update with empty `AnnotatedPageContent` so the backend
+    // clears stale page content from the previous page. Only share the origin
+    // when the page's context is not eligible to be shared.
+    const GURL& committed_url = web_state->GetLastCommittedURL();
+    if (IsPageContextIneligible(response)) {
+      conversation_->SendContextUpdate(
+          url::Origin::Create(committed_url).GetURL(),
+          /*title=*/std::string(), /*apc=*/{});
+      return;
+    }
+    conversation_->SendContextUpdate(
+        committed_url, base::UTF16ToUTF8(web_state->GetTitle()), /*apc=*/{});
     return;
   }
+  const optimization_guide::proto::PageContext& page_context =
+      *response.value();
   const optimization_guide::proto::AnnotatedPageContent& apc =
-      page_context->annotated_page_content();
+      page_context.annotated_page_content();
   const optimization_guide::proto::FrameData& main_frame_data =
       apc.main_frame_data();
   // Fall back to top-level `PageContext` metadata when `main_frame_data`
   // fields are empty.
   const std::string& main_frame_url = main_frame_data.url();
   const GURL url =
-      main_frame_url.empty() ? GURL(page_context->url()) : GURL(main_frame_url);
+      main_frame_url.empty() ? GURL(page_context.url()) : GURL(main_frame_url);
   const std::string& main_frame_title = main_frame_data.title();
   const std::string& title =
-      main_frame_title.empty() ? page_context->title() : main_frame_title;
+      main_frame_title.empty() ? page_context.title() : main_frame_title;
   conversation_->SendContextUpdate(url, title, apc);
 }
 
@@ -186,6 +264,11 @@ TtcSessionController::TtcSessionController(
           std::move(voice_focused_web_state_tracker)) {
   CHECK(conversation_);
   conversation_->set_delegate(this);
+  if (actuation_handler_) {
+    actuation_handler_->SetCloseSessionCallback(
+        base::BindRepeating(&TtcSessionController::StopSessionAsync,
+                            weak_ptr_factory_.GetWeakPtr()));
+  }
   RegisterBackgroundObserver();
 }
 
@@ -224,6 +307,9 @@ void TtcSessionController::set_journal(TTCJournal* journal) {
   if (actuation_handler_) {
     actuation_handler_->set_journal(journal);
   }
+  if (page_context_monitor_) {
+    page_context_monitor_->set_journal(journal);
+  }
 }
 
 web::WebState* TtcSessionController::GetVoiceFocusedWebState() const {
@@ -241,6 +327,25 @@ void TtcSessionController::StartSession() {
     return;
   }
   conversation_->Start();
+}
+
+bool TtcSessionController::SetMicMuted(bool muted) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (lifecycle_ != TTCSessionLifecycle::kLive ||
+      conversation_->IsMicMuted() == muted) {
+    return false;
+  }
+  base::WeakPtr<TtcSessionController> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
+  conversation_->SetMicMuted(muted);
+  return weak_this && lifecycle_ == TTCSessionLifecycle::kLive &&
+         conversation_->IsMicMuted() == muted;
+}
+
+bool TtcSessionController::IsMicMuted() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return lifecycle_ == TTCSessionLifecycle::kLive &&
+         conversation_->IsMicMuted();
 }
 
 void TtcSessionController::StopSession() {
@@ -376,6 +481,18 @@ void TtcSessionController::LogLifecycleTransition(
                     .Build());
 }
 
+void TtcSessionController::LogMicMuted(bool muted) {
+  if (!journal_) {
+    return;
+  }
+  journal_->Log(
+      TTCJournalComponent::kSession, "TtcMicMuted",
+      TTCJournalDetailsBuilder()
+          .SetSummary(muted ? "Microphone muted" : "Microphone unmuted")
+          .Add("muted", muted)
+          .Build());
+}
+
 void TtcSessionController::LogSessionError(ttc::ErrorCode error) {
   if (!journal_) {
     return;
@@ -401,4 +518,21 @@ void TtcSessionController::LogAppDidEnterBackground() {
   journal_->Log(
       TTCJournalComponent::kSession, "TtcAppDidEnterBackground",
       TTCJournalDetailsBuilder().SetSummary("App entered background").Build());
+}
+
+void TtcSessionController::LogActuationUnavailable(
+    const std::string& tool_name) {
+  if (!journal_) {
+    return;
+  }
+  journal_->LogError(
+      TTCJournalComponent::kActuation, "ActuationDispatchRejected",
+      TTCJournalDetailsBuilder()
+          .SetSummary("Tool rejected: Actuation service not available")
+          .Add("tool_name", tool_name)
+          .Add("result_code",
+               static_cast<int64_t>(
+                   actor::mojom::ActionResultCode::kExecutorDestroyed))
+          .AddError("Actuation service not available")
+          .Build());
 }

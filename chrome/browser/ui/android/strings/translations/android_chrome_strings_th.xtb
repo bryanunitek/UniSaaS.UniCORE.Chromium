@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">ไม่ต้องเสนอการแปลเว็บไซต์เหล่านี้</translation>
 <translation id="1143193470214071120">โปรดปิดหรือจัดการหน้าต่าง</translation>
 <translation id="1143486892058798649">บันทึกลิงก์เป็น…</translation>
+<translation id="1149644372535087155">บันทึกรหัสผ่านใน Chrome</translation>
 <translation id="1149725087019908252">กำลังสแกน <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> จะเปิดใน Chrome การดำเนินการต่อหมายความว่า คุณยอมรับ<ph name="BEGIN_LINK1" />ข้อกำหนดในการให้บริการของ Google<ph name="END_LINK1" /> และ<ph name="BEGIN_LINK2" />ข้อกำหนดในการให้บริการเพิ่มเติมของ Google Chrome และ Chrome OS<ph name="END_LINK2" /></translation>
 <translation id="1154555449933432029">คุณไม่มีรหัสผ่านที่บันทึกไว้ในเครื่องมือจัดการรหัสผ่านบน Google</translation>
@@ -188,6 +189,7 @@
 <translation id="1749561566933687563">ซิงค์บุ๊กมาร์กของคุณ</translation>
 <translation id="1750238553597293878">ใช้รหัสผ่านในบัญชี Google ต่อไป</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">กู้คืนหน้าต่าง <ph name="TITLE_OF_WINDOW" /></translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{หน้า มี 1 หน้าในรายการ}other{หน้า มี # หน้าในรายการ}}</translation>
 <translation id="1771929606532798550">ระบบจะส่งข้อมูลการใช้งาน Chrome ไปยัง Google แต่จะไม่เชื่อมโยงกับคุณ\n\nหาก Chrome ทำงานขัดข้อง รายละเอียดเกี่ยวกับข้อขัดข้องอาจรวมข้อมูลส่วนบุคคลบางอย่าง\n\nหากคุณซิงค์ประวัติการเข้าชมกับบัญชี Google เมตริกก็อาจรวมข้อมูลเกี่ยวกับ URL ที่คุณเข้าชมไว้ด้วย</translation>
 <translation id="1778457539567749232">ทำเครื่องหมายว่ายังไม่อ่าน</translation>
@@ -299,6 +301,7 @@
 <translation id="2190355936436201913">(ว่างเปล่า)</translation>
 <translation id="219283042927675668">แท็บในกลุ่ม</translation>
 <translation id="2194856509914051091">สิ่งที่ควรพิจารณา</translation>
+<translation id="2195339740518523951">ให้ Chrome รักษาความปลอดภัยอย่างเข้มงวดที่สุด</translation>
 <translation id="2196695604589508993">เปิดประวัติการเข้าชม</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, แท็บการแชร์ที่ปักหมุด</translation>
 <translation id="22091350895006575">เพิ่มชื่อผู้ใช้</translation>
@@ -1256,6 +1259,7 @@
 <translation id="6022659036123304283">ปรับเปลี่ยน Chrome ในแบบของคุณ</translation>
 <translation id="6023820583797130428">เปิดเมนูเพื่อย้อนกลับ</translation>
 <translation id="6026538407078977628">ขยายเต็มหน้าจอ</translation>
+<translation id="6027619584715411062">ลงชื่อเข้าใช้เพื่อรับบุ๊กมาร์ก รหัสผ่าน และอื่นๆ ในอุปกรณ์ทุกเครื่อง</translation>
 <translation id="6039379616847168523">ข้ามไปยังแท็บถัดไป</translation>
 <translation id="6040143037577758943">ปิด</translation>
 <translation id="604124094241169006">อัตโนมัติ</translation>
@@ -1600,6 +1604,7 @@
 <translation id="7190921792980745354">บล็อก <ph name="MEMBER_FULL_NAME" /> ไหม</translation>
 <translation id="7191430249889272776">แท็บเปิดในพื้นหลัง</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{คุณควรเปลี่ยนรหัสผ่านตอนนี้เลย}other{คุณควรเปลี่ยนรหัสผ่านเหล่านี้ตอนนี้เลย}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{กู้คืนหน้าต่างของแท็บ <ph name="TAB_COUNT_ONE" /> แท็บ}other{กู้คืนหน้าต่างของแท็บ <ph name="TAB_COUNT_MANY" /> แท็บ}}</translation>
 <translation id="7196215469483532480">คำอธิบายคู่มือความเป็นส่วนตัวเปิดแบบเต็มหน้า</translation>
 <translation id="7196455519852483601">คุณสามารถลบประวัติการเข้าชม คุกกี้ ข้อมูลเว็บไซต์ และอื่นๆ บางส่วนหรือทั้งหมดได้</translation>
 <translation id="7197682514647286393">ลบข้อมูลการท่องเว็บอย่างรวดเร็ว</translation>
@@ -1853,6 +1858,7 @@
 <translation id="8135406045838672858">PDF ที่ดาวน์โหลดจะเปิดด้วย "<ph name="APP_NAME" />" โดยอัตโนมัติ</translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{ได้รับลิงก์แล้ว}other{ได้รับลิงก์ # รายการแล้ว}}</translation>
 <translation id="8137562778192957619">คุณไม่ต้องจำรหัสผ่านนี้ เพราะระบบจะบันทึกไว้ในเครื่องมือจัดการรหัสผ่านบน Google</translation>
+<translation id="8149825829235553327">รักษาความปลอดภัยให้แท็บที่ไม่ระบุตัวตน</translation>
 <translation id="8151185429379586178">เครื่องมือสำหรับนักพัฒนาซอฟต์แวร์</translation>
 <translation id="8152331954420209374">ไปที่ Lens</translation>
 <translation id="8153206878708357851">เปิด/ปิดการเรียกดูด้วยแป้นพิมพ์</translation>

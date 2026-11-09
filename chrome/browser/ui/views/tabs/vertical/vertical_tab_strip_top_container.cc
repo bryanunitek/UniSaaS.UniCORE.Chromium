@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
 
+#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -60,7 +61,6 @@ VerticalTabStripTopContainer::VerticalTabStripTopContainer(
       browser_, TabStripComboButton::Context::kVerticalTabStrip));
   combo_button_->SetPaintToLayer();
   combo_button_->layer()->SetFillsBoundsOpaquely(false);
-  combo_button_->SetClipLayerToVisibleBounds(true);
   combo_button_->SetOrientation(
       combo_button_orientation_ = state_controller->IsCollapsed()
                                       ? views::LayoutOrientation::kVertical
@@ -98,6 +98,35 @@ VerticalTabStripTopContainer::~VerticalTabStripTopContainer() = default;
 void VerticalTabStripTopContainer::Layout(PassKey) {
   LayoutSuperclass<views::View>(this);
   combo_button_->SetOrientation(combo_button_orientation_);
+  combo_button_->SetClipLayerToVisibleBounds(
+      !GetLocalBounds().Contains(combo_button_->bounds()));
+}
+
+void VerticalTabStripTopContainer::VisibilityChanged(views::View* starting_from,
+                                                     bool is_visible) {
+  views::View::VisibilityChanged(starting_from, is_visible);
+  if (is_visible) {
+    iph_timer_.Start(FROM_HERE, base::TimeDelta(), this,
+                     &VerticalTabStripTopContainer::MaybeShowTabGroupsMovedIPH);
+  } else {
+    iph_timer_.Stop();
+  }
+}
+
+void VerticalTabStripTopContainer::MaybeShowTabGroupsMovedIPH() {
+  if (!organizer_panel::IsOrganizerPanelFeatureEnabled() ||
+      !tab_groups::SavedTabGroupUtils::IsEnabledForProfile(
+          browser_->GetProfile())) {
+    return;
+  }
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
+  if (!prefs->GetBoolean(prefs::kEverythingMenuPinnedToTabstrip) ||
+      !prefs->GetBoolean(prefs::kTabSearchPinnedToTabstrip) ||
+      prefs->GetTime(prefs::kVerticalTabsEverythingMenuLastPressed).is_null()) {
+    return;
+  }
+  BrowserUserEducationInterface::From(browser_)->MaybeShowFeaturePromo(
+      feature_engagement::kIPH_VerticalTabsTabGroupsInOrganizerFeature);
 }
 
 views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
@@ -120,8 +149,6 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
   const bool is_collapsing =
       state_controller_ && state_controller_->GetCollapseState() ==
                                tabs::VerticalTabStripCollapseState::kCollapsing;
-  const int uncollapsed_width =
-      state_controller_ ? state_controller_->GetUncollapsedWidth() : 0;
   const bool is_expand_on_hover =
       state_controller_ && state_controller_->IsExpandOnHoverEnabled();
   const bool keep_horizontal_layout =
@@ -272,14 +299,12 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
               LayoutConstant::kVerticalTabStripCollapsedVerticalPadding);
     }
 
+    const int horizontal_padding =
+        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
     const int collapsed_width =
-        tabs::kVerticalTabStripCollapsedWidth -
-        2 * GetLayoutConstant(
-                LayoutConstant::kVerticalTabStripHorizontalPadding);
+        tabs::kVerticalTabStripCollapsedWidth - 2 * horizontal_padding;
     const int expected_uncollapsed_width =
-        uncollapsed_width -
-        2 * GetLayoutConstant(
-                LayoutConstant::kVerticalTabStripHorizontalPadding);
+        tabs::kVerticalTabStripDefaultUncollapsedWidth - 2 * horizontal_padding;
     const int layout_width =
         keep_horizontal_layout
             ? std::max(host_size.width(), expected_uncollapsed_width)
@@ -501,18 +526,22 @@ bool VerticalTabStripTopContainer::ShouldShowSegmentedControl(
     return false;
   }
 
-  const bool is_collapsed = state_controller_->GetCollapseState() !=
-                            tabs::VerticalTabStripCollapseState::kExpanded;
-  if (is_collapsed && !state_controller_->IsExpandOnHoverEnabled()) {
+  const auto collapse_state = state_controller_->GetCollapseState();
+  if (collapse_state == tabs::VerticalTabStripCollapseState::kCollapsed) {
+    return state_controller_->IsExpandOnHoverEnabled();
+  }
+  if (collapse_state == tabs::VerticalTabStripCollapseState::kCollapsing &&
+      !state_controller_->IsExpandOnHoverEnabled()) {
     return false;
   }
 
   const int horizontal_padding =
       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
   const int effective_tab_strip_width =
-      is_collapsed ? std::max(available_width + 2 * horizontal_padding,
-                              state_controller_->GetUncollapsedWidth())
-                   : available_width + 2 * horizontal_padding;
+      collapse_state == tabs::VerticalTabStripCollapseState::kCollapsing
+          ? std::max(available_width + 2 * horizontal_padding,
+                     state_controller_->GetUncollapsedWidth())
+          : available_width + 2 * horizontal_padding;
   return effective_tab_strip_width >
          organizer_panel::kOrganizerPanelMinWidth -
              organizer_panel::kOrganizerPanelMinOverlap;

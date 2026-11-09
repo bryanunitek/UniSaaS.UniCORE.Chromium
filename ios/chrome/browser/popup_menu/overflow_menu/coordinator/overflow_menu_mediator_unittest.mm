@@ -54,7 +54,6 @@
 #import "components/translate/core/browser/translate_prefs.h"
 #import "components/translate/core/language_detection/language_detection_model.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
-#import "ios/chrome/browser/dom_distiller/model/distiller_service_factory.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
 #import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
@@ -111,6 +110,7 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/test/toolbar_test_navigation_manager.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_java_script_feature.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_tab_helper.h"
+#import "ios/chrome/browser/web_distiller/model/distiller_service_factory.h"
 #import "ios/chrome/browser/whats_new/coordinator/whats_new_util.h"
 #import "ios/chrome/browser/whats_new/public/constants.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
@@ -133,6 +133,7 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
+#import "ui/gfx/image/image.h"
 
 using sync_preferences::PrefServiceMockFactory;
 using sync_preferences::PrefServiceSyncable;
@@ -1129,6 +1130,85 @@ TEST_F(OverflowMenuMediatorTest, TestBookmarksToolsMenuButtons) {
   EXPECT_FALSE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
 }
 
+// Tests that 1) the tools menu has an enabled 'Add to Bookmarks' button when
+// the current URL is not in bookmarks, 2) the bookmark button changes to an
+// enabled 'Edit bookmark' button when navigating to a URL bookmarked in account
+// storage (`account_mobile_node()`), and 3) the bookmark button changes back to
+// 'Add to Bookmarks' when the account bookmark is removed.
+TEST_F(OverflowMenuMediatorTest, TestBookmarksToolsMenuButtonsAccountStorage) {
+  const GURL nonBookmarkedURL("https://nonbookmarked.url");
+  const GURL bookmarkedURL("https://bookmarked.url");
+
+  web_state_->SetCurrentURL(nonBookmarkedURL);
+  SetUpActiveWebState();
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpBookmarks();
+  bookmark_model_->CreateAccountPermanentFolders();
+  bookmark_model_->AddURL(bookmark_model_->account_mobile_node(), 0,
+                          base::SysNSStringToUTF16(@"Test account bookmark"),
+                          bookmarkedURL);
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_TRUE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_FALSE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+
+  // Navigate to bookmarked url.
+  web_state_->SetCurrentURL(bookmarkedURL);
+  web::FakeNavigationContext context;
+  web_state_->OnNavigationFinished(&context);
+
+  EXPECT_FALSE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_TRUE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+
+  bookmark_model_->RemoveAllUserBookmarks(FROM_HERE);
+  EXPECT_TRUE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_FALSE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+}
+
+// Tests that when a URL is bookmarked in both local storage (`mobile_node()`)
+// and account storage (`account_mobile_node()`), removing the local bookmark
+// keeps 'Edit bookmark' enabled until the account bookmark is also removed.
+TEST_F(OverflowMenuMediatorTest, TestBookmarksToolsMenuButtonsBothStorages) {
+  const GURL bookmarkedURL("https://bookmarked.url");
+
+  web_state_->SetCurrentURL(bookmarkedURL);
+  SetUpActiveWebState();
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpBookmarks();
+  bookmark_model_->CreateAccountPermanentFolders();
+  const bookmarks::BookmarkNode* localNode = bookmark_model_->AddURL(
+      bookmark_model_->mobile_node(), 0,
+      base::SysNSStringToUTF16(@"Test local bookmark"), bookmarkedURL);
+  bookmark_model_->AddURL(bookmark_model_->account_mobile_node(), 0,
+                          base::SysNSStringToUTF16(@"Test account bookmark"),
+                          bookmarkedURL);
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_FALSE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_TRUE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+
+  // Removing only the local bookmark should keep 'Edit bookmark' enabled
+  // because the URL is still bookmarked in account storage.
+  bookmark_model_->Remove(
+      localNode, bookmarks::metrics::BookmarkEditSource::kOther, FROM_HERE);
+  EXPECT_FALSE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_TRUE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+
+  // Removing account permanent folders removes the remaining bookmark and
+  // switches the button back to 'Add to Bookmarks'.
+  bookmark_model_->RemoveAccountPermanentFolders();
+  EXPECT_TRUE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
+  EXPECT_FALSE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
+}
+
 // Tests that the bookmark button is disabled when EditBookmarksEnabled pref is
 // changed to false.
 TEST_F(OverflowMenuMediatorTest, TestDisableBookmarksButton) {
@@ -1660,8 +1740,8 @@ TEST_F(OverflowMenuMediatorTest,
              image_fetcher::ImageDataFetcherCallback* image_data_callback,
              image_fetcher::ImageFetcherCallback* image_callback,
              image_fetcher::ImageFetcherParams params) {
-            std::move(*image_data_callback)
-                .Run(std::string(), image_fetcher::RequestMetadata());
+            std::move(*image_callback)
+                .Run(gfx::Image(), image_fetcher::RequestMetadata());
           });
   mediator_.imageFetcher = &mockImageFetcher;
 

@@ -13,6 +13,7 @@
 #include "base/base_switches.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/i18n/icubridge/default_icu_locale.h"
@@ -32,6 +33,8 @@
 #include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/overlay_window.h"
+#include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -54,8 +57,11 @@
 #include "printing/buildflags/buildflags.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/switches.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/crash/core/app/crash_switches.h"  // nogncheck
@@ -415,8 +421,7 @@ bool HeadlessContentBrowserClient::
 
 bool HeadlessContentBrowserClient::IsPrivacySandboxReportingDestinationAttested(
     content::BrowserContext* browser_context,
-    const url::Origin& destination_origin,
-    content::PrivacySandboxInvokingAPI invoking_api) {
+    const url::Origin& destination_origin) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   return command_line->HasSwitch(switches::kForceReportingDestinationAttested);
 }
@@ -553,9 +558,53 @@ bool HeadlessContentBrowserClient::IsRendererProcessPriorityEnabled() {
   return false;
 }
 
+bool HeadlessContentBrowserClient::IsHandledURL(const GURL& url) {
+  if (!url.is_valid()) {
+    return false;
+  }
+  constexpr auto kProtocolList = base::MakeFixedFlatSet<std::string_view>({
+      url::kHttpScheme,
+      url::kHttpsScheme,
+      url::kWsScheme,
+      url::kWssScheme,
+      url::kBlobScheme,
+      url::kFileSystemScheme,
+      url::kDataScheme,
+      url::kFileScheme,
+  });
+
+  return kProtocolList.contains(url.scheme());
+}
+
 std::unique_ptr<content::DigitalIdentityProvider>
 HeadlessContentBrowserClient::CreateDigitalIdentityProvider() {
   return std::make_unique<HeadlessDigitalIdentityProvider>();
+}
+
+bool HeadlessContentBrowserClient::IsClipboardPasteAllowed(
+    content::RenderFrameHost* render_frame_host) {
+  CHECK(render_frame_host);
+
+  if (content::WebContents::FromRenderFrameHost(render_frame_host)
+          ->HasRecentInteraction()) {
+    return true;
+  }
+
+  if (!render_frame_host->IsFocused()) {
+    return false;
+  }
+
+  content::BrowserContext* browser_context =
+      render_frame_host->GetBrowserContext();
+  content::PermissionController* permission_controller =
+      browser_context->GetPermissionController();
+  blink::mojom::PermissionStatus status =
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::CLIPBOARD_READ_WRITE),
+          render_frame_host);
+  return status == blink::mojom::PermissionStatus::GRANTED;
 }
 
 }  // namespace headless

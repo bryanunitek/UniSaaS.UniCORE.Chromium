@@ -16,12 +16,11 @@
 #include "base/base64.h"
 #include "base/base64url.h"
 #include "base/check_op.h"
-#include "base/containers/fixed_flat_map.h"
-#include "base/containers/flat_set.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
-#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -68,6 +67,7 @@
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "components/omnibox/browser/omnibox_pref_names.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
+#include "components/omnibox/browser/omnibox_text_util.h"
 #include "components/omnibox/browser/searchbox_utils.h"
 #include "components/omnibox/browser/suggest_template_info_mojo_utils.h"
 #include "components/omnibox/browser/vector_icons.h"
@@ -116,16 +116,6 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/constants.h"  // nogncheck
 #endif                                    // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-
-namespace searchbox_internal {
-
-const char* kSearchSparkIconResourceName =
-    "//resources/cr_components/searchbox/icons/search_spark.svg";
-const char* kReplyRotated180IconResourceName =
-    "//resources/cr_components/searchbox/icons/reply_rotated180.svg";
-const char* kDockToRightIconResourceName =
-    "//resources/cr_components/searchbox/icons/dock_to_right.svg";
-}  // namespace searchbox_internal
 
 namespace {
 
@@ -223,6 +213,8 @@ constexpr char kPageIconResourceName[] =
     "//resources/cr_components/searchbox/icons/page_cr23.svg";
 constexpr char kPedalsIconResourceName[] =
     "//resources/cr_components/searchbox/icons/chrome_product_cr23.svg";
+constexpr char kPromptSuggestionIconResourceName[] =
+    "//resources/cr_components/searchbox/icons/prompt_suggestion.svg";
 constexpr char kSearchIconResourceName[] =
     "//resources/cr_components/searchbox/icons/search_cr23.svg";
 constexpr char kSearchOldIconResourceName[] =
@@ -351,6 +343,9 @@ bool SearchboxHandler::GetVoiceSearchCoherenceCobrowsingComposeboxEnabled() {
 // Returns if the new voice search animation/metrics/stop button are enabled,
 // regardless of transcription.
 bool SearchboxHandler::GetVoiceSearchCoherenceAnySearchboxExperimentEnabled() {
+  if (omnibox::kVoiceSearchCoherenceRealboxKeepLegacyUi.Get()) {
+    return false;
+  }
   return base::FeatureList::IsEnabled(
              omnibox::kVoiceSearchCoherenceSearchbox) ||
          omnibox::kVoiceSearchCoherenceSearchboxWithLiveTranscription.Get();
@@ -458,6 +453,8 @@ base::DictValue SearchboxHandler::GetProfileIndependentWebUIDataSourceDict(
       {"composeboxPdfUploadButtonTitle",
        IDS_NTP_COMPOSE_PDF_UPLOAD_BUTTON_A11Y_LABEL},
       {"composeboxPlaceholderText", IDS_NTP_COMPOSE_PLACEHOLDER_TEXT},
+      {"searchboxSrpComposePlaceholder",
+       IDS_NTP_SEARCH_BOX_DYNAMIC_PLACEHOLDER_ASK_GOOGLE},
       {"composeboxSmartComposeTabTitle", IDS_NTP_COMPOSE_SMART_COMPOSE_TAB},
       {"composeboxSmartComposeTitle", IDS_NTP_COMPOSE_SMART_COMPOSE_A11Y_LABEL},
       {"composeboxSubmitButtonTitle", IDS_NTP_COMPOSE_SUBMIT_BUTTON_A11Y_LABEL},
@@ -607,8 +604,15 @@ base::DictValue SearchboxHandler::GetProfileDependentWebUIDataSourceDict(
   const omnibox::SearchboxConfig* config =
       service ? service->GetSearchboxConfig() : nullptr;
   if (config && config->has_rule_set()) {
-    max_files = config->rule_set().max_total_inputs();
+    if (config->rule_set().has_max_total_inputs()) {
+      max_files = config->rule_set().max_total_inputs();
+      max_images = max_files;
+      max_pdfs = max_files;
+    }
     for (const auto& rule : config->rule_set().input_type_rules()) {
+      if (!rule.has_max_instance()) {
+        continue;
+      }
       if (rule.input_type() == omnibox::INPUT_TYPE_LENS_IMAGE) {
         max_images = rule.max_instance();
       } else if (rule.input_type() == omnibox::INPUT_TYPE_LENS_FILE) {
@@ -757,6 +761,8 @@ std::string SearchboxHandler::VectorIconToResourceName(
                                ? omnibox::kChromeProductIcon.name
                                : omnibox::kProductChromeRefreshOldIcon.name)) {
     resource_name = kPedalsIconResourceName;
+  } else if (icon.name == omnibox::kPromptSuggestionIcon.name) {
+    resource_name = kPromptSuggestionIconResourceName;
   } else if (icon.name == omnibox::kReplyRotated180CustomIcon.name) {
     resource_name = searchbox_internal::kReplyRotated180IconResourceName;
   } else if (icon.name == (features::IsRoundedIconsEnabled()
@@ -856,10 +862,11 @@ std::string SearchboxHandler::VectorIconToResourceName(
   }
 
   if (!features::IsWebUIRoundedIconsEnabled()) {
-    static const base::NoDestructor<base::flat_set<std::string_view>>
-        kNoOldVersionIcons({
+    static constexpr auto kNoOldVersionIcons =
+        base::MakeFixedFlatSet<std::string_view>({
             kDriveLogoIconResourceName,
             kEnterpriseIconResourceName,
+            kPromptSuggestionIconResourceName,
             searchbox_internal::kReplyRotated180IconResourceName,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
             kGoogleAgentspaceMonochromeLogoIcon,
@@ -871,7 +878,7 @@ std::string SearchboxHandler::VectorIconToResourceName(
 #endif
         });
 
-    if (!kNoOldVersionIcons->contains(resource_name)) {
+    if (!kNoOldVersionIcons.contains(resource_name)) {
       base::ReplaceSubstringsAfterOffset(&resource_name, 0, ".svg", "_old.svg");
     }
   }
@@ -1105,6 +1112,8 @@ SearchboxHandler::CreateAutocompleteMatch(
   }
   mojom_match->fill_into_edit = match.fill_into_edit;
   mojom_match->inline_autocompletion = match.inline_autocompletion;
+  mojom_match->additional_text =
+      omnibox::FormatAdditionalText(match.additional_text);
   mojom_match->is_search_type = AutocompleteMatch::IsSearchType(match.type);
   mojom_match->type = omnibox::AutocompleteMatchTypeToString(match.type);
   mojom_match->supports_deletion = match.SupportsDeletion();

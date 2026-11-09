@@ -6,6 +6,7 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/ttc/core/session_controller.h"
+#include "chrome/browser/ttc/core/states.h"
 #include "chrome/browser/ttc/core/ttc_interactive_browser_test_base.h"
 #include "chrome/browser/ttc/core/ttc_keyed_service.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -15,6 +16,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/toast_view.h"
 #include "chrome/browser/ui/views/ttc/ttc_voice_plate.h"
+#include "chrome/browser/ui/views/voice/waveform_mode.h"
+#include "chrome/browser/ui/views/voice/waveform_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/ttc/app/public/error_codes.h"
 #include "content/public/test/browser_test.h"
@@ -36,6 +39,12 @@ class SessionViewImplBrowserTest : public TtcInteractiveBrowserTestBase {
   StepBuilder StartSession() {
     return Do([this]() { ttc_service().StartSession(); });
   }
+
+  StepBuilder SetSessionLifecycle(SessionLifecycle lifecycle) {
+    return Do([this, lifecycle]() {
+      session_controller().SetSessionLifecycle(lifecycle);
+    });
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, StartSessionShowsUI) {
@@ -47,6 +56,23 @@ IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, StartSessionShowsUI) {
     StartSession(),
     CheckHasSession(true),
     WaitForShow(TtcVoicePlate::kViewElementId)
+  );
+  // clang-format on
+}
+
+IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest,
+                       VoicePlateFollowsSessionLifecycle) {
+  // clang-format off
+  RunTestSequence(
+    StartSession(),
+    WaitForShow(TtcVoicePlate::kViewElementId),
+    CheckViewProperty(TtcVoicePlate::kWaveformElementId,
+                      &voice::WaveformView::mode,
+                      voice::WaveformMode::kProcessing),
+
+    SetSessionLifecycle(SessionLifecycle::kLive),
+    CheckViewProperty(TtcVoicePlate::kWaveformElementId,
+                      &voice::WaveformView::mode, voice::WaveformMode::kLive)
   );
   // clang-format on
 }
@@ -190,6 +216,54 @@ IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, DetachedTabMovesUI) {
   // clang-format on
 }
 
+IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, ClosingWindowKeepsUIState) {
+#if BUILDFLAG(IS_LINUX)
+  if (views::test::InteractionTestUtilSimulatorViews::IsWayland()) {
+    GTEST_SKIP()
+        << "Programmatic window activation is not supported in the Weston "
+           "reference implementation of Wayland used by test bots.";
+  }
+#endif
+
+  BrowserWindowInterface* const second_browser = CreateBrowser(profile());
+
+  // clang-format off
+  RunTestSequence(
+    InContext(BrowserElements::From(second_browser)->GetContext(),
+              ActivateSurface(kBrowserViewElementId)),
+
+    StartSession(),
+    InContext(BrowserElements::From(second_browser)->GetContext(),
+              WaitForShow(TtcVoicePlate::kViewElementId)),
+
+    Do([this]() {
+      session_controller().SetSessionLifecycle(SessionLifecycle::kLive);
+    }),
+    InContext(BrowserElements::From(second_browser)->GetContext(),
+              CheckViewProperty(TtcVoicePlate::kWaveformElementId,
+                                &voice::WaveformView::mode,
+                                voice::WaveformMode::kLive))
+  );
+  // clang-format on
+
+  ui_test_utils::BrowserDestroyedObserver browser_destroyed_observer(
+      second_browser);
+  second_browser->GetTabStripModel()->CloseAllTabs();
+  browser_destroyed_observer.Wait();
+
+  // clang-format off
+  RunTestSequence(
+    InContext(BrowserElements::From(browser())->GetContext(),
+              ActivateSurface(kBrowserViewElementId),
+              WaitForShow(TtcVoicePlate::kViewElementId),
+              CheckViewProperty(TtcVoicePlate::kWaveformElementId,
+                                &voice::WaveformView::mode,
+                                voice::WaveformMode::kLive)),
+    CheckHasSession(true)
+  );
+  // clang-format on
+}
+
 IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, ToastShowsOnError) {
   // clang-format off
   RunTestSequence(
@@ -198,6 +272,81 @@ IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest, ToastShowsOnError) {
         session_controller().OnError(ErrorCode::kUnknown);
       }),
       WaitForShow(toasts::ToastView::kToastViewId)
+  );
+  // clang-format on
+}
+
+// Opening a popup or app window does not move the voice plate away from the
+// normal browser window.
+IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest,
+                       NonNormalWindowDoesNotMoveUI) {
+  // clang-format off
+  RunTestSequence(
+    StartSession(),
+    WaitForShow(TtcVoicePlate::kViewElementId)
+  );
+  // clang-format on
+
+  BrowserWindowInterface* const popup_browser =
+      CreateBrowserForPopup(profile());
+  ui_test_utils::WaitForBrowserSetLastActive(popup_browser);
+  ASSERT_EQ(popup_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+
+  BrowserWindowInterface* const app_browser =
+      CreateBrowserForApp("TestApp", profile());
+  ui_test_utils::WaitForBrowserSetLastActive(app_browser);
+  ASSERT_EQ(app_browser->GetType(), BrowserWindowInterface::TYPE_APP);
+
+  // clang-format off
+  RunTestSequence(
+    InContext(
+        BrowserElements::From(popup_browser)->GetContext(),
+        EnsureNotPresent(TtcVoicePlate::kViewElementId)),
+    InContext(
+        BrowserElements::From(app_browser)->GetContext(),
+        EnsureNotPresent(TtcVoicePlate::kViewElementId)),
+    InContext(
+        BrowserElements::From(browser())->GetContext(),
+        EnsurePresent(TtcVoicePlate::kViewElementId)),
+    CheckHasSession(true)
+  );
+  // clang-format on
+}
+
+// Closing the plate's window moves the plate to the next tabbed window, not to
+// an open popup window.
+IN_PROC_BROWSER_TEST_F(SessionViewImplBrowserTest,
+                       ClosingWindowMovesUIToNextTabbedWindow) {
+  // clang-format off
+  RunTestSequence(
+    StartSession(),
+    WaitForShow(TtcVoicePlate::kViewElementId)
+  );
+  // clang-format on
+
+  BrowserWindowInterface* const second_browser = CreateBrowser(profile());
+  // clang-format off
+  RunTestSequence(
+    InContext(
+        BrowserElements::From(second_browser)->GetContext(),
+        WaitForShow(TtcVoicePlate::kViewElementId))
+  );
+  // clang-format on
+
+  BrowserWindowInterface* const popup_browser =
+      CreateBrowserForPopup(profile());
+  ui_test_utils::WaitForBrowserSetLastActive(popup_browser);
+  CloseBrowserSynchronously(second_browser);
+
+  // clang-format off
+  RunTestSequence(
+    InContext(
+        BrowserElements::From(browser())->GetContext(),
+        WaitForShow(TtcVoicePlate::kViewElementId)),
+    InContext(
+        BrowserElements::From(popup_browser)->GetContext(),
+        EnsureNotPresent(TtcVoicePlate::kViewElementId)),
+    CheckHasSession(true)
   );
   // clang-format on
 }

@@ -67,7 +67,16 @@ class CRYPTO_EXPORT ProcessBound {
   ProcessBound() = default;
 
   ProcessBound(const ProcessBound& other) = default;
-  ProcessBound& operator=(const ProcessBound& other) = default;
+
+  ProcessBound& operator=(const ProcessBound& other) {
+    if (this != &other) {
+      SecureZeroBuffer(base::as_writable_byte_span(maybe_encrypted_data_));
+      maybe_encrypted_data_ = other.maybe_encrypted_data_;
+      original_size_ = other.original_size_;
+      encrypted_ = other.encrypted_;
+    }
+    return *this;
+  }
 
   // Moving the `maybe_encrypted_data_` vector leaves it empty, and the other
   // values are updated to match an empty vector for safety.
@@ -78,6 +87,7 @@ class CRYPTO_EXPORT ProcessBound {
 
   ProcessBound& operator=(ProcessBound&& other) noexcept {
     if (this != &other) {
+      SecureZeroBuffer(base::as_writable_byte_span(maybe_encrypted_data_));
       maybe_encrypted_data_ = std::move(other.maybe_encrypted_data_);
       original_size_ = std::exchange(other.original_size_, 0);
       encrypted_ = std::exchange(other.encrypted_, false);
@@ -92,9 +102,13 @@ class CRYPTO_EXPORT ProcessBound {
   // only on supported platforms.
   explicit ProcessBound(const StringType& value, bool encrypted = true)
       : original_size_(value.size()) {
-    std::vector<CharType> data(value.begin(), value.end());
+    const size_t target_size =
+        encrypted ? internal::MaybeRoundUp(value.size()) : value.size();
+    std::vector<CharType> data;
+    data.reserve(target_size);
+    data.assign(value.begin(), value.end());
     if (encrypted) {
-      data.resize(internal::MaybeRoundUp(data.size()));
+      data.resize(target_size);
       encrypted_ =
           internal::MaybeEncryptBuffer(base::as_writable_byte_span(data));
     } else {
@@ -103,7 +117,9 @@ class CRYPTO_EXPORT ProcessBound {
     maybe_encrypted_data_ = std::move(data);
   }
 
-  ~ProcessBound() = default;
+  ~ProcessBound() {
+    SecureZeroBuffer(base::as_writable_byte_span(maybe_encrypted_data_));
+  }
 
   // Return the decrypted string, which may remain in memory. Prefer
   // secure_value() where possible.

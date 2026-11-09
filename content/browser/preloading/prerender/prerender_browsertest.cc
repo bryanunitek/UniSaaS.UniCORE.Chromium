@@ -143,6 +143,7 @@
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "third_party/blink/public/mojom/page/display_cutout.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/color/color_id.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
@@ -677,7 +678,7 @@ class PrerenderBrowserTest : public ContentBrowserTest,
       const UkmEntry& expected_attempt_entry) {
     auto attempt_entries = test_ukm_recorder()->GetEntries(
         Preloading_Attempt_PreviousPrimaryPage::kEntryName,
-        test::kPreloadingAttemptUkmMetrics);
+        test::GetPreloadingAttemptUkmMetrics());
     ASSERT_EQ(attempt_entries.size(), 1u);
     EXPECT_EQ(attempt_entries[0], expected_attempt_entry)
         << test::ActualVsExpectedUkmEntryToString(attempt_entries[0],
@@ -694,7 +695,7 @@ class PrerenderBrowserTest : public ContentBrowserTest,
       const UkmEntry& expected_prediction_entry) {
     auto prediction_entries = test_ukm_recorder()->GetEntries(
         Preloading_Prediction_PreviousPrimaryPage::kEntryName,
-        test::kPreloadingPredictionUkmMetrics);
+        test::GetPreloadingPredictionUkmMetrics());
     ASSERT_EQ(prediction_entries.size(), 1u);
     EXPECT_EQ(prediction_entries[0], expected_prediction_entry)
         << test::ActualVsExpectedUkmEntryToString(prediction_entries[0],
@@ -2600,10 +2601,10 @@ IN_PROC_BROWSER_TEST_P(PrerenderBrowserTestFallbackEnabledDisabled,
     // are logged on successful activation for speculation rules prerender.
     ukm::SourceId ukm_source_id = activation_observer.next_page_ukm_source_id();
     auto attempt_ukm_entries = test_ukm_recorder()->GetEntries(
-        Preloading_Attempt::kEntryName, test::kPreloadingAttemptUkmMetrics);
-    auto prediction_ukm_entries =
-        test_ukm_recorder()->GetEntries(Preloading_Prediction::kEntryName,
-                                        test::kPreloadingPredictionUkmMetrics);
+        Preloading_Attempt::kEntryName, test::GetPreloadingAttemptUkmMetrics());
+    auto prediction_ukm_entries = test_ukm_recorder()->GetEntries(
+        Preloading_Prediction::kEntryName,
+        test::GetPreloadingPredictionUkmMetrics());
     EXPECT_EQ(prediction_ukm_entries.size(), 1u);
     if (IsPrerender2FallbackPrefetchSpecRulesEnabled()) {
       EXPECT_EQ(attempt_ukm_entries.size(), 2u);
@@ -2860,10 +2861,10 @@ IN_PROC_BROWSER_TEST_P(AutoSpeculationRulesPrerenderBrowserTest, Metrics) {
     // are logged on successful activation for speculation rules prerender.
     ukm::SourceId ukm_source_id = activation_observer.next_page_ukm_source_id();
     auto attempt_ukm_entries = test_ukm_recorder()->GetEntries(
-        Preloading_Attempt::kEntryName, test::kPreloadingAttemptUkmMetrics);
-    auto prediction_ukm_entries =
-        test_ukm_recorder()->GetEntries(Preloading_Prediction::kEntryName,
-                                        test::kPreloadingPredictionUkmMetrics);
+        Preloading_Attempt::kEntryName, test::GetPreloadingAttemptUkmMetrics());
+    auto prediction_ukm_entries = test_ukm_recorder()->GetEntries(
+        Preloading_Prediction::kEntryName,
+        test::GetPreloadingPredictionUkmMetrics());
     EXPECT_EQ(prediction_ukm_entries.size(), 1u);
     if (IsPrerender2FallbackPrefetchSpecRulesEnabled()) {
       EXPECT_EQ(attempt_ukm_entries.size(), 2u);
@@ -2963,10 +2964,10 @@ IN_PROC_BROWSER_TEST_P(AutoSpeculationRulesPrerenderBrowserTestWithHoldback,
     // are logged on successful activation for speculation rules prerender.
     ukm::SourceId ukm_source_id = next_page_observer.next_page_ukm_source_id();
     auto attempt_ukm_entries = test_ukm_recorder()->GetEntries(
-        Preloading_Attempt::kEntryName, test::kPreloadingAttemptUkmMetrics);
-    auto prediction_ukm_entries =
-        test_ukm_recorder()->GetEntries(Preloading_Prediction::kEntryName,
-                                        test::kPreloadingPredictionUkmMetrics);
+        Preloading_Attempt::kEntryName, test::GetPreloadingAttemptUkmMetrics());
+    auto prediction_ukm_entries = test_ukm_recorder()->GetEntries(
+        Preloading_Prediction::kEntryName,
+        test::GetPreloadingPredictionUkmMetrics());
     EXPECT_EQ(prediction_ukm_entries.size(), 1u);
     if (IsPrerender2FallbackPrefetchSpecRulesEnabled()) {
       EXPECT_EQ(attempt_ukm_entries.size(), 2u);
@@ -5810,7 +5811,8 @@ IN_PROC_BROWSER_TEST_F(
           GetUrl("/empty.html?same_origin_iframe3");
       shell()->web_contents()->OpenURL(
           OpenURLParams::CreateBrowserInitiated(
-              same_origin_subframe_url3, WindowOpenDisposition::kCurrentTab,
+              same_origin_subframe_url3,
+              ui::mojom::WindowOpenDisposition::kCurrentTab,
               ui::PAGE_TRANSITION_AUTO_SUBFRAME, Referrer(),
               /*started_from_context_menu=*/false,
               child_frame->GetFrameTreeNodeId()),
@@ -7063,7 +7065,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, ActivationDoesntRunThrottles) {
 }
 
 // Ensures that if we attempt to open a URL while prerendering with a window
-// disposition other than CURRENT_TAB, we fail.
+// disposition other than `kCurrentTab`, we fail.
 IN_PROC_BROWSER_TEST_P(PrerenderTargetAgnosticBrowserTest, SuppressOpenURL) {
   const GURL initial_url = GetUrl("/empty.html");
   const GURL prerendering_url = GetUrl("/empty.html?prerender1");
@@ -7084,8 +7086,8 @@ IN_PROC_BROWSER_TEST_P(PrerenderTargetAgnosticBrowserTest, SuppressOpenURL) {
           *prerender_web_contents, host_id);
   EXPECT_EQ(GetRequestCount(prerendering_url), 1);
   OpenURLParams params = OpenURLParams::CreateRendererInitiated(
-      second_url, WindowOpenDisposition::kNewWindow, ui::PAGE_TRANSITION_LINK,
-      Referrer(),
+      second_url, ui::mojom::WindowOpenDisposition::kNewWindow,
+      ui::PAGE_TRANSITION_LINK, Referrer(),
       prerendered_render_frame_host->GetCurrentInitiatorNavigationState(),
       /*started_from_context_menu=*/false,
       prerendered_render_frame_host->GetFrameTreeNodeId());
@@ -7732,6 +7734,49 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, MojoCapabilityControl_LoosenMode) {
     prerender_broker->GetInterface(remote.BindNewPipeAndPassReceiver());
     remote.FlushForTesting();
   }
+}
+
+class PrerenderWebMCPBrowserTest : public PrerenderBrowserTest {
+ public:
+  PrerenderWebMCPBrowserTest() {
+    feature_list_.InitAndEnableFeature(blink::features::kWebMCP);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Tests that a prerendered page can use WebMCP: the navigation-associated
+// ModelContextHost is granted during prerendering, so binding it doesn't cancel
+// prerendering, and the page's tools are visible before and after activation.
+IN_PROC_BROWSER_TEST_F(PrerenderWebMCPBrowserTest,
+                       RegisterToolWhilePrerendering) {
+  const GURL initial_url = GetUrl("/empty.html");
+  const GURL prerendering_url = GetUrl("/empty.html?prerender");
+  ASSERT_TRUE(NavigateToURL(shell(), initial_url));
+
+  PrerenderHostId host_id = AddPrerender(prerendering_url);
+  RenderFrameHostImpl* prerender_rfh = GetPrerenderedMainFrameHost(host_id);
+
+  // The promise resolves once the browser has handled the registration, i.e.
+  // after it handled the ModelContextHost bind.
+  EXPECT_TRUE(ExecJs(prerender_rfh, R"(
+    document.modelContext.registerTool(
+        {name: 'tool', description: 'tool', execute: () => {}});
+  )",
+                     EXECUTE_SCRIPT_NO_USER_GESTURE));
+  EXPECT_TRUE(HasHostForUrl(prerendering_url));
+
+  constexpr char kGetToolNames[] = R"(
+    document.modelContext.getTools().then(t => t.map(x => x.name).join());
+  )";
+  // Without the grant, this would cancel prerendering.
+  EXPECT_EQ("tool", EvalJs(prerender_rfh, kGetToolNames,
+                           EXECUTE_SCRIPT_NO_USER_GESTURE));
+
+  NavigatePrimaryPage(prerendering_url);
+  ExpectFinalStatusForSpeculationRule(PrerenderFinalStatus::kActivated);
+  EXPECT_EQ("tool", EvalJs(web_contents(), kGetToolNames));
 }
 
 class PrerenderLazyBrowserInterfaceBrokerBrowserTest
@@ -9583,7 +9628,7 @@ IN_PROC_BROWSER_TEST_P(PrerenderBrowserTestFallbackEnabledDisabled,
   if (IsPrerender2FallbackPrefetchSpecRulesEnabled()) {
     // We don't have a nice way to wait prefetch in this case. Check only UKMs for prerender.
     auto attempt_entries = test_ukm_recorder()->GetEntries(
-      Preloading_Attempt::kEntryName, test::kPreloadingAttemptUkmMetrics);
+        Preloading_Attempt::kEntryName, test::GetPreloadingAttemptUkmMetrics());
     EXPECT_EQ(attempt_entries.size(), 4);
     std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry> prerender_entries = {};
     prerender_entries.push_back(attempt_entries[1]);
@@ -10681,7 +10726,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, OpenURLFromPrerenderingMainFrame) {
         }));
     auto params = blink::mojom::OpenURLParams::New();
     params->url = GetUrl("/title3.html");
-    params->disposition = WindowOpenDisposition::kCurrentTab;
+    params->disposition = ui::mojom::WindowOpenDisposition::kCurrentTab;
     params->should_replace_current_entry = false;
     params->user_gesture = true;
     params->initiator_state_token =
@@ -10727,7 +10772,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, OpenURLInPrerenderingFrame) {
                                         new_iframe_url);
   shell()->web_contents()->OpenURL(
       OpenURLParams::CreateBrowserInitiated(
-          new_iframe_url, WindowOpenDisposition::kCurrentTab,
+          new_iframe_url, ui::mojom::WindowOpenDisposition::kCurrentTab,
           ui::PAGE_TRANSITION_AUTO_SUBFRAME, Referrer(),
           /*started_from_context_menu=*/false,
           child_frame->GetFrameTreeNodeId()),
@@ -10873,7 +10918,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   {
     shell()->web_contents()->OpenURL(
         OpenURLParams::CreateBrowserInitiated(
-            new_iframe_url, WindowOpenDisposition::kCurrentTab,
+            new_iframe_url, ui::mojom::WindowOpenDisposition::kCurrentTab,
             ui::PAGE_TRANSITION_AUTO_SUBFRAME, Referrer(),
             /*started_from_context_menu=*/false,
             child_frame->GetFrameTreeNodeId()),
@@ -11747,7 +11792,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                                           new_iframe_url);
     shell()->web_contents()->OpenURL(
         OpenURLParams::CreateBrowserInitiated(
-            new_iframe_url, WindowOpenDisposition::kCurrentTab,
+            new_iframe_url, ui::mojom::WindowOpenDisposition::kCurrentTab,
             ui::PAGE_TRANSITION_AUTO_SUBFRAME, Referrer(),
             /*started_from_context_menu=*/false,
             child_frame->GetFrameTreeNodeId()),
@@ -15842,7 +15887,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderClientHintsBrowserTest,
   // Open a new tab, and the new page clears all settings.
   GURL new_tab_url = GetUrl("/image.html?acceptch-no-value");
   OpenURLParams params = OpenURLParams::CreateBrowserInitiated(
-      new_tab_url, WindowOpenDisposition::kNewBackgroundTab,
+      new_tab_url, ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
       ui::PAGE_TRANSITION_LINK);
   auto* new_web_contents =
       web_contents_impl()->OpenURL(params, /*navigation_handle_callback=*/{});
@@ -16484,7 +16529,7 @@ class PrerenderSessionHistoryBrowserTest
                         ukm::SourceId source_id) {
     std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry> attempts =
         ukm_recorder.GetEntries(ukm::builders::Preloading_Attempt::kEntryName,
-                                test::kPreloadingAttemptUkmMetrics);
+                                test::GetPreloadingAttemptUkmMetrics());
     ASSERT_EQ(attempts.size(), 1u);
 
     const auto predictor = content_preloading_predictor::kMouseBackButton;

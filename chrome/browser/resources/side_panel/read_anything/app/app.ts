@@ -231,19 +231,17 @@ export class AppElement extends AppElementBase implements SpeechListener,
     // to take place.
     setTimeout(() => this.visualBrowserProxy_.shouldShowUi(), 0);
     this.styleUpdater_.setMaxLineWidth();
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      window.addEventListener('resize', this.onWindowResize_.bind(this));
-      this.$.containerParent.addEventListener('mousemove', mouseEvent => {
-        this.lineFocusController_.onMouseMove(mouseEvent.clientY);
-      });
-      this.$.toolbar.addEventListener('mousemove', mouseEvent => {
-        this.lineFocusController_.onMouseMoveInToolbar(mouseEvent.clientY);
-      });
-      this.$.settingsOverlay.addEventListener('mousemove', mouseEvent => {
-        this.lineFocusController_.onMouseMoveInToolbar(mouseEvent.clientY);
-      });
-      this.lineFocusController_.addListener(this);
-    }
+    window.addEventListener('resize', this.onWindowResize_.bind(this));
+    this.$.containerParent.addEventListener('mousemove', mouseEvent => {
+      this.lineFocusController_.onMouseMove(mouseEvent.clientY);
+    });
+    this.$.toolbar.addEventListener('mousemove', mouseEvent => {
+      this.lineFocusController_.onMouseMoveInToolbar(mouseEvent.clientY);
+    });
+    this.$.settingsOverlay.addEventListener('mousemove', mouseEvent => {
+      this.lineFocusController_.onMouseMoveInToolbar(mouseEvent.clientY);
+    });
+    this.lineFocusController_.addListener(this);
 
     this.contentController_.addListener(this);
     this.speechController_.addListener(this);
@@ -297,7 +295,12 @@ export class AppElement extends AppElementBase implements SpeechListener,
     this.contentBrowserProxy_.updateLinks.addListener(
         this.updateLinks_.bind(this));
     this.contentBrowserProxy_.updateSelection.addListener(() => {
-      this.selectionController_.updateSelection(this.getSelection());
+      this.selectionController_.updateSelection(
+          this.getSelection(), this.$.container);
+    });
+    this.contentBrowserProxy_.onTranslationStateChanged.addListener(() => {
+      this.selectionController_.onTranslationStateChanged(
+          this.getSelection(), this.$.container);
     });
     this.contentBrowserProxy_.updateContent.addListener(
         this.updateContent.bind(this));
@@ -362,9 +365,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   protected onSettingsClosed_() {
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onAllMenusClose();
-    }
+    this.lineFocusController_.onAllMenusClose();
     if (this.$.settingsOverlay) {
       this.$.settingsOverlay.style.display = 'none';
     }
@@ -381,16 +382,12 @@ export class AppElement extends AppElementBase implements SpeechListener,
     this.$.containerScroller.scrollTop > fontSize ?
         this.$.containerScroller.classList.add('fade') :
         this.$.containerScroller.classList.remove('fade');
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onScroll();
-    }
+    this.lineFocusController_.onScroll();
   }
 
   protected onContainerScrollend_() {
     this.nodeStore_.estimateWordsSeenWithDelay();
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onScrollEnd(this.$.containerScroller.scrollTop);
-    }
+    this.lineFocusController_.onScrollEnd(this.$.containerScroller.scrollTop);
   }
 
   showLoading() {
@@ -482,7 +479,8 @@ export class AppElement extends AppElementBase implements SpeechListener,
 
   private onRenderedTextMappingReady_() {
     this.contentController_.onRenderedTextMappingReady();
-    this.selectionController_.updateSelection(this.getSelection());
+    this.selectionController_.updateSelection(
+        this.getSelection(), this.$.container);
   }
 
   private cancelRenderedTextBlocksAnimationFrame_() {
@@ -536,50 +534,26 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   ///////////////////////// LineFocusListener methods //////////////////////////
-  onLineFocusVisualPositionChange(newTop: number, newHeight: number): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
+  onLineFocusVisualPositionChange(
+      newTop: number, newHeight: number, newFocalPoint: number): void {
     this.styleUpdater_.setLineFocusPos(newTop, newHeight);
+    this.speechController_.onLineFocusVisualMove(newFocalPoint);
   }
 
   onLineFocusContentPositionChange(
       newTop: number, newHeight: number, newFocalPoint: number): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
-
     this.styleUpdater_.setLineFocusPos(newTop, newHeight);
-
-    // Only update content position when read aloud is not speaking
-    // or temporarily paused (e.g. during voice preview or settings change).
-    // During active speech, line focus moves on every word boundary. So
-    // calling document.caretPositionFromPoint would force synchronous layout
-    // recalculations on every word, lagging the UI. Additionally, calling
-    // onLineFocusChange updates currentContentPosition, causing subsequent
-    // Play/Pause to be slow.
-    if (this.speechController_.isSpeechActive() ||
-        this.speechController_.isTemporaryPause()) {
-      return;
-    }
-    const position: CaretPosition|null = document.caretPositionFromPoint(
-        0, newFocalPoint, {shadowRoots: [this.shadowRoot]});
-    this.speechController_.onLineFocusChange(position);
+    this.speechController_.onLineFocusContentMove(newFocalPoint);
   }
 
   onNeedScrollForLineFocus(scrollDiff: number, instant: boolean = false): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
-
     const top = this.$.containerScroller.scrollTop + scrollDiff;
     this.$.containerScroller.scrollTo(
         {top, behavior: instant ? 'instant' : 'smooth'});
   }
 
   onNeedScrollToTop(): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled() ||
-        this.$.containerScroller.scrollTop === 0) {
+    if (this.$.containerScroller.scrollTop === 0) {
       return;
     }
 
@@ -587,9 +561,6 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   onLineFocusModesChanged(): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
     this.updateLineFocusState_();
     this.lineFocusMovement_ =
         this.lineFocusController_.getCurrentLineFocusMovement();
@@ -597,10 +568,6 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   onScrollBufferForLineFocusChange(needsBuffer: boolean): void {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
-
     const oldPadding = this.styleUpdater_.getPaddingForLineFocus();
     const newPadding =
         needsBuffer ? Math.floor(this.$.containerParent.offsetHeight / 2) : 0;
@@ -617,13 +584,11 @@ export class AppElement extends AppElementBase implements SpeechListener,
 
   onContentStateChange(): void {
     this.syncContentState_();
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      const lineFocusTypeForStyling =
-          (this.contentState_.type === ContentType.HAS_CONTENT) ?
-          this.lineFocusController_.getCurrentLineFocusType() :
-          LineFocusType.NONE;
-      this.styleUpdater_.setLineFocusStyle(lineFocusTypeForStyling);
-    }
+    const lineFocusTypeForStyling =
+        (this.contentState_.type === ContentType.HAS_CONTENT) ?
+        this.lineFocusController_.getCurrentLineFocusType() :
+        LineFocusType.NONE;
+    this.styleUpdater_.setLineFocusStyle(lineFocusTypeForStyling);
   }
 
   onNewPageDrawn(): void {
@@ -643,9 +608,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   onWordBoundary(segments: Segment[]): void {
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onWordBoundary(segments);
-    }
+    this.lineFocusController_.onWordBoundary(segments);
   }
 
   onIsSpeechActiveChange(): void {
@@ -751,12 +714,10 @@ export class AppElement extends AppElementBase implements SpeechListener,
   private restoreSettingsFromPrefs_() {
     this.syncSettings_();
     this.styleUpdater_.setAllTextStyles();
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.restoreFromPrefs(
-          this.visualBrowserProxy_.getLastNonDisabledLineFocus(),
-          this.visualBrowserProxy_.isLineFocusOn(), this.$.container,
-          this.$.appFlexParent.clientHeight);
-    }
+    this.lineFocusController_.restoreFromPrefs(
+        this.visualBrowserProxy_.getLastNonDisabledLineFocus(),
+        this.visualBrowserProxy_.isLineFocusOn(), this.$.container,
+        this.$.appFlexParent.clientHeight);
   }
 
   protected onLineSpacingChange_(event: CustomEvent<{data: number}>) {
@@ -830,6 +791,12 @@ export class AppElement extends AppElementBase implements SpeechListener,
     }
   }
 
+  protected onSendFeedback_() {
+    if (this.contentBrowserProxy_.isReadAnythingSendFeedbackEnabled()) {
+      this.contentBrowserProxy_.onSendFeedback();
+    }
+  }
+
   protected onHighlightChange_(event: CustomEvent<{data: number}>) {
     const granularity = event.detail.data;
     this.audioBrowserProxy_.onHighlightGranularityChanged(granularity);
@@ -843,32 +810,24 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   protected onCloseAllMenus_() {
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onAllMenusClose();
-    }
+    this.lineFocusController_.onAllMenusClose();
   }
 
   protected onLineFocusStyleChange_(
       event: CustomEvent<{data: LineFocusStyle}>) {
     this.logger_.logTextSettingsChange(
         ReadAnythingSettingsChange.LINE_FOCUS_STYLE_CHANGE);
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onStyleChange(
-          event.detail.data, this.$.container,
-          this.$.appFlexParent.clientHeight);
-      this.updateLineFocusState_();
-    }
+    this.lineFocusController_.onStyleChange(
+        event.detail.data, this.$.container, this.$.appFlexParent.clientHeight);
+    this.updateLineFocusState_();
   }
 
   protected onLineFocusToggleChange_(event: CustomEvent<{data: boolean}>) {
     this.logger_.logTextSettingsChange(
         ReadAnythingSettingsChange.LINE_FOCUS_TOGGLE);
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.toggle(
-          event.detail.data, this.$.container,
-          this.$.appFlexParent.clientHeight);
-      this.updateLineFocusState_();
-    }
+    this.lineFocusController_.toggle(
+        event.detail.data, this.$.container, this.$.appFlexParent.clientHeight);
+    this.updateLineFocusState_();
   }
 
   private updateLineFocusState_() {
@@ -886,20 +845,14 @@ export class AppElement extends AppElementBase implements SpeechListener,
       event: CustomEvent<{data: LineFocusMovement}>) {
     this.logger_.logTextSettingsChange(
         ReadAnythingSettingsChange.LINE_FOCUS_MOVEMENT_CHANGE);
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onMovementChange(
-          event.detail.data, this.$.container,
-          this.$.appFlexParent.clientHeight);
-      this.lineFocusMovement_ =
-          this.lineFocusController_.getCurrentLineFocusMovement();
-      this.setLineFocusStyle_();
-    }
+    this.lineFocusController_.onMovementChange(
+        event.detail.data, this.$.container, this.$.appFlexParent.clientHeight);
+    this.lineFocusMovement_ =
+        this.lineFocusController_.getCurrentLineFocusMovement();
+    this.setLineFocusStyle_();
   }
 
   private setLineFocusStyle_() {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
-      return;
-    }
     if (this.computeHasContent()) {
       this.styleUpdater_.setLineFocusStyle(
           this.lineFocusController_.getCurrentLineFocusType());
@@ -909,10 +862,8 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   private onTextLocationsChange_() {
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      this.lineFocusController_.onTextLocationsChange(
-          this.$.container, this.$.appFlexParent.clientHeight);
-    }
+    this.lineFocusController_.onTextLocationsChange(
+        this.$.container, this.$.appFlexParent.clientHeight);
   }
 
   languageChanged() {
@@ -939,8 +890,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   protected computeIsLineFocusShowing_(): boolean {
-    return this.visualBrowserProxy_.isLineFocusEnabled() &&
-        this.lineFocusController_.isEnabled() &&
+    return this.lineFocusController_.isEnabled() &&
         (this.contentState_.type === ContentType.HAS_CONTENT ||
          this.contentState_.type === ContentType.LOADING);
   }
@@ -999,8 +949,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   protected getLineFocusClass_(): string {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled() ||
-        !this.lineFocusController_.isEnabled() ||
+    if (!this.lineFocusController_.isEnabled() ||
         this.contentState_.type !== ContentType.HAS_CONTENT) {
       return '';
     }

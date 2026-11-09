@@ -13,6 +13,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -21,12 +22,14 @@ import static org.mockito.Mockito.when;
 
 import android.view.View;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -221,6 +224,7 @@ public class HubCoordinatorUnitTest {
         assertFalse(mIncognitoTabSwitcherBackPressSupplier.hasObservers());
         assertFalse(mTabSupplier.hasObservers());
         assertFalse(mPaneManager.getFocusedPaneSupplier().hasObservers());
+        assertFalse(mHubCoordinator.getPaneTransitionProgressSupplierForTesting().hasObservers());
         mActivityController.close();
     }
 
@@ -564,7 +568,9 @@ public class HubCoordinatorUnitTest {
         assertEquals(
                 incognitoTabSwitcherView,
                 mHubCoordinator.prepareAndGetAdjacentPaneView(/* isSwipeLeft= */ true));
-        verify(mIncognitoTabSwitcherPane).notifyLoadHint(LoadHint.WARM);
+        InOrder inOrder = inOrder(mIncognitoTabSwitcherPane);
+        inOrder.verify(mIncognitoTabSwitcherPane).notifyLoadHint(LoadHint.WARM);
+        inOrder.verify(mIncognitoTabSwitcherPane).prepareForSwipeReveal();
 
         // Move to last pane (INCOGNITO_TAB_SWITCHER).
         assertTrue(mPaneManager.focusPane(PaneId.INCOGNITO_TAB_SWITCHER));
@@ -710,6 +716,17 @@ public class HubCoordinatorUnitTest {
                 new PaneTransitionProgress(
                         PaneId.INCOGNITO_TAB_SWITCHER, PaneId.TAB_SWITCHER, 0f, false),
                 getPaneTransitionProgress());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ENABLE_SWIPE_TO_SWITCH_PANE + ":animate_search_box/true")
+    public void testOnSwipeDragProgress_toolbarShowsIncomingPaneHint() {
+        mHubCoordinator.onSwipeDragProgress(0.6f, true);
+
+        TextView searchBoxText = mRootView.findViewById(R.id.search_box_text);
+        assertEquals(
+                mActivityController.get().getString(R.string.hub_search_empty_hint_incognito),
+                searchBoxText.getHint());
     }
 
     private void layOutHub() {

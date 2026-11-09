@@ -44,7 +44,7 @@ class AXTree;
 }  // namespace ui
 
 namespace ukm {
-class MojoUkmRecorder;
+class UkmRecorder;
 }  // namespace ukm
 
 class AXTreeDistiller;
@@ -324,7 +324,8 @@ class ReadAnythingAppController
   bool IsGoogleDocs() const;
   bool IsPdf() const;
   bool IsContentTranslated() const;
-  bool IsAwaitingTranslation() const;
+  // The model's TranslationState, as an int for the WebUI.
+  int GetTranslationState() const;
   bool IsImprovedReadAloudEnabled() const;
   bool IsReadAnythingImprovedUiEnabled() const;
   bool IsReadAnythingTranslateEntryPointEnabled() const;
@@ -332,7 +333,6 @@ class ReadAnythingAppController
   bool IsTranslatePdfEnabled() const;
   bool IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() const;
   bool IsReadabilityEnabled() const;
-  bool IsLineFocusEnabled() const;
   bool IsReadabilityWithLinksEnabled() const;
   bool IsPhraseHighlightingEnabled() const;
   void OnLetterSpacingChange(int value);
@@ -420,6 +420,17 @@ class ReadAnythingAppController
  private:
   friend ReadAnythingAppControllerTest;
   friend ReadAnythingAppControllerReadabilityTest;
+
+  // A selection that the side panel asked the main page to set.
+  struct SelectionRequest {
+    ui::AXNodeID anchor_node_id;
+    int anchor_offset;
+    ui::AXNodeID focus_node_id;
+    int focus_offset;
+
+    bool operator==(const SelectionRequest&) const = default;
+  };
+
   // The fallback language code if GetLanguageCodeForSpeech has an error.
   // However, this may be the same value as GetLanguageCodeForSpeech.
   const std::string& GetDefaultLanguageCodeForSpeech() const;
@@ -465,9 +476,9 @@ class ReadAnythingAppController
 
   void ExecuteJavaScript(const std::string& script);
 
-  // Updates the model's awaiting-translation state and notifies the WebUI if
-  // it changed.
-  void SetAwaitingTranslation(bool awaiting);
+  // Updates the model's translation state and notifies the WebUI if it
+  // changed.
+  void SetTranslationState(ReadAnythingAppModel::TranslationState state);
 
   // Returns true if a draw occurred.
   bool PostProcessSelection();
@@ -607,8 +618,8 @@ class ReadAnythingAppController
       std::unique_ptr<base::ScopedObservation<ui::AXTree, ui::AXTreeObserver>>>
       tree_observers_;
 
-  // For metrics logging
-  std::unique_ptr<ukm::MojoUkmRecorder> ukm_recorder_;
+  // For metrics logging. A ukm::MojoUkmRecorder, except in tests.
+  std::unique_ptr<ukm::UkmRecorder> ukm_recorder_;
 
   // The time when the renderer constructor is first triggered.
   base::TimeTicks renderer_load_triggered_time_ms_;
@@ -650,18 +661,21 @@ class ReadAnythingAppController
   // is re-triggered multiple times before completion. Used for logging.
   int distillation_attempts_;
 
-  // The distilled title result of Readability distillation.
-  std::string readability_title_;
-
   // Tracks whether the distillation status for the current active tree
   // navigation has already been recorded.
   bool has_logged_distillation_status_ = false;
 
-  // The distilled content result of Readability distillation.
-  std::string readability_content_html_;
-
   std::optional<ReadAnythingAppModel::DistillationMethod>
       forced_distillation_method_for_testing_;
+
+  // The last selection that the side panel asked the main page to set, or
+  // nullopt if a collapse was requested since. It may still be in flight only
+  // while the model has unprocessed selections from reading mode, so it's only
+  // compared against then. The count already drops to 0 when pending requests
+  // become stale, e.g. when the active tree changes or the user selects in the
+  // main page, so this isn't reset then. If the browser drops this request
+  // while others are pending, resending it waits for the count to drop to 0.
+  std::optional<SelectionRequest> last_selection_request_;
 
   // As a subclass of RenderFrameObserver, all objects of this class are stored
   // in data structure and should not get deallocated as long as the object is

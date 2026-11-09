@@ -442,13 +442,19 @@ std::unique_ptr<ToolRequest> CreateSelectRequest(const SelectAction& action) {
 
 std::unique_ptr<ToolRequest> CreateNavigateRequest(
     const NavigateAction& action) {
-  ActorSurfaceHandle actor_surface_handle = GetActorSurfaceHandle(action);
-  if (!action.has_url() || actor_surface_handle.is_null()) {
+  if (!action.has_url()) {
     return nullptr;
   }
 
-  return std::make_unique<NavigateToolRequest>(actor_surface_handle,
-                                               GURL(action.url()));
+  ActorSurfaceHandle actor_surface_handle = GetActorSurfaceHandle(action);
+  // A navigate either names the tab to navigate, or opens a new tab (in the
+  // most recently active window).
+  if (actor_surface_handle.is_null() != action.has_new_surface()) {
+    return nullptr;
+  }
+
+  return std::make_unique<NavigateToolRequest>(
+      actor_surface_handle, GURL(action.url()), action.has_new_surface());
 }
 
 std::unique_ptr<ToolRequest> CreateCreateTabRequest(
@@ -1074,6 +1080,8 @@ constexpr absl::Overload kGetCapabilityFn{
                  apc::RuleMetadata::CAPABILITY_ATTEMPT_FORM_FILLING>,
     ToCapability<AttemptOtpFillingToolRequest,
                  apc::RuleMetadata::CAPABILITY_ATTEMPT_OTP_FILLING>,
+    ToCapability<ChangePasswordToolRequest,
+                 apc::RuleMetadata::CAPABILITY_CHANGE_PASSWORD>,
     ToCapability<ClickToolRequest, apc::RuleMetadata::CAPABILITY_CLICK>,
     ToCapability<CloseTabToolRequest, apc::RuleMetadata::CAPABILITY_CLOSE_TAB>,
     ToCapability<CreateTabToolRequest,
@@ -1115,7 +1123,6 @@ constexpr absl::Overload kGetCapabilityFn{
 
     // Tools that don't have an `ActuationCapability` in the proto yet.
     ToUnknown<AddBookmarkToolRequest>,
-    ToUnknown<ChangePasswordToolRequest>,
     ToUnknown<CloseGeminiPanelToolRequest>,
     ToUnknown<EnterFullscreenToolRequest>,
     ToUnknown<ExitFullscreenToolRequest>,

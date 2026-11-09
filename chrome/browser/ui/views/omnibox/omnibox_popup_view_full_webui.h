@@ -52,6 +52,7 @@ class OmniboxPopupViewFullWebUI : public OmniboxPopupViewWebUI,
   // Called when the active tab changes.
   void OnTabChanged(content::WebContents* contents) override;
   void ReshowPopup() override;
+  void Blur() override;
   // Called when the native omnibox gains focus. If the popup state changed,
   // synchronizes full input state (`SyncNativeStateToWebUI()`). If the popup
   // was already open, sends a dedicated `SetFocus(true)` Mojo IPC to ensure
@@ -69,6 +70,7 @@ class OmniboxPopupViewFullWebUI : public OmniboxPopupViewWebUI,
   bool IsPopupHandlerReady() const override;
   bool IsReverting() const override;
   void SetIsReverting(bool reverting) override;
+  void OnFullscreenTransitionStarting() override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(

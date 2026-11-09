@@ -13,6 +13,7 @@ static_library("renderer") {
 
   public = [
     "internal_plugin_renderer_helpers.h",
+    "pdf_accessibility_metrics.h",
     "pdf_accessibility_tree.h",
     "pdf_ax_action_target.h",
     "pdf_view_web_plugin_client.h",
@@ -84,6 +85,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "pdf_accessibility_table_detector_unittest.cc",
+    "pdf_accessibility_text_utils_unittest.cc",
     "pdf_accessibility_tree_builder_structure_unittest.cc",
     "pdf_accessibility_tree_unittest.cc",
   ]

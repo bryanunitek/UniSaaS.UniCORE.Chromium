@@ -17,12 +17,8 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
@@ -44,7 +40,6 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
-#include "components/infobars/content/content_infobar_manager.h"
 #include "components/omnibox/browser/favicon_cache.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/strings/grit/components_strings.h"
@@ -173,15 +168,8 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
     }
 
     if (status_changed_) {
-      if (infobars::IsInfoBarMigrated(
-              infobars::InfoBarDelegate::COLLECTED_COOKIES_INFOBAR_DELEGATE)) {
-        PageSpecificSiteDataDialogController::ShowCollectedCookiesInfoBar(
-            web_contents_.get());
-      } else {
-        CollectedCookiesInfoBarDelegate::Create(
-            infobars::ContentInfoBarManager::FromWebContents(
-                web_contents_.get()));
-      }
+      PageSpecificSiteDataDialogController::ShowCollectedCookiesInfoBar(
+          web_contents_.get());
     }
 
     // Reset the dialog reference in the user data. If the dialog is opened
@@ -321,10 +309,12 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   }
 
   void OnManageOnDeviceSiteDataClicked() {
-    BrowserWindowInterface* browser =
-        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
-            web_contents_.get());
-    chrome::ShowSettingsSubPage(browser, chrome::kOnDeviceSiteDataSubpage);
+    if (!web_contents_) {
+      return;
+    }
+    chrome::ShowSettingsSubPageForProfile(
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext()),
+        chrome::kOnDeviceSiteDataSubpage);
   }
 
   void OnRelatedApplicationLinkToAppSettings(const webapps::AppId& app_id) {
@@ -579,6 +569,7 @@ void PageSpecificSiteDataDialogTestApi::DeleteStoredObjects(
 }  // namespace test
 
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kPageSpecificSiteDataDialogRow);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kPageSpecificSiteDataDialogSubtitle);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kPageSpecificSiteDataDialogFirstPartySection);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kPageSpecificSiteDataDialogThirdPartySection);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kPageSpecificSiteDataDialogEmptyStateLabel);
@@ -606,7 +597,8 @@ views::Widget* ShowPageSpecificSiteDataDialog(
       .AddParagraph(
           ui::DialogModelLabel::CreateWithReplacement(
               IDS_PAGE_SPECIFIC_SITE_DATA_DIALOG_SUBTITLE, settings_link)
-              .set_is_secondary())
+              .set_is_secondary(),
+          /*header=*/std::u16string(), kPageSpecificSiteDataDialogSubtitle)
       .SetInternalName("PageSpecificSiteDataDialog")
       .AddOkButton(
           base::BindRepeating(&PageSpecificSiteDataDialogModelDelegate::

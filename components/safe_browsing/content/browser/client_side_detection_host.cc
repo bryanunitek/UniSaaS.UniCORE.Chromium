@@ -27,6 +27,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "base/task/thread_pool.h"
 #include "base/time/default_tick_clock.h"
@@ -42,10 +43,10 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/base_ui_manager.h"
 #include "components/safe_browsing/content/browser/client_side_detection_feature_cache.h"
 #include "components/safe_browsing/content/browser/client_side_detection_service.h"
-#include "components/safe_browsing/content/browser/content_unsafe_resource_util.h"
+#include "components/safe_browsing/content/browser/interstitials/base_ui_manager.h"
+#include "components/safe_browsing/content/browser/interstitials/content_unsafe_resource_util.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
 #include "components/safe_browsing/core/browser/credit_card_form_event.h"
 #include "components/safe_browsing/core/browser/db/allowlist_checker_client.h"
@@ -772,6 +773,18 @@ void ClientSideDetectionHost::GetInnerText(HostInnerTextCallback callback) {
   delegate_->GetInnerText(std::move(callback));
 }
 
+std::string ClientSideDetectionHost::GetPageTitle() const {
+  if (!web_contents()) {
+    return std::string();
+  }
+  content::NavigationEntry* entry =
+      web_contents()->GetController().GetLastCommittedEntry();
+  if (!entry) {
+    return std::string();
+  }
+  return base::UTF16ToUTF8(entry->GetTitle());
+}
+
 bool ClientSideDetectionHost::IsAccountSignedIn() {
   return !account_signed_in_callback_.is_null() &&
          account_signed_in_callback_.Run();
@@ -898,9 +911,10 @@ void ClientSideDetectionHost::MaybeStartPreClassification(
     }
   }
 
-  // If there is a renderer classification going on and the incoming request
-  // type is not higher, do not let that cancel pending classification.
-  if (is_classifying() &&
+  // If there is a renderer classification or uniform-image retry check going on
+  // and the incoming request type is not higher, do not let that cancel pending
+  // classification.
+  if ((is_classifying() || is_uniform_image_retry_timer_running()) &&
       base::FeatureList::IsEnabled(kClientSideDetectionTierSystem) &&
       !NewRequestTypeTierHigher(request_type)) {
     base::UmaHistogramExactLinear(
@@ -916,6 +930,12 @@ void ClientSideDetectionHost::MaybeStartPreClassification(
     }
     return;
   }
+
+  ResetUniformImageRetryState();
+
+  // Prevent any in-flight StartImageEmbedding callback from progressing
+  // due to being interrupted by a higher priority scan.
+  phishing_image_embedder_.reset();
 
   if (!preclassification_started_cb_for_testing_.is_null()) {
     preclassification_started_cb_for_testing_.Run(request_type);
@@ -1165,6 +1185,7 @@ void ClientSideDetectionHost::OnPhishingPreClassificationDone(
   }
 
   set_is_csd_running(true);
+  ResetUniformImageRetryState();
 
   bool intelligent_scan_ongoing = GetIntelligentScanId().has_value();
   base::UmaHistogramBoolean(
@@ -1500,6 +1521,7 @@ void ClientSideDetectionHost::MaybeStartImageEmbedding(
     std::optional<bool> did_match_high_confidence_allowlist,
     bool is_invalid_ip,
     PhishingDetectorResult result) {
+  set_last_phishing_detector_result(result);
   visual_utils::CanExtractVisualFeaturesResult
       can_extract_visual_features_result = DetermineVisualFeaturesExtraction();
 
@@ -1540,11 +1562,14 @@ void ClientSideDetectionHost::MaybeStartImageEmbedding(
           base::BindOnce(&ClientSideDetectionHost::PhishingImageEmbeddingDone,
                          weak_factory_.GetWeakPtr(), std::move(verdict),
                          did_match_high_confidence_allowlist, is_invalid_ip));
+    } else {
+      ResetUniformImageRetryState();
     }
 
     return;
   }
 
+  ResetUniformImageRetryState();
   MaybeStartIntelligentScanForScamDetection(
       std::move(verdict), did_match_high_confidence_allowlist, is_invalid_ip);
 }
@@ -1593,8 +1618,12 @@ void ClientSideDetectionHost::MaybeCaptureScreenshotAndStartIntelligentScan(
           base::BindOnce(&ClientSideDetectionHost::OnScreenshotTaken,
                          weak_factory_.GetWeakPtr(), std::move(verdict),
                          did_match_high_confidence_allowlist, is_invalid_ip,
-                         std::move(inner_text)));
+                         std::move(inner_text), tick_clock()->NowTicks()));
       return;
+    } else {
+      base::UmaHistogramEnumeration(
+          "SBClientPhishing.Multimodal.ScreenshotCaptureStatus",
+          MultimodalScreenshotCaptureStatus::kRenderWidgetHostViewUnavailable);
     }
   }
   StartIntelligentScan(std::move(verdict), did_match_high_confidence_allowlist,
@@ -1607,9 +1636,24 @@ void ClientSideDetectionHost::OnScreenshotTaken(
     std::optional<bool> did_match_high_confidence_allowlist,
     bool is_invalid_ip,
     std::string inner_text,
+    base::TimeTicks capture_start_time,
     const content::CopyFromSurfaceResult& result) {
-  if (!IsTabVisibleAndOnUrl(GURL(verdict->url())) || !result.has_value() ||
-      result->bitmap.drawsNothing()) {
+  base::UmaHistogramTimes(
+      "SBClientPhishing.Multimodal.ScreenshotCaptureLatency",
+      tick_clock()->NowTicks() - capture_start_time);
+
+  std::optional<MultimodalScreenshotCaptureStatus> failure_status;
+  if (!IsTabVisibleAndOnUrl(GURL(verdict->url()))) {
+    failure_status =
+        MultimodalScreenshotCaptureStatus::kTabNotVisibleOrUrlChanged;
+  } else if (!result.has_value()) {
+    failure_status = MultimodalScreenshotCaptureStatus::kCopyFromSurfaceFailed;
+  } else if (result->bitmap.drawsNothing()) {
+    failure_status = MultimodalScreenshotCaptureStatus::kEmptyBitmap;
+  }
+  if (failure_status.has_value()) {
+    base::UmaHistogramEnumeration(
+        "SBClientPhishing.Multimodal.ScreenshotCaptureStatus", *failure_status);
     StartIntelligentScan(std::move(verdict),
                          did_match_high_confidence_allowlist, is_invalid_ip,
                          std::move(inner_text),
@@ -1635,8 +1679,21 @@ void ClientSideDetectionHost::OnScreenshotEncoded(
     std::string inner_text,
     std::string png_bytes) {
   std::optional<std::string> tab_screenshot;
-  if (IsTabVisibleAndOnUrl(GURL(verdict->url())) && !png_bytes.empty()) {
-    tab_screenshot = std::move(png_bytes);
+  if (IsTabVisibleAndOnUrl(GURL(verdict->url()))) {
+    if (!png_bytes.empty()) {
+      tab_screenshot = std::move(png_bytes);
+      base::UmaHistogramEnumeration(
+          "SBClientPhishing.Multimodal.ScreenshotCaptureStatus",
+          MultimodalScreenshotCaptureStatus::kSuccess);
+    } else {
+      base::UmaHistogramEnumeration(
+          "SBClientPhishing.Multimodal.ScreenshotCaptureStatus",
+          MultimodalScreenshotCaptureStatus::kEncodingFailed);
+    }
+  } else {
+    base::UmaHistogramEnumeration(
+        "SBClientPhishing.Multimodal.ScreenshotCaptureStatus",
+        MultimodalScreenshotCaptureStatus::kTabNotVisibleOrUrlChanged);
   }
   StartIntelligentScan(std::move(verdict), did_match_high_confidence_allowlist,
                        is_invalid_ip, std::move(inner_text),

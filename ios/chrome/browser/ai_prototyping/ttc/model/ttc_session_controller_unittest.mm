@@ -25,6 +25,7 @@
 #import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_actuation_handler.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_tool_definitions.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_conversation.h"
+#import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_error_codes.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_page_context_monitor.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_session_controller_observer.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_voice_focused_web_state_tracker.h"
@@ -67,6 +68,7 @@ using ::testing::Not;
 @property(nonatomic, assign) TTCJournal* journal;
 @property(nonatomic, assign) BOOL didStopCapture;
 @property(nonatomic, assign) BOOL didStopPlayback;
+@property(nonatomic, assign) BOOL shouldFailStartCapture;
 
 @end
 
@@ -74,6 +76,13 @@ using ::testing::Not;
 
 - (void)startCaptureWithCompletion:(void (^)(BOOL success,
                                              NSError* error))completion {
+  if (self.shouldFailStartCapture) {
+    self.capturing = NO;
+    if (completion) {
+      completion(NO, CreateTTCError(ttc::ErrorCode::kAudioUnknownError));
+    }
+    return;
+  }
   self.capturing = YES;
   if (completion) {
     completion(YES, nil);
@@ -124,6 +133,12 @@ class FakeTtcSessionControllerObserver : public TtcSessionControllerObserver {
     last_lifecycle_ = lifecycle;
   }
 
+  void OnMicMutedChanged(TtcSessionController* controller,
+                         bool muted) override {
+    mic_muted_change_count_++;
+    last_mic_muted_ = muted;
+  }
+
   void OnUserAudioLevelUpdated(TtcSessionController* controller,
                                float audio_level) override {
     audio_level_update_count_++;
@@ -138,6 +153,8 @@ class FakeTtcSessionControllerObserver : public TtcSessionControllerObserver {
 
   int lifecycle_change_count() const { return lifecycle_change_count_; }
   TTCSessionLifecycle last_lifecycle() const { return last_lifecycle_; }
+  int mic_muted_change_count() const { return mic_muted_change_count_; }
+  bool last_mic_muted() const { return last_mic_muted_; }
   int audio_level_update_count() const { return audio_level_update_count_; }
   float last_audio_level() const { return last_audio_level_; }
   int error_count() const { return error_count_; }
@@ -146,6 +163,8 @@ class FakeTtcSessionControllerObserver : public TtcSessionControllerObserver {
  private:
   int lifecycle_change_count_ = 0;
   TTCSessionLifecycle last_lifecycle_ = TTCSessionLifecycle::kInitializing;
+  int mic_muted_change_count_ = 0;
+  bool last_mic_muted_ = false;
   int audio_level_update_count_ = 0;
   float last_audio_level_ = 0.0f;
   int error_count_ = 0;
@@ -635,6 +654,9 @@ TEST_F(TtcSessionControllerTest,
       .Times(1);
   SimulateMonitorExtraction(controller, first_url, "First Tab");
 
+  EXPECT_CALL(*mock_backend_ptr,
+              SendContextUpdate(GURL(), std::string(), testing::_))
+      .Times(1);
   CloseAllWebStates(*browser.GetWebStateList(),
                     WebStateList::ClosingReason::kDefault);
   controller.Disconnect();
@@ -683,6 +705,7 @@ TEST_F(TtcSessionControllerTest,
   const GURL second_url("https://example.com/second");
   web::FakeWebState* second_tab_ptr =
       InsertActiveEligibleTab(browser, profile.get(), second_url);
+  second_tab_ptr->SetTitle(u"Second Tab");
   EXPECT_EQ(controller.GetVoiceFocusedWebState(), second_tab_ptr);
 
   EXPECT_CALL(*mock_backend_ptr,
@@ -690,14 +713,35 @@ TEST_F(TtcSessionControllerTest,
       .Times(1);
   SimulateMonitorExtraction(controller, second_url, "Second Tab");
 
-  // Error responses and responses without `AnnotatedPageContent` must not
-  // forward context updates to the backend.
-  EXPECT_CALL(*mock_backend_ptr, SendContextUpdate).Times(0);
+  // Extraction errors and responses without `AnnotatedPageContent` forward a
+  // tab-only context update (empty `AnnotatedPageContent`) so the backend drops
+  // any stale page context from the previous page.
+  const auto is_empty_apc = testing::Truly(
+      [](const optimization_guide::proto::AnnotatedPageContent& apc) {
+        return apc.ByteSizeLong() == 0;
+      });
+  EXPECT_CALL(*mock_backend_ptr,
+              SendContextUpdate(second_url, "Second Tab", is_empty_apc))
+      .Times(2);
   controller.OnPageContextFetched(
       base::unexpected(PageContextWrapperError::kGenericError));
   auto empty_context =
       std::make_unique<optimization_guide::proto::PageContext>();
   controller.OnPageContextFetched(base::ok(std::move(empty_context)));
+
+  // Non-extractable, unsafe, and force-detached pages strip the URL to its
+  // origin and omit the title.
+  for (PageContextWrapperError error :
+       {PageContextWrapperError::kPageNotExtractableError,
+        PageContextWrapperError::kPageUnsafeError,
+        PageContextWrapperError::kForceDetachError}) {
+    SCOPED_TRACE(static_cast<int>(error));
+    EXPECT_CALL(*mock_backend_ptr,
+                SendContextUpdate(GURL("https://example.com/"), std::string(),
+                                  is_empty_apc))
+        .Times(1);
+    controller.OnPageContextFetched(base::unexpected(error));
+  }
 
   // Falls back to `PageContext` URL and title when `main_frame_data` fields are
   // empty.
@@ -712,10 +756,20 @@ TEST_F(TtcSessionControllerTest,
       .Times(1);
   controller.OnPageContextFetched(base::ok(std::move(fallback_context)));
 
-  // Closing all tabs clears the controller's focused `WebState`.
+  // Closing all tabs clears the controller's focused `WebState` and sends an
+  // empty context update to clear stale page context in the backend.
+  EXPECT_CALL(*mock_backend_ptr,
+              SendContextUpdate(GURL(), std::string(), is_empty_apc))
+      .Times(1);
   CloseAllWebStates(*browser.GetWebStateList(),
                     WebStateList::ClosingReason::kDefault);
   EXPECT_EQ(controller.GetVoiceFocusedWebState(), nullptr);
+
+  // When no `WebState` is focused, error responses must not send a context
+  // update.
+  EXPECT_CALL(*mock_backend_ptr, SendContextUpdate).Times(0);
+  controller.OnPageContextFetched(
+      base::unexpected(PageContextWrapperError::kGenericError));
 
   controller.Disconnect();
   EXPECT_EQ(controller.GetVoiceFocusedWebState(), nullptr);
@@ -849,6 +903,157 @@ TEST_F(TtcSessionControllerTest, TestStopSessionStopsActiveActorTask) {
 
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return !actor_service->GetActiveTaskState().has_value(); }));
+  controller.Disconnect();
+}
+
+// Tests that `OnToolCall` for `close_session` replies with success, transitions
+// the session lifecycle to `kFinished`, and stops the underlying conversation
+// asynchronously.
+TEST_F(TtcSessionControllerTest,
+       OnToolCallCloseSessionTransitionsToFinishedAndStopsConversation) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  std::unique_ptr<TtcConversation> conversation =
+      std::make_unique<TtcConversation>(fake_audio, nullptr);
+  std::unique_ptr<TtcActuationHandler> actuation_handler =
+      std::make_unique<TtcActuationHandler>(/*actor_service=*/nullptr);
+  FakeTtcSessionControllerObserver observer;
+  TtcSessionController controller(std::move(conversation),
+                                  /*voice_focused_web_state_tracker=*/nullptr,
+                                  std::move(actuation_handler));
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  controller.OnConversationInitialized();
+  ASSERT_EQ(controller.lifecycle(), TTCSessionLifecycle::kLive);
+  base::test::TestFuture<ttc::ToolResponse> future;
+
+  controller.OnToolCall(
+      ttc::ToolRequest{ttc::kToolCloseSession, base::DictValue()},
+      future.GetCallback());
+
+  EXPECT_TRUE(future.Get().Ok());
+  EXPECT_EQ(controller.lifecycle(), TTCSessionLifecycle::kFinished);
+  EXPECT_EQ(observer.last_lifecycle(), TTCSessionLifecycle::kFinished);
+  EXPECT_FALSE(fake_audio.didStopCapture);
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return fake_audio.didStopCapture; }));
+  controller.Disconnect();
+}
+
+// Tests that `SetMicMuted()` is ignored before the session reaches `kLive`.
+TEST_F(TtcSessionControllerTest, SetMicMutedBeforeLiveIsIgnored) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  auto conversation = std::make_unique<TtcConversation>(fake_audio, nullptr);
+  TtcSessionController controller(std::move(conversation), nullptr);
+  FakeTtcSessionControllerObserver observer;
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  ASSERT_EQ(controller.lifecycle(), TTCSessionLifecycle::kInitializing);
+
+  bool did_change = controller.SetMicMuted(true);
+
+  EXPECT_FALSE(did_change);
+  EXPECT_FALSE(controller.IsMicMuted());
+  EXPECT_EQ(observer.mic_muted_change_count(), 0);
+  controller.Disconnect();
+}
+
+// Tests that `SetMicMuted(true)` mutes an active `kLive` session, notifies
+// observers once, and ignores duplicate mute calls.
+TEST_F(TtcSessionControllerTest, SetMicMutedWhenLiveMutesAndNotifiesObservers) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  auto conversation = std::make_unique<TtcConversation>(fake_audio, nullptr);
+  TtcSessionController controller(std::move(conversation), nullptr);
+  FakeTtcSessionControllerObserver observer;
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  controller.OnConversationInitialized();
+  ASSERT_EQ(controller.lifecycle(), TTCSessionLifecycle::kLive);
+
+  bool did_mute = controller.SetMicMuted(true);
+  bool did_remute = controller.SetMicMuted(true);
+
+  EXPECT_TRUE(did_mute);
+  EXPECT_FALSE(did_remute);
+  EXPECT_TRUE(controller.IsMicMuted());
+  EXPECT_EQ(observer.mic_muted_change_count(), 1);
+  EXPECT_TRUE(observer.last_mic_muted());
+  controller.Disconnect();
+}
+
+// Tests that `SetMicMuted(false)` unmutes a muted `kLive` session and notifies
+// observers.
+TEST_F(TtcSessionControllerTest,
+       SetMicMutedFalseWhenMutedUnmutesAndNotifiesObservers) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  auto conversation = std::make_unique<TtcConversation>(fake_audio, nullptr);
+  TtcSessionController controller(std::move(conversation), nullptr);
+  FakeTtcSessionControllerObserver observer;
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  controller.OnConversationInitialized();
+  ASSERT_TRUE(controller.SetMicMuted(true));
+  ASSERT_EQ(observer.mic_muted_change_count(), 1);
+
+  bool did_unmute = controller.SetMicMuted(false);
+
+  EXPECT_TRUE(did_unmute);
+  EXPECT_FALSE(controller.IsMicMuted());
+  EXPECT_EQ(observer.mic_muted_change_count(), 2);
+  EXPECT_FALSE(observer.last_mic_muted());
+  controller.Disconnect();
+}
+
+// Tests that an external audio capture stop while the session is still
+// initializing notifies observers of the muted state once initialization
+// completes.
+TEST_F(TtcSessionControllerTest,
+       CaptureStopDuringInitializingNotifiesMicMutedOnInitialized) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  auto conversation = std::make_unique<TtcConversation>(fake_audio, nullptr);
+  TtcSessionController controller(std::move(conversation), nullptr);
+  FakeTtcSessionControllerObserver observer;
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  ASSERT_EQ(controller.lifecycle(), TTCSessionLifecycle::kInitializing);
+
+  [fake_audio.delegate audioControllerDidStopCapture:fake_audio];
+  ASSERT_EQ(observer.mic_muted_change_count(), 0);
+  controller.OnConversationInitialized();
+
+  EXPECT_EQ(controller.lifecycle(), TTCSessionLifecycle::kLive);
+  EXPECT_TRUE(controller.IsMicMuted());
+  EXPECT_EQ(observer.mic_muted_change_count(), 1);
+  EXPECT_TRUE(observer.last_mic_muted());
+  controller.Disconnect();
+}
+
+// Tests that a synchronous capture start failure during `SetMicMuted(false)`
+// returns `false` without notifying observers or stopping the session.
+TEST_F(TtcSessionControllerTest,
+       SetMicMutedFalseFailureReturnsFalseWithoutNotifyingObserver) {
+  FakeTTCSessionAudioController* fake_audio =
+      [[FakeTTCSessionAudioController alloc] init];
+  TtcSessionController controller(
+      std::make_unique<TtcConversation>(fake_audio, nullptr), nullptr);
+  FakeTtcSessionControllerObserver observer;
+  controller.AddObserver(&observer);
+  controller.StartSession();
+  controller.OnConversationInitialized();
+  ASSERT_TRUE(controller.SetMicMuted(true));
+  ASSERT_EQ(observer.mic_muted_change_count(), 1);
+  fake_audio.shouldFailStartCapture = YES;
+
+  bool did_unmute = controller.SetMicMuted(false);
+
+  EXPECT_FALSE(did_unmute);
+  EXPECT_EQ(controller.lifecycle(), TTCSessionLifecycle::kLive);
+  EXPECT_TRUE(controller.IsMicMuted());
+  EXPECT_EQ(observer.mic_muted_change_count(), 1);
   controller.Disconnect();
 }
 

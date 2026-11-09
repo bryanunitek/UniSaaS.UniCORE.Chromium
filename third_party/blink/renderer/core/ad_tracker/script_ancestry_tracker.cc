@@ -103,7 +103,7 @@ void ScriptAncestryTracker::DidExecuteScript(V8ScriptId script_id) {
   MaybeResetBottomMostScript();
 
   if (running_sync_tasks_ == 0) {
-    monkey_patch_calls_in_scope_.clear();
+    monkey_patch_calls_in_scope_.Clear();
   }
 }
 
@@ -151,7 +151,7 @@ void ScriptAncestryTracker::DidCallFunction(V8ScriptId script_id,
   MaybeResetBottomMostScript();
 
   if (running_sync_tasks_ == 0) {
-    monkey_patch_calls_in_scope_.clear();
+    monkey_patch_calls_in_scope_.Clear();
   }
 }
 
@@ -161,7 +161,6 @@ void ScriptAncestryTracker::DidCreateAsyncTask(
   DCHECK(task_context);
   v8::Isolate* isolate = GetIsolate();
   if (isolate && !isolate->GetCurrentContext().IsEmpty()) {
-    v8::HandleScope handle_scope(isolate);
     // TODO(jkarlin): Restrict the kNodeAppendChild monkeypatch exception
     // specifically to script element creation tasks (e.g., PendingScript) by
     // passing the async task name/type to DidCreateAsyncTask.
@@ -399,7 +398,7 @@ void ScriptAncestryTracker::Shutdown() {
   async_script_stack_.clear();
   bottom_most_script_.reset();
   bottom_most_script_depth_ = 0;
-  monkey_patch_calls_in_scope_.clear();
+  monkey_patch_calls_in_scope_.Clear();
   if (monitor_) {
     monitor_->RemoveObserver(this);
     monitor_ = nullptr;
@@ -448,10 +447,10 @@ bool ScriptAncestryTracker::IsFirstMonkeyPatchCall(MonkeyPatchableApi api) {
   if (running_sync_tasks_ == 0) {
     return true;
   }
-  if (monkey_patch_calls_in_scope_.Contains(api)) {
+  if (monkey_patch_calls_in_scope_.Has(api)) {
     return false;
   }
-  monkey_patch_calls_in_scope_.insert(api);
+  monkey_patch_calls_in_scope_.Put(api);
   return true;
 }
 
@@ -503,7 +502,7 @@ void ScriptAncestryTracker::MaybeResetBottomMostScript() {
 bool ScriptAncestryTracker::WasApiCalledByNonAttributedScript(
     v8::Isolate* isolate,
     MonkeyPatchableApi api,
-    LazyStackTrace& /*stack_trace*/) const {
+    LazyStackTrace& stack_trace) const {
   MonkeyPatchableApiFunctionInfo api_info =
       GetMonkeyPatchableApiFunctionInfo(isolate, api);
   if (!api_info.is_monkey_patched) {
@@ -515,7 +514,6 @@ bool ScriptAncestryTracker::WasApiCalledByNonAttributedScript(
     return false;
   }
 
-  LazyStackTrace stack_trace(isolate);
   auto stack = stack_trace.GetStack(5);
 
   MonkeyPatchCallerResult result =

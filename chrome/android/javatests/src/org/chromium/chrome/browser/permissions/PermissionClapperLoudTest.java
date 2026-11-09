@@ -48,7 +48,6 @@ import org.chromium.ui.base.WindowAndroid;
 
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({
-    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     ChromeSwitches.DISABLE_STARTUP_PROMOS,
     ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1",
     "ignore-certificate-errors"
@@ -59,8 +58,7 @@ public class PermissionClapperLoudTest {
 
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.autoResetCtaActivityRule();
-    public PermissionTestRule mPermissionRule =
-            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
+    public PermissionTestRule mPermissionRule = new PermissionTestRule(mActivityTestRule);
 
     @Rule
     public RuleChain mRuleChain = RuleChain.outerRule(mActivityTestRule).around(mPermissionRule);
@@ -84,7 +82,7 @@ public class PermissionClapperLoudTest {
 
     @Before
     public void setUp() throws Exception {
-        mPermissionRule.setUpActivity();
+        mActivityTestRule.startOnBlankPage();
         safelyClosePageInfo();
         clearPermissionDelegate();
         mPermissionRule.resetNotificationsSettingsForTest(/* enableQuietUi= */ false);
@@ -117,7 +115,7 @@ public class PermissionClapperLoudTest {
             String[] permissions, RuntimePermissionTestUtils.RuntimePromptResponse response) {
         RuntimePermissionTestUtils.TestAndroidPermissionDelegate testDelegate =
                 new RuntimePermissionTestUtils.TestAndroidPermissionDelegate(permissions, response);
-        WindowAndroid windowAndroid = mPermissionRule.getActivity().getWindowAndroid();
+        WindowAndroid windowAndroid = mActivityTestRule.getActivity().getWindowAndroid();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     windowAndroid.setAndroidPermissionDelegate(testDelegate);
@@ -126,7 +124,7 @@ public class PermissionClapperLoudTest {
 
     /** Clears the injected Android permission delegate. */
     private void clearPermissionDelegate() {
-        WindowAndroid windowAndroid = mPermissionRule.getActivity().getWindowAndroid();
+        WindowAndroid windowAndroid = mActivityTestRule.getActivity().getWindowAndroid();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     windowAndroid.setAndroidPermissionDelegate(null);

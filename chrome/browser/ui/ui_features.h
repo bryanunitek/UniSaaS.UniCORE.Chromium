@@ -24,6 +24,13 @@ bool ShouldUseActionsForBrowserCommands();
 
 BASE_DECLARE_FEATURE(kAllowEyeDropperWGCScreenCapture);
 
+BASE_DECLARE_FEATURE(kBrowserWindowListenerObservation);
+bool IsBrowserWindowListenerObservationEnabled();
+
+#if !BUILDFLAG(IS_ANDROID)
+BASE_DECLARE_FEATURE(kBookmarkBarAreaKeyboardNavigation);
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 BASE_DECLARE_FEATURE(kCtrlTabMru);
 
 BASE_DECLARE_FEATURE(kFastFaviconDisplay);
@@ -33,6 +40,8 @@ BASE_DECLARE_FEATURE(kDseIntegrity);
 BASE_DECLARE_FEATURE(kFeedbackDisabledDialog);
 BASE_DECLARE_FEATURE(kLegacySearchIntegrityCheck);
 #endif
+
+BASE_DECLARE_FEATURE(kFedCmIdpLinks);
 
 BASE_DECLARE_FEATURE(kFedCmPermissionUiWithContainer);
 
@@ -210,6 +219,7 @@ BASE_DECLARE_FEATURE(kProcessIsolationSettings);
 
 BASE_DECLARE_FEATURE(kLensOverlayVirtualFocusNavigation);
 BASE_DECLARE_FEATURE(kOmniboxEverywhereVirtualFocusNavigation);
+BASE_DECLARE_FEATURE(kOmniboxPopupDesktopWidget);
 BASE_DECLARE_FEATURE(kWebuiBrowserVirtualFocusNavigation);
 
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kShowDropTargetForTabDelay);
@@ -406,6 +416,7 @@ BASE_DECLARE_FEATURE(kTabGroupRibbon);
 bool IsTabGroupRibbonEnabled();
 
 BASE_DECLARE_FEATURE(kNonGroupFocus);
+BASE_DECLARE_FEATURE_PARAM(int, kNonGroupFocusIphMinTabs);
 
 BASE_DECLARE_FEATURE(kOmniboxResizingPrioritization);
 

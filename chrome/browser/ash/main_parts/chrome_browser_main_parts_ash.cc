@@ -111,7 +111,6 @@
 #include "chrome/browser/ash/dbus/vm/vm_permission_service_provider.h"
 #include "chrome/browser/ash/dbus/vm/vm_sk_forwarding_service_provider.h"
 #include "chrome/browser/ash/dbus/vm/vm_wl_service_provider.h"
-#include "chrome/browser/ash/diagnostics/diagnostics_browser_delegate_impl.h"
 #include "chrome/browser/ash/events/event_rewriter_delegate_impl.h"
 #include "chrome/browser/ash/events/shortcut_mapping_pref_service.h"
 #include "chrome/browser/ash/extensions/default_app_order.h"
@@ -209,8 +208,6 @@
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/webui/ash/config/ash_web_ui_config_manager.h"
 #include "chrome/browser/ui/webui/ash/emoji/emoji_ui.h"
-#include "chrome/common/logging_chrome.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/attestation/attestation_features.h"
 #include "chromeos/ash/components/audio/audio_devices_pref_handler_impl.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
@@ -253,7 +250,6 @@
 #include "chromeos/ash/components/power/dark_resume_controller.h"
 #include "chromeos/ash/components/report/device_metrics/use_case/real_psm_client_manager.h"
 #include "chromeos/ash/components/report/device_metrics/use_case/use_case.h"
-#include "chromeos/ash/components/scheduler_config/scheduler_configuration_manager.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/user_login_permission_tracker.h"
@@ -1393,10 +1389,20 @@ void ChromeBrowserMainPartsAsh::PostProfileInit(Profile* profile,
         std::make_unique<parent_access::ParentAccessService>(
             g_browser_process->local_state());
 
+    // Enable Chrome OS USB detection before ChromeSessionManager::Initialize
+    // so it observes the primary user session start.
+    cros_usb_detector_ = std::make_unique<CrosUsbDetector>();
+
     g_browser_process->platform_part()->chrome_session_manager()->Initialize(
         g_browser_process->metrics_service(),
         g_browser_process->GetFeatures()->application_locale_storage(),
         g_browser_process->shared_url_loader_factory(),
+        g_browser_process->platform_part()->component_manager_ash(),
+        g_browser_process->platform_part()
+            ->device_restriction_schedule_controller(),
+        g_browser_process->platform_part()
+            ->multi_user_sign_in_policy_controller(),
+        g_browser_process->platform_part()->GetSystemClock(),
         *base::CommandLine::ForCurrentProcess(), profile,
         is_integration_test());
 
@@ -1577,13 +1583,6 @@ void ChromeBrowserMainPartsAsh::PostBrowserStart() {
   auto_screen_brightness_controller_ =
       std::make_unique<power::auto_screen_brightness::Controller>();
 
-  // Enable Chrome OS USB detection.
-  cros_usb_detector_ = std::make_unique<CrosUsbDetector>();
-  content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
-      ->PostTask(FROM_HERE,
-                 base::BindOnce(&CrosUsbDetector::ConnectToDeviceManager,
-                                base::Unretained(cros_usb_detector_.get())));
-
   // USB detection for ash notifications.
   ash_usb_detector_ = std::make_unique<AshUsbDetector>();
   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
@@ -1615,11 +1614,9 @@ void ChromeBrowserMainPartsAsh::PostBrowserStart() {
   dark_resume_controller_ = std::make_unique<system::DarkResumeController>(
       std::move(wake_lock_provider));
 
-  // DiagnosticsBrowserDelegate has to be initialized after ProfilerHelper and
-  // UserManager. Initializing in PostProfileInit to ensure Profile data is
-  // available and shell has been initialized.
-  diagnostics::DiagnosticsLogController::Initialize(
-      std::make_unique<diagnostics::DiagnosticsBrowserDelegateImpl>());
+  // The log controller reads the active user's directory off the UserManager,
+  // so it has to be initialized after it, and after the shell.
+  diagnostics::DiagnosticsLogController::Initialize();
 
   if (features::IsVideoConferenceEnabled()) {
     auto* vc_manager = ash::VideoConferenceManagerAsh::Get();

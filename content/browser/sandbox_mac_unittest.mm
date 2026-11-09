@@ -496,6 +496,9 @@ TEST_F(SandboxMacTest, RendererPidinfoUnrestricted) {
                     sandbox::mojom::Sandbox::kRenderer);
 }
 
+constexpr base::FilePath::CharType kTestStoragePartitionRelPath[] =
+    FILE_PATH_LITERAL("Default/Storage/ext/test_ext/def");
+
 MULTIPROCESS_TEST_MAIN(NetworkDataMigrationRestrictedProcess) {
   std::string extra_data = GetExtraDataValue();
   CHECK(!extra_data.empty());
@@ -544,7 +547,33 @@ MULTIPROCESS_TEST_MAIN(NetworkDataMigrationRestrictedProcess) {
   CHECK(base::CreateDirectory(shared_dict_dir));
   test_allowed_file(shared_dict_dir.Append("db"));
 
-  test_allowed_file(user_cache_dir.Append("cache_file"));
+  base::FilePath cache_dir = user_cache_dir.Append("Default").Append("Cache");
+  CHECK(base::CreateDirectory(cache_dir));
+  test_allowed_file(cache_dir.Append("cache_file"));
+
+  base::FilePath root_cache_dir = user_cache_dir.Append("Cache");
+  CHECK(base::CreateDirectory(root_cache_dir));
+  test_allowed_file(root_cache_dir.Append("root_cache_file"));
+
+  // Storage partition cache subdirectory.
+  base::FilePath partition_cache_parent =
+      user_cache_dir.Append(kTestStoragePartitionRelPath);
+  base::FilePath partition_cache_dir = partition_cache_parent.Append("Cache");
+  CHECK(base::CreateDirectory(partition_cache_dir));
+  test_allowed_file(partition_cache_dir.Append("cache_file"));
+
+  // Storage partition data subdirectories in user-data-dir.
+  base::FilePath partition_data_parent =
+      user_data_dir.Append(kTestStoragePartitionRelPath);
+  base::FilePath partition_network_dir =
+      partition_data_parent.Append("Network");
+  CHECK(base::CreateDirectory(partition_network_dir));
+  test_allowed_file(partition_network_dir.Append("cookies.db"));
+
+  base::FilePath partition_shared_dict_dir =
+      partition_data_parent.Append("Shared Dictionary");
+  CHECK(base::CreateDirectory(partition_shared_dict_dir));
+  test_allowed_file(partition_shared_dict_dir.Append("db"));
 
   // Denied directories and files.
   base::File::Error dir_error = base::File::FILE_OK;
@@ -552,8 +581,35 @@ MULTIPROCESS_TEST_MAIN(NetworkDataMigrationRestrictedProcess) {
       user_data_dir.Append("Default").Append("UnauthorizedDir"), &dir_error));
   CHECK_EQ(dir_error, base::File::FILE_ERROR_ACCESS_DENIED);
 
+  CHECK(!base::CreateDirectoryAndGetError(
+      partition_cache_parent.Append("Code Cache"), &dir_error));
+  CHECK_EQ(dir_error, base::File::FILE_ERROR_ACCESS_DENIED);
+  CHECK(!base::CreateDirectoryAndGetError(
+      partition_data_parent.Append("Code Cache"), &dir_error));
+  CHECK_EQ(dir_error, base::File::FILE_ERROR_ACCESS_DENIED);
+  CHECK(!base::CreateDirectoryAndGetError(
+      partition_data_parent.Append("Preferences"), &dir_error));
+  CHECK_EQ(dir_error, base::File::FILE_ERROR_ACCESS_DENIED);
+
   test_denied_file(user_data_dir.Append("Default").Append("Preferences"));
+  test_denied_file(user_data_dir.Append("Default").Append("NetworkExtra"));
   test_denied_file(user_data_dir.Append("unauthorized.txt"));
+  test_denied_file(partition_data_parent.Append("unauthorized.txt"));
+  test_denied_file(partition_data_parent.Append("NetworkExtra"));
+  test_denied_file(user_cache_dir.Append("unauthorized.txt"));
+  test_denied_file(user_cache_dir.Append("Default").Append("unauthorized.txt"));
+  test_denied_file(user_cache_dir.Append("Default").Append("CacheExtra"));
+  test_denied_file(partition_cache_parent.Append("unauthorized.txt"));
+
+  // Symbolic link creation is denied even in writable directories.
+  CHECK(!base::CreateSymbolicLink(network_dir.Append("cookies.db"),
+                                  network_dir.Append("symlink")));
+  CHECK_EQ(base::File::GetLastFileError(),
+           base::File::FILE_ERROR_ACCESS_DENIED);
+  CHECK(!base::CreateSymbolicLink(cache_dir.Append("cache_file"),
+                                  cache_dir.Append("symlink")));
+  CHECK_EQ(base::File::GetLastFileError(),
+           base::File::FILE_ERROR_ACCESS_DENIED);
 
   return 0;
 }
@@ -564,7 +620,9 @@ MULTIPROCESS_TEST_MAIN(NetworkDataMigrationRestrictedProcess) {
 // subdirectories (and `USER_CACHE_DIR`), denying access to other profile paths.
 TEST_F(SandboxMacTest, NetworkDataMigrationRestricted) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kTriggerNetworkDataMigration);
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kTriggerNetworkDataMigration},
+      /*disabled_features=*/{kMacSandboxAllowNetworkSymlinkCreation});
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -574,7 +632,12 @@ TEST_F(SandboxMacTest, NetworkDataMigrationRestricted) {
   ASSERT_TRUE(base::CreateDirectory(user_data_dir));
   ASSERT_TRUE(base::CreateDirectory(user_data_dir.Append("Default")));
   ASSERT_TRUE(base::CreateDirectory(user_data_dir.Append("Profile 1")));
+  ASSERT_TRUE(base::CreateDirectory(
+      user_data_dir.Append(kTestStoragePartitionRelPath)));
   ASSERT_TRUE(base::CreateDirectory(user_cache_dir));
+  ASSERT_TRUE(base::CreateDirectory(user_cache_dir.Append("Default")));
+  ASSERT_TRUE(base::CreateDirectory(
+      user_cache_dir.Append(kTestStoragePartitionRelPath)));
 
   user_data_dir = sandbox::policy::GetCanonicalPath(user_data_dir);
   user_cache_dir = sandbox::policy::GetCanonicalPath(user_cache_dir);
@@ -628,6 +691,16 @@ MULTIPROCESS_TEST_MAIN(NetworkDataMigrationUnrestrictedProcess) {
   test_allowed_file(user_data_dir.Append("unauthorized.txt"));
   test_allowed_file(user_cache_dir.Append("cache_file"));
 
+  // Symbolic link creation is denied even in writable directories.
+  CHECK(!base::CreateSymbolicLink(user_data_dir.Append("unauthorized.txt"),
+                                  user_data_dir.Append("symlink")));
+  CHECK_EQ(base::File::GetLastFileError(),
+           base::File::FILE_ERROR_ACCESS_DENIED);
+  CHECK(!base::CreateSymbolicLink(user_cache_dir.Append("cache_file"),
+                                  user_cache_dir.Append("symlink")));
+  CHECK_EQ(base::File::GetLastFileError(),
+           base::File::FILE_ERROR_ACCESS_DENIED);
+
   return 0;
 }
 
@@ -636,7 +709,10 @@ MULTIPROCESS_TEST_MAIN(NetworkDataMigrationUnrestrictedProcess) {
 // recursive subpath access across the entire storage directory.
 TEST_F(SandboxMacTest, NetworkDataMigrationUnrestricted) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kTriggerNetworkDataMigration);
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{features::kTriggerNetworkDataMigration,
+                             kMacSandboxAllowNetworkSymlinkCreation});
 
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -660,6 +736,78 @@ TEST_F(SandboxMacTest, NetworkDataMigrationUnrestricted) {
       old_client));
 
   ExecuteWithParams("NetworkDataMigrationUnrestrictedProcess",
+                    sandbox::mojom::Sandbox::kNetwork,
+                    /*append_temp_dir_suffix=*/false);
+}
+
+MULTIPROCESS_TEST_MAIN(NetworkSymlinkAllowedProcess) {
+  std::string extra_data = GetExtraDataValue();
+  CHECK(!extra_data.empty());
+  std::vector<std::string> parts = base::SplitString(
+      extra_data, ";", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  CHECK_EQ(parts.size(), 2u);
+  base::FilePath user_data_dir(parts[0]);
+  base::FilePath user_cache_dir(parts[1]);
+
+  CheckCreateSeatbeltServer();
+
+  base::FilePath network_dir =
+      user_data_dir.Append("Default").Append("Network");
+  CHECK(base::CreateDirectory(network_dir));
+
+  base::FilePath cookies_file = network_dir.Append("cookies.db");
+  base::File file(cookies_file,
+                  base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  CHECK(file.IsValid());
+  file.Close();
+
+  base::FilePath cache_dir = user_cache_dir.Append("Cache");
+  CHECK(base::CreateDirectory(cache_dir));
+  base::FilePath cache_file = cache_dir.Append("cache_file");
+  base::File file2(cache_file,
+                   base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  CHECK(file2.IsValid());
+  file2.Close();
+
+  // Symbolic link creation is allowed when
+  // `kMacSandboxAllowNetworkSymlinkCreation` is enabled.
+  CHECK(base::CreateSymbolicLink(cookies_file, network_dir.Append("symlink")));
+  CHECK(base::IsLink(network_dir.Append("symlink")));
+  CHECK(base::CreateSymbolicLink(cache_file, cache_dir.Append("symlink")));
+  CHECK(base::IsLink(cache_dir.Append("symlink")));
+
+  return 0;
+}
+
+// Verifies that when `kMacSandboxAllowNetworkSymlinkCreation` is enabled, the
+// macOS network service sandbox allows creating symbolic links within writable
+// network service directories.
+TEST_F(SandboxMacTest, NetworkSymlinkAllowed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kMacSandboxAllowNetworkSymlinkCreation);
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  base::FilePath user_data_dir = temp_dir.GetPath().Append("UserData");
+  base::FilePath user_cache_dir = temp_dir.GetPath().Append("Cache");
+  ASSERT_TRUE(base::CreateDirectory(user_data_dir));
+  ASSERT_TRUE(base::CreateDirectory(user_data_dir.Append("Default")));
+  ASSERT_TRUE(base::CreateDirectory(user_cache_dir));
+
+  user_data_dir = sandbox::policy::GetCanonicalPath(user_data_dir);
+  user_cache_dir = sandbox::policy::GetCanonicalPath(user_cache_dir);
+
+  extra_data_ =
+      base::StrCat({user_data_dir.value(), ";", user_cache_dir.value()});
+
+  NetworkTestContentBrowserClient test_client(user_data_dir, user_cache_dir);
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&test_client);
+  base::ScopedClosureRunner restore_client(base::BindOnce(
+      [](ContentBrowserClient* client) { SetBrowserClientForTesting(client); },
+      old_client));
+
+  ExecuteWithParams("NetworkSymlinkAllowedProcess",
                     sandbox::mojom::Sandbox::kNetwork,
                     /*append_temp_dir_suffix=*/false);
 }

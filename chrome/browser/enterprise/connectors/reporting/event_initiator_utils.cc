@@ -6,14 +6,21 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "base/feature_list.h"
 #include "base/notreached.h"
 #include "base/version.h"
+#include "chrome/browser/enterprise/connectors/common.h"
+#include "chrome/browser/enterprise/connectors/connectors_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_item.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/common/proto/synced/browser_events.pb.h"
 #include "components/enterprise/connectors/core/features.h"
+#include "components/policy/core/common/policy_types.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -21,6 +28,7 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
@@ -32,10 +40,15 @@
 #include "extensions/common/extension_id.h"
 #endif
 
+#if BUILDFLAG(ENTERPRISE_CDP_ATTRIBUTION)
+#include "chrome/browser/enterprise/connectors/reporting/cdp_actor_session_tracker.h"
+#endif
+
 namespace enterprise_connectors {
 
 namespace {
 
+using EventInitiatorInfo = chrome::cros::reporting::proto::EventInitiatorInfo;
 using ExtensionInfo =
     safe_browsing::ExtensionTelemetryReportRequest::ExtensionInfo;
 
@@ -102,6 +115,46 @@ void PopulateInstalledExtensionInfo(content::BrowserContext* browser_context,
   extension_info.set_is_from_store(extension->from_webstore());
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
+bool CanIncludeDeviceInfoForUrlLookup(
+    content::BrowserContext* browser_context) {
+  if (!browser_context ||
+      !base::FeatureList::IsEnabled(kEventReportingCdpAttribution)) {
+    return false;
+  }
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  auto* connectors =
+      ConnectorsServiceFactory::GetForBrowserContext(browser_context);
+  if (!connectors || !connectors->GetDMTokenForRealTimeUrlCheck().has_value()) {
+    return false;
+  }
+  std::optional<policy::PolicyScope> url_scope =
+      connectors->GetRealtimeUrlCheckScope();
+  return url_scope.has_value() &&
+         IncludeDeviceInfo(profile, *url_scope == policy::POLICY_SCOPE_USER);
+}
+
+std::optional<EventInitiatorInfo> GetActiveEventInitiatorInfoImpl(
+    content::WebContents* web_contents,
+    bool include_device_info) {
+  if (!web_contents) {
+    return std::nullopt;
+  }
+
+  if (std::optional<ExtensionInfo> extension_info =
+          GetActiveExtensionInitiatorInfo(web_contents)) {
+    EventInitiatorInfo initiator;
+    *initiator.mutable_chrome_extension() = std::move(*extension_info);
+    return initiator;
+  }
+
+#if BUILDFLAG(ENTERPRISE_CDP_ATTRIBUTION)
+  if (include_device_info) {
+    return CdpActorSessionTracker::GetEventInitiatorInfo(web_contents);
+  }
+#endif  // BUILDFLAG(ENTERPRISE_CDP_ATTRIBUTION)
+  return std::nullopt;
+}
 
 }  // namespace
 
@@ -178,6 +231,72 @@ std::optional<ExtensionInfo> GetActiveExtensionInitiatorInfo(
   return std::nullopt;
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) &&
         // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+}
+
+std::optional<ExtensionInfo> GetActiveExtensionInitiatorInfo(
+    content::BrowserContext* browser_context,
+    SessionID tab_id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // The feature check and build guard below match the `WebContents` overload
+  // and are applied first so the tab walk is skipped whenever attribution is
+  // impossible.
+  if (!base::FeatureList::IsEnabled(kEnterpriseExtensionActorAttribution) ||
+      !browser_context || !tab_id.is_valid()) {
+    return std::nullopt;
+  }
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) && \
+    BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // The enterprise services that call this are shared between a profile and
+  // its off-the-record profiles, so search both.
+  content::WebContents* web_contents = nullptr;
+  if (!extensions::ExtensionTabUtil::GetTabById(tab_id.id(), browser_context,
+                                                /*include_incognito=*/true,
+                                                &web_contents)) {
+    return std::nullopt;
+  }
+  return GetActiveExtensionInitiatorInfo(web_contents);
+#else
+  return std::nullopt;
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) &&
+        // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+}
+
+std::optional<EventInitiatorInfo> GetActiveEventInitiatorInfo(
+    content::WebContents* web_contents) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return GetActiveEventInitiatorInfoImpl(web_contents,
+                                         /*include_device_info=*/true);
+}
+
+std::optional<EventInitiatorInfo> GetActiveEventInitiatorInfo(
+    content::BrowserContext* browser_context,
+    SessionID tab_id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (!browser_context || !tab_id.is_valid()) {
+    return std::nullopt;
+  }
+
+  const bool include_device_info =
+      CanIncludeDeviceInfoForUrlLookup(browser_context);
+  if (!base::FeatureList::IsEnabled(kEnterpriseExtensionActorAttribution) &&
+      !include_device_info) {
+    return std::nullopt;
+  }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  content::WebContents* web_contents = nullptr;
+  if (!extensions::ExtensionTabUtil::GetTabById(tab_id.id(), browser_context,
+                                                /*include_incognito=*/true,
+                                                &web_contents)) {
+    return std::nullopt;
+  }
+  return GetActiveEventInitiatorInfoImpl(web_contents, include_device_info);
+#else
+  return std::nullopt;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 }  // namespace enterprise_connectors

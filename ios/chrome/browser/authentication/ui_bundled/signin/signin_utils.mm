@@ -34,7 +34,6 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
-#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_ios.h"
@@ -162,18 +161,6 @@ void AllBrowsersSignedOut(signin::SignoutCompletion completion,
     }
   }
   std::move(completion).Run(new_scene_state);
-}
-
-// Checks that `result` is valid, i.e. either it contains a non-nil identity
-// value or a non-success cancellation/failure reason
-// (`SigninCoordinatorResult`).
-void CheckSigninCoordinatorResultOrIdentity(
-    SigninCoordinatorResultOrIdentity result) {
-  if (result.has_value()) {
-    CHECK(result.value());
-  } else {
-    CHECK_NE(result.error(), SigninCoordinatorResultSuccess);
-  }
 }
 
 }  // namespace
@@ -633,38 +620,7 @@ Browser* GetRegularBrowser(Browser* browser) {
     // scene state.
     return browser;
   }
-  return browser->GetSceneState()
-      .browserProviderInterface.mainBrowserProvider.browser;
-}
-
-void CheckSigninCoordinatorResultAndIdentity(SigninCoordinatorResult result,
-                                             id<SystemIdentity> identity) {
-  if (result == SigninCoordinatorResultSuccess) {
-    CHECK(identity);
-  } else {
-    CHECK(!identity);
-  }
-}
-
-SigninCoordinatorResult
-SigninCoordinatorResultFromSigninCoordinatorResultOrIdentity(
-    SigninCoordinatorResultOrIdentity result) {
-  CheckSigninCoordinatorResultOrIdentity(result);
-  if (result.has_value()) {
-    return SigninCoordinatorResultSuccess;
-  }
-  return result.error();
-}
-
-SigninCoordinatorResultOrIdentity
-SigninCoordinatorResultOrIdentityFromSigninCoordinatorResult(
-    SigninCoordinatorResult result,
-    id<SystemIdentity> identity) {
-  CheckSigninCoordinatorResultAndIdentity(result, identity);
-  if (result == SigninCoordinatorResultSuccess) {
-    return identity;
-  }
-  return base::unexpected(result);
+  return browser->GetSceneState().browserProviderInterface.mainBrowser;
 }
 
 }  // namespace signin

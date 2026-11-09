@@ -17,6 +17,7 @@
 namespace omnibox {
 namespace {
 constexpr bool IS_ANDROID = !!BUILDFLAG(IS_ANDROID);
+constexpr bool IS_CHROMEOS = !!BUILDFLAG(IS_CHROMEOS);
 constexpr bool IS_IOS = !!BUILDFLAG(IS_IOS);
 
 constexpr base::FeatureState DISABLED = base::FEATURE_DISABLED_BY_DEFAULT;
@@ -240,12 +241,16 @@ BASE_FEATURE(kOmniboxAimDeferShowUntilVisualStateReadyWithFullWebUI, DISABLED);
 // it after the browser window's first presentation, or earlier if the popup is
 // shown or another caller needs the AIM WebContents. See
 // `OmniboxPopupAimPresenter` and `kOmniboxAimPopupCreateOnFirstPresentation`.
-BASE_FEATURE(kOmniboxAimPopupDeferCreation, DISABLED);
+// Enabled on ChromeOS, where session restore at login creates every restored
+// window at once.
+BASE_FEATURE(kOmniboxAimPopupDeferCreation, enable_if(IS_CHROMEOS));
 // When enabled, the WebUI omnibox popup that shows suggestions does not create
 // its WebUI content (and so its WebContents and renderer) while the browser
 // window is built. It creates it after the browser window's first
-// presentation, or earlier if the popup is shown. See `OmniboxPopupPresenter`.
-BASE_FEATURE(kOmniboxWebUIPopupDeferCreation, DISABLED);
+// presentation, or earlier if the popup is shown. See `OmniboxPopupPresenter`
+// and `kOmniboxWebUIPopupCreateOnFocus`.
+// Enabled on ChromeOS, like `kOmniboxAimPopupDeferCreation`.
+BASE_FEATURE(kOmniboxWebUIPopupDeferCreation, enable_if(IS_CHROMEOS));
 // When enabled, the Omnibox WebUI popup will defer showing until the WebUI has
 // painted a clean frame, avoiding the issue of the popup being shown with a
 // stale frame.
@@ -348,6 +353,12 @@ BASE_FEATURE(kOmniboxFullWebUIDestroyWidgetOnHide, ENABLED);
 // take effect regardless of whether the full WebUI omnibox is enabled.
 BASE_FEATURE(kOmniboxAimDestroyWidgetOnHide, ENABLED);
 BASE_FEATURE(kOmniboxWebUIDestroyWidgetOnHide, DISABLED);
+
+// When enabled, the browser windows of a profile share their classic and AI
+// Mode WebUI popups. A window that needs a popup takes an idle one of the same
+// kind from another window instead of loading a new WebContents, and skips
+// prewarming one if another window already has one.
+BASE_FEATURE(kOmniboxWebUIPopupShareAcrossWindows, DISABLED);
 
 // When enabled, a location bar creates its AI Mode popup (and the WebContents
 // behind it) only once the profile is eligible for it, instead of at window
@@ -656,6 +667,13 @@ const base::FeatureParam<bool> kVoiceSearchCoherenceRealboxHelperText{
     &kVoiceSearchCoherenceSearchbox, "VoiceSearchCoherenceRealboxHelperText",
     false};
 
+// Keeps the legacy NTP Realbox voice search UI, the one users get with
+// kVoiceSearchCoherenceSearchbox disabled. Voice search requests still carry
+// the NTP routing params, so only the speech service's recognizer changes.
+const base::FeatureParam<bool> kVoiceSearchCoherenceRealboxKeepLegacyUi{
+    &kVoiceSearchCoherenceSearchbox, "VoiceSearchCoherenceRealboxKeepLegacyUi",
+    false};
+
 #if BUILDFLAG(IS_ANDROID)
 // Prevents intermediate AutocompleteResult updates from being sent to Java on
 // low-end devices. This aims at eliminating time spent on constructing,
@@ -715,6 +733,11 @@ BASE_FEATURE(kOmniboxAndroidIntranetRedirect, DISABLED);
 // transcription.
 BASE_FEATURE(kOmniboxVoicePlateIntent, DISABLED);
 
+// If enabled, Omnibox suggestion icons are rasterized from the native
+// gfx::VectorIcon definitions (shared with desktop) instead of being sourced
+// from Android XML drawables.
+BASE_FEATURE(kOmniboxNativeVectorIcons, DISABLED);
+
 namespace android {
 static int64_t JNI_OmniboxFeatureMap_GetNativeMap(JNIEnv* env) {
   static const base::Feature* const kFeaturesExposedToJava[] = {
@@ -756,7 +779,8 @@ static int64_t JNI_OmniboxFeatureMap_GetNativeMap(JNIEnv* env) {
       &kSuppressStatusIconDuringHttpNavigation,
       &kZeroSuggestPrefetchOnPageLoadAndTabSwitch,
       &kAndroidTabSearchCloseTabButton,
-      &kOmniboxVoicePlateIntent};
+      &kOmniboxVoicePlateIntent,
+      &kOmniboxNativeVectorIcons};
   static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
       kFeaturesExposedToJava);
   return reinterpret_cast<int64_t>(kFeatureMap.get());
@@ -767,7 +791,7 @@ static int64_t JNI_OmniboxFeatureMap_GetNativeMap(JNIEnv* env) {
 // If enabled, X-Geo headers are sent using the platform-agnostic C++
 // implementation. On Android, enabling this flag will disable the legacy Java
 // implementation.
-BASE_FEATURE(kPlatformAgnosticXGeo, DISABLED);
+BASE_FEATURE(kPlatformAgnosticXGeo, ENABLED);
 
 // If enabled, URL-what-you-typed matches are made the default match instead of
 // matches for the same URL with different casing, so verbatim input casing is

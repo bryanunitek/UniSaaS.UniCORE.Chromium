@@ -963,9 +963,25 @@ const CGFloat kBackgroundImageAnimationDuration = 0.2;
   _aimTitle = [title copy];
   _aimIcon = icon;
   _aimAccessibilityLabel = [accessibilityLabel copy];
-  [_quickActionsViewController setAIMTitle:_aimTitle
-                                      icon:_aimIcon
-                        accessibilityLabel:_aimAccessibilityLabel];
+  switch (GetAimButtonRefactorArm()) {
+    case AimButtonRefactorArm::kFocusComposeboxAimQuickAction:
+    case AimButtonRefactorArm::kImageGenerationQuickAction:
+    case AimButtonRefactorArm::kAttachImageQuickAction:
+    case AimButtonRefactorArm::kDisabled:
+      [_quickActionsViewController setAIMTitle:_aimTitle
+                                          icon:_aimIcon
+                            accessibilityLabel:_aimAccessibilityLabel];
+      break;
+    case AimButtonRefactorArm::kAimAsModule:
+      [self.contentSuggestionsViewController
+                 setAIMTitle:_aimTitle
+                        icon:_aimIcon
+          accessibilityLabel:_aimAccessibilityLabel];
+      break;
+    case AimButtonRefactorArm::kAimAsMvt:
+    case AimButtonRefactorArm::kNoChips:
+      break;
+  }
 }
 - (void)setOmniboxInBottomPosition:(BOOL)isBottomOmnibox {
   if (_isBottomOmnibox == isBottomOmnibox) {
@@ -1279,13 +1295,6 @@ const CGFloat kBackgroundImageAnimationDuration = 0.2;
 
 #pragma mark - Private
 
-// Returns whether the vertical space above the logo and below the fakebox
-// should be redistributed for `kAimButtonRefactor` arms where the Quick Actions
-// row is removed.
-- (BOOL)shouldRedistributeHeaderSpace {
-  return content_suggestions::ShouldRedistributeHeaderSpace(_isAIMAllowed);
-}
-
 // Sets the background using the current color palette, or defaults if none is
 // set.
 - (void)applyBackgroundTheme {
@@ -1343,6 +1352,9 @@ const CGFloat kBackgroundImageAnimationDuration = 0.2;
   _contentSuggestionsViewController = contentSuggestionsViewController;
   if (GetAimButtonRefactorArm() == AimButtonRefactorArm::kAimAsModule) {
     [_contentSuggestionsViewController setAIMAllowed:_isAIMAllowed];
+    [_contentSuggestionsViewController setAIMTitle:_aimTitle
+                                              icon:_aimIcon
+                                accessibilityLabel:_aimAccessibilityLabel];
     _contentSuggestionsViewController.NTPShortcutsHandler =
         self.NTPShortcutsHandler;
   }
@@ -2167,7 +2179,7 @@ const CGFloat kBackgroundImageAnimationDuration = 0.2;
 
 // Spacing between the header view and the module directly below it.
 - (CGFloat)headerBottomSpacing {
-  if ([self shouldRedistributeHeaderSpace]) {
+  if (content_suggestions::ShouldRedistributeHeaderSpace()) {
     return content_suggestions::RedistributedHeaderBottomSpacing(
         self.traitCollection);
   }

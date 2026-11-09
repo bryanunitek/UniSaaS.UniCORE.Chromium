@@ -19,6 +19,7 @@
 #include "chrome/browser/glic/common/panel_focus_dependent_hotkey_manager.h"
 #include "chrome/browser/glic/common/panel_visibility_dependent_hotkey_manager.h"
 #include "chrome/browser/glic/glic_pref_names.h"
+#include "chrome/browser/glic/host/glic_drag_and_drop_util.h"
 #include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
@@ -100,8 +101,11 @@ GlicSidePanelUi::GlicSidePanelUi(Profile* profile,
   // PrivilegedWebContents APIs instead of setting the delegate directly.
   content::WebContents* web_contents = delegate_->host().webui_contents();
   SetWebContentsDelegate(web_contents, /*delegate=*/this);
+  ConfigureGlicDragAndDropForWebContents(web_contents);
 
   glic_side_panel_coordinator->SetWebContents(web_contents);
+  glic_side_panel_coordinator->SetNativeFreAcceptedCallback(base::BindRepeating(
+      &GlicSidePanelUi::OnNativeFreAccepted, weak_ptr_factory_.GetWeakPtr()));
 
   host_observation_.Observe(&delegate_->host());
   panel_state_.kind = mojom::PanelStateKind::kAttached;
@@ -215,11 +219,12 @@ void GlicSidePanelUi::ClosePanel() {
   Close(CloseOptions());
 }
 
-void GlicSidePanelUi::OnReload() {
-  auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
-  if (glic_side_panel_coordinator) {
-    glic_side_panel_coordinator->SetWebContents(
-        delegate_->host().webui_contents());
+void GlicSidePanelUi::ContentsCreated() {
+  if (auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator()) {
+    content::WebContents* web_contents = delegate_->host().webui_contents();
+    SetWebContentsDelegate(web_contents, /*delegate=*/this);
+    ConfigureGlicDragAndDropForWebContents(web_contents);
+    glic_side_panel_coordinator->SetWebContents(web_contents);
   }
 }
 
@@ -232,6 +237,7 @@ void GlicSidePanelUi::ActiveWebContentsChanged(
                              /*expected_delegate=*/this);
     }
     SetWebContentsDelegate(new_contents, /*delegate=*/this);
+    ConfigureGlicDragAndDropForWebContents(new_contents);
     glic_side_panel_coordinator->SetWebContents(new_contents);
   }
 }
@@ -329,7 +335,9 @@ bool GlicSidePanelUi::CanDragEnter(
   if (!GlicEnabling::HasConsentedForProfile(profile_)) {
     return false;
   }
-  return !data.filenames.empty() || !data.file_system_files.empty();
+  // Page context eligibility for web drags is decided once, at drop, in
+  // `StartDragAndDropInvoke`.
+  return IsValidDragPayload(data);
 }
 
 void GlicSidePanelUi::RequestMediaAccessPermission(
@@ -519,6 +527,10 @@ void GlicSidePanelUi::SyncEmbedderWindowActivation() {
   if (browser_window && !browser_window->GetWindow()->IsActive()) {
     delegate_->OnEmbedderWindowActivationChanged(false);
   }
+}
+
+void GlicSidePanelUi::OnNativeFreAccepted() {
+  delegate_->AcceptNativeFre();
 }
 
 bool GlicSidePanelUi::CheckMediaAccessPermission(

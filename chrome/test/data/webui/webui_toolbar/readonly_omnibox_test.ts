@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import 'chrome://webui-toolbar.top-chrome/lazy_load.js';
 
 import {assertEquals, assertFalse, assertGE, assertLE, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestSearchboxBrowserProxy} from 'chrome://webui-test/cr_components/searchbox/test_searchbox_browser_proxy.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
-import {BrowserProxyImpl, OmniboxTextColor, SearchboxBrowserProxy} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
-import type {ReadonlyOmniboxElement} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import {SearchboxBrowserProxy} from 'chrome://webui-toolbar.top-chrome/lazy_load.js';
+import type {ReadonlyOmniboxElement} from 'chrome://webui-toolbar.top-chrome/lazy_load.js';
+import {BrowserProxyImpl, OmniboxTextColor} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 import {TestToolbarBrowserProxy} from './test_toolbar_browser_proxy.js';
 import type {TestToolbarUiHandler} from './test_toolbar_browser_proxy.js';
@@ -1558,6 +1559,44 @@ suite('ReadonlyOmnibox', function() {
     const args = uiHandler.getArgs('onOmniboxAction');
     assertTrue(!!args[0].dropText);
     assertEquals('dropped text', args[0].dropText.text);
+  });
+
+  // Like the native omnibox, a drop within the omnibox puts the caret after the
+  // dropped text. The caret is sent to the browser right away, since a browser
+  // update arriving before the selectionchange event would store it as the
+  // synced selection, and the event would not send it.
+  test('Dropping on self sends the caret after the dropped text', async () => {
+    const input = getTextInput();
+    input.focus();
+    input.value = 'helloworld';
+    input.setSelectionRange(5, 10);
+    await microtasksFinished();
+
+    fakeLeftMouseDown();
+    omnibox.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: new DataTransfer(),
+    }));
+    omnibox.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: new DataTransfer(),
+    }));
+    // The input moves the dropped text and selects it.
+    input.value = 'worldhello';
+    input.setSelectionRange(0, 5);
+    uiHandler.reset();
+    omnibox.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+
+    // Checked before the asynchronous selectionchange event.
+    assertEquals(5, input.selectionStart);
+    assertEquals(5, input.selectionEnd);
+    assertEquals(1, uiHandler.getCallCount('onOmniboxAction'));
+    const args = uiHandler.getArgs('onOmniboxAction').at(-1);
+    assertTrue(!!args.textInput);
+    assertEquals(5, args.textInput.selection.start);
+    assertEquals(5, args.textInput.selection.end);
   });
 
   // A dropped link is forwarded as a URL drop, without the URL: the browser

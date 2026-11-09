@@ -63,6 +63,9 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
 
   // The window on which `_windowTraitChangeRegistration` is registered.
   __weak UIWindow* _observedWindow;
+
+  // The row that is selected in the table view.
+  NSInteger _selectedRow;
 }
 
 @end
@@ -74,12 +77,18 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
   [self updateHeight];
 }
 
-- (void)reconfigureCellAtIndexPath:(NSIndexPath*)indexPath {
-  [_tableView reconfigureRowsAtIndexPaths:@[ indexPath ]];
+- (void)setSelectedRow:(NSInteger)selectedRow {
+  if (_selectedRow == selectedRow) {
+    return;
+  }
+  _selectedRow = selectedRow;
+  if (_tableView) {
+    [self selectCurrentRow];
+  }
 }
 
-- (NSInteger)selectedRow {
-  return _tableView.indexPathForSelectedRow.row;
+- (void)reconfigureCellAtIndexPath:(NSIndexPath*)indexPath {
+  [_tableView reconfigureRowsAtIndexPaths:@[ indexPath ]];
 }
 
 - (CGFloat)tableViewWidth {
@@ -149,7 +158,7 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
   _minimizedHeightConstraint.active = _tableViewIsMinimized;
   _heightConstraint.active = !_tableViewIsMinimized;
 
-  [self selectFirstRow];
+  [self selectCurrentRow];
 
   return _tableView;
 }
@@ -164,14 +173,29 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
                   "must implement this method.";
 }
 
+- (BOOL)shouldAlwaysUseLargeDetent {
+  return NO;
+}
+
+#pragma mark - BottomSheetViewController
+
+- (void)setUpBottomSheetDetents {
+  if ([self shouldAlwaysUseLargeDetent]) {
+    [self setUpLargeDetent];
+    return;
+  }
+  [super setUpBottomSheetDetents];
+}
+
 #pragma mark - UIViewController
 
 - (void)viewDidLoad {
   self.view.accessibilityViewIsModal = YES;
 
-  // If the table has too many rows for the initial state, we open bottom sheet
-  // minimized.
-  _tableViewIsMinimized = [self rowCount] > [self initialNumberOfVisibleCells];
+  // Open the bottom sheet minimized if the table has more rows than fit in the
+  // initial state, unless it always uses the large detent.
+  _tableViewIsMinimized = ![self shouldAlwaysUseLargeDetent] &&
+                          [self rowCount] > [self initialNumberOfVisibleCells];
 
   self.underTitleView = [self createUnderTitleView];
 
@@ -194,8 +218,8 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
 
   [self setUpBottomSheetDetents];
 
-  // Set selection to the first one.
-  [self selectFirstRow];
+  // Set selection to the selected row.
+  [self selectCurrentRow];
 
   [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(updateHeightOnTraitChange)];
@@ -234,6 +258,7 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
 
 - (void)tableView:(UITableView*)tableView
     didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  _selectedRow = indexPath.row;
   [tableView cellForRowAtIndexPath:indexPath].accessoryType =
       UITableViewCellAccessoryCheckmark;
 }
@@ -280,11 +305,21 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
   return 2.5;
 }
 
-// Select the first row in the table view.
-- (void)selectFirstRow {
-  [_tableView selectRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+// Selects the current row in the table view.
+- (void)selectCurrentRow {
+  NSIndexPath* oldIndexPath = _tableView.indexPathForSelectedRow;
+  if (oldIndexPath) {
+    [_tableView deselectRowAtIndexPath:oldIndexPath animated:NO];
+    [_tableView cellForRowAtIndexPath:oldIndexPath].accessoryType =
+        UITableViewCellAccessoryNone;
+  }
+  NSIndexPath* newIndexPath = [NSIndexPath indexPathForRow:_selectedRow
+                                                 inSection:0];
+  [_tableView selectRowAtIndexPath:newIndexPath
                           animated:NO
                     scrollPosition:UITableViewScrollPositionNone];
+  [_tableView cellForRowAtIndexPath:newIndexPath].accessoryType =
+      UITableViewCellAccessoryCheckmark;
 }
 
 // Mocks cells to compute the table view height for the given number of rows.
@@ -320,6 +355,13 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
       useMinimizedState &=
           [self initialHeight] < self.parentViewControllerHeight;
     }
+  }
+
+  if ([self shouldAlwaysUseLargeDetent]) {
+    _minimizedHeightConstraint.active = NO;
+    _heightConstraint.active = YES;
+    [self setUpLargeDetent];
+    return;
   }
 
   // Update the custom detent with the correct initial height for the bottom
@@ -366,6 +408,16 @@ NSString* const kCustomDetentIdentifier = @"customDetent";
   presentationController.selectedDetentIdentifier =
       useMinimizedState ? kCustomMinimizedDetentIdentifier
                         : kCustomDetentIdentifier;
+}
+
+// Sets the large detent as the bottom sheet's only detent.
+- (void)setUpLargeDetent {
+  UISheetPresentationController* presentationController =
+      self.sheetPresentationController;
+  presentationController.detents =
+      @[ [UISheetPresentationControllerDetent largeDetent] ];
+  presentationController.selectedDetentIdentifier =
+      UISheetPresentationControllerDetentIdentifierLarge;
 }
 
 // Returns whether the provided index path points to the last row of the table

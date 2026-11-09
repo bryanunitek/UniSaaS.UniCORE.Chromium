@@ -36,7 +36,6 @@
 #include "chrome/browser/ui/browser_ui_controller/browser_ui_controller.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
-#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/features.h"
@@ -46,6 +45,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_deletion_dialog_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter.h"
 #include "chrome/browser/ui/webui/metrics_reporter/mock_metrics_reporter.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search.mojom-forward.h"
@@ -199,15 +199,10 @@ class TabSearchPageHandlerTest : public InProcessBrowserTest,
   TabSearchPageHandlerTest() {
     // Parametrize tests on kTabSearchPerformanceImprovements to verify
     // behavior in both enabled and disabled experiment arms.
-    feature_list_.InitWithFeatureState(tabs::kTabSearchPerformanceImprovements,
-                                       GetParam());
-    webui_omnibox_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/
-        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
-        // is enabled and then remove these two Features.
-        {omnibox::internal::kWebUIOmniboxPopup,
-         omnibox::internal::kWebUIOmniboxAimPopup});
+    feature_list_.InitWithFeatureStates(
+        {{tabs::kTabSearchPerformanceImprovements, GetParam()},
+         {features::kTabGroupsFocusing, true},
+         {features::kNonGroupFocus, true}});
   }
 
   void SetUpOnMainThread() override {
@@ -393,7 +388,6 @@ class TabSearchPageHandlerTest : public InProcessBrowserTest,
  private:
   content::TestWebUI web_ui_;
   base::test::ScopedFeatureList feature_list_;
-  base::test::ScopedFeatureList webui_omnibox_feature_list_;
   std::unique_ptr<TestTabSearchPageHandler> handler_;
   std::unique_ptr<TabSearchUI> webui_controller_;
 };
@@ -1727,7 +1721,7 @@ IN_PROC_BROWSER_TEST_P(TabSearchPageHandlerTest, EphemeralTabGroupFilteredOut) {
   AddTabWithTitle(browser1(), tab_url2_, kTabName2);
 
   TabStripModel* tab_strip_model = browser1()->tab_strip_model();
-  tab_strip_model->AddToNewGroup({0, 1}, /*is_ephemeral=*/true);
+  tab_strip_model->EnterFocusMode({0, 1});
 
   tab_search::mojom::PageHandler::GetProfileDataCallback callback =
       base::BindLambdaForTesting(

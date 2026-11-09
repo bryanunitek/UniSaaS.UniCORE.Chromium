@@ -171,7 +171,6 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHiOSBackendPromoFeature,
     &kIPHiOSBackgroundNewBadge,
     &kIPHiOSBottomOmniboxFeature,
-    &kIPHiOSContextualPanelPriceInsightsFeature,
     &kIPHiOSContextualPanelSampleModelFeature,
     &kIPHiOSDefaultBrowserBadgeEligibilityFeature,
     &kIPHiOSDefaultBrowserBannerPromoFeature,
@@ -249,8 +248,6 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHWhatsNewFeature,
     &kIPHWhatsNewUpdatedFeature,
 // keep-sorted end
-#else
-    &kIPHResumptionRailFeature,
 #endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
@@ -264,6 +261,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHExtensionsZeroStatePromoFeature,
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     // keep-sorted start case=no
+    &kIPH_VerticalTabsTabGroupsInOrganizerFeature,
     &kIPHBackNavigationMenuFeature,
     &kIPHBatterySaverModeFeature,
     &kIPHBookmarkBarSimplifiedFeature,
@@ -281,6 +279,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHDesktopRealboxContextualSearchFeature,
     &kIPHDesktopSharedHighlightingFeature,
     &kIPHDictationFeature,
+    &kIPHDictationHotkeyFeature,
     &kIPHDiscardRingFeature,
     &kIPHDownloadEsbPromoFeature,
     &kIPHExplicitBrowserSigninPreferenceRememberedFeature,
@@ -293,7 +292,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHGMCCastStartStopFeature,
     &kIPHGMCLocalMediaCastingFeature,
     &kIPHGMCSaveVideoFrameFeature,
-    &kIPHHistorySearchFeature,
+    &kIPHIndigoContextMenuSnoozeFeature,
     &kIPHIndigoContextMenuToastFeature,
     &kIPHLensOverlayFeature,
     &kIPHMemorySaverModeFeature,
@@ -345,6 +344,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHSplitViewHorizontalIndirectAccessFeature,
     &kIPHTabAudioMutingFeature,
     &kIPHTabGroupsFocusingFeature,
+    &kIPHTabGroupsNonGroupFocusingFeature,
     &kIPHTabGroupsSaveV2CloseGroupFeature,
     &kIPHTabGroupsSaveV2IntroFeature,
     &kIPHTabGroupsSharedTabChangedFeature,

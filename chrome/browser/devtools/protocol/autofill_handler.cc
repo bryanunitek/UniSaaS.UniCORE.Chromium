@@ -24,6 +24,7 @@
 #include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/addresses/field_filling_address_util.h"
+#include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
@@ -129,10 +130,10 @@ void AutofillHandler::Trigger(
   // not be finished yet, so we need to trigger it and to wait for it to finish
   // before continuing. See https://crbug.com/442016685.
   autofill_driver->GetAutofillManager().TriggerFormExtractionInAllFrames(
-      base::BindOnce(&AutofillHandler::ContinueTrigger,
-                     weak_ptr_factory_.GetWeakPtr(), frame_rfh, field_id,
-                     frame_id, std::move(card), std::move(address),
-                     std::move(callback)));
+      /*force=*/false, base::BindOnce(&AutofillHandler::ContinueTrigger,
+                                      weak_ptr_factory_.GetWeakPtr(), frame_rfh,
+                                      field_id, frame_id, std::move(card),
+                                      std::move(address), std::move(callback)));
 }
 
 void AutofillHandler::ContinueTrigger(
@@ -203,11 +204,12 @@ void AutofillHandler::ContinueTrigger(
                                  base::UTF8ToUTF16(card->GetCvc()));
     static_cast<autofill::BrowserAutofillManager&>(
         autofill_driver->GetAutofillManager())
-        .FillOrPreviewForm(autofill::mojom::ActionPersistence::kFill, *form_id,
-                           global_field_id, &tmp_autofill_card,
-                           autofill::AutofillTriggerSource::kDevtools,
-                           /*require_user_confirmation=*/false,
-                           /*blocked_fields=*/{});
+        .FillOrPreviewForm(
+            autofill::mojom::ActionPersistence::kFill, *form_id,
+            global_field_id, autofill::FillingProduct::kCreditCard,
+            &tmp_autofill_card, autofill::AutofillTriggerSource::kDevtools,
+            /*require_user_confirmation=*/false,
+            /*blocked_fields=*/{});
   }
   if (address) {
     std::string country_code =
@@ -238,7 +240,8 @@ void AutofillHandler::ContinueTrigger(
     static_cast<autofill::BrowserAutofillManager&>(
         autofill_driver->GetAutofillManager())
         .FillOrPreviewForm(autofill::mojom::ActionPersistence::kFill, *form_id,
-                           global_field_id, &tmp_autofill_profile,
+                           global_field_id, autofill::FillingProduct::kAddress,
+                           &tmp_autofill_profile,
                            autofill::AutofillTriggerSource::kDevtools,
                            /*require_user_confirmation=*/false,
                            /*blocked_fields=*/{});
@@ -251,6 +254,7 @@ void AutofillHandler::ContinueTrigger(
   // soon as the command returns. Whether form extraction succeeded doesn't
   // matter for that.
   autofill_driver->GetAutofillManager().TriggerFormExtractionInAllFrames(
+      /*force=*/false,
       base::BindOnce([](std::unique_ptr<TriggerCallback> callback,
                         bool) { callback->sendSuccess(); },
                      std::move(callback)));

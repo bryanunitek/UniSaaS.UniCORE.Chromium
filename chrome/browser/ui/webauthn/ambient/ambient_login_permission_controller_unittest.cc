@@ -86,8 +86,9 @@ TEST_F(AmbientLoginPermissionControllerTest, RequestPermission) {
   EXPECT_CALL(credential_selected_callback, Run).Times(0);
 
   auto request = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      CreateSinglePasskey(), credential_selected_callback.Get());
+      GURL("https://example.com"), CreateSinglePasskey(),
+      credential_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(run_loop.QuitClosure());
 
   controller()->RequestPermission(main_rfh(), std::move(request));
@@ -119,10 +120,10 @@ TEST_F(AmbientLoginPermissionControllerTest,
   EXPECT_CALL(credential_selected_callback, Run).Times(0);
 
   auto request = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://subframe.example.org"), GURL("https://example.com"),
-      CreateSinglePasskey(), credential_selected_callback.Get());
+      GURL("https://subframe.example.org"), CreateSinglePasskey(),
+      credential_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{});
   EXPECT_EQ(request->requesting_origin(), GURL("https://subframe.example.org"));
-  EXPECT_EQ(request->embedding_origin(), GURL("https://example.com"));
 
   controller()->SetFinishedNotificationForTesting(run_loop.QuitClosure());
 
@@ -148,8 +149,8 @@ TEST_F(AmbientLoginPermissionControllerTest,
   EXPECT_CALL(first_selected_callback, Run).Times(0);
 
   auto request1 = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      CreateSinglePasskey(), first_selected_callback.Get());
+      GURL("https://example.com"), CreateSinglePasskey(),
+      first_selected_callback.Get(), AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(
       first_finished_loop.QuitClosure());
 
@@ -171,9 +172,10 @@ TEST_F(AmbientLoginPermissionControllerTest,
                   testing::_));
 
   auto request2 = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      CreateSinglePasskey(), second_selected_callback.Get(),
-      second_decided_callback.Get());
+      GURL("https://example.com"), CreateSinglePasskey(),
+      second_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{
+          .permission_decided_callback = second_decided_callback.Get()});
 
   // The second request should fail immediately (cancelled/dismissed) and not
   // disrupt the first outstanding request.
@@ -202,8 +204,9 @@ TEST_F(AmbientLoginPermissionControllerTest, RequestPermissionWithCredentials) {
   EXPECT_CALL(credential_selected_callback, Run).Times(0);
 
   auto request = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      std::move(credentials), credential_selected_callback.Get());
+      GURL("https://example.com"), std::move(credentials),
+      credential_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(run_loop.QuitClosure());
 
   controller()->RequestPermission(main_rfh(), std::move(request));
@@ -228,8 +231,9 @@ TEST_F(AmbientLoginPermissionControllerTest,
   EXPECT_CALL(credential_selected_callback, Run).Times(0);
 
   auto request = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      CreateSinglePasskey(), credential_selected_callback.Get());
+      GURL("https://example.com"), CreateSinglePasskey(),
+      credential_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(run_loop.QuitClosure());
 
   controller()->RequestPermission(main_rfh(), std::move(request));
@@ -251,8 +255,9 @@ TEST_F(AmbientLoginPermissionControllerTest, ResetWhenTabHiddenDoesNotCrash) {
 
   std::unique_ptr<AmbientLoginPermissionRequest> request =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), credential_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          credential_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(run_loop.QuitClosure());
 
   controller()->RequestPermission(main_rfh(), std::move(request));
@@ -281,8 +286,9 @@ TEST_F(AmbientLoginPermissionControllerTest,
   EXPECT_CALL(ambient_selected_callback, Run).Times(0);
 
   auto ambient_request = std::make_unique<AmbientLoginPermissionRequest>(
-      GURL("https://example.com"), GURL("https://example.com"),
-      CreateSinglePasskey(), ambient_selected_callback.Get());
+      GURL("https://example.com"), CreateSinglePasskey(),
+      ambient_selected_callback.Get(),
+      AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(
       ambient_finished_loop.QuitClosure());
 
@@ -331,8 +337,9 @@ TEST_F(AmbientLoginPermissionControllerTest,
 
   std::unique_ptr<AmbientLoginPermissionRequest> request1 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), first_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          first_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   controller()->SetFinishedNotificationForTesting(
       first_finished_loop.QuitClosure());
 
@@ -353,8 +360,9 @@ TEST_F(AmbientLoginPermissionControllerTest,
 
   std::unique_ptr<AmbientLoginPermissionRequest> request2 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://other.example.org"), GURL("https://other.example.org"),
-          CreateSinglePasskey(), second_selected_callback.Get());
+          GURL("https://other.example.org"), CreateSinglePasskey(),
+          second_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   permission_request_manager()->AddRequest(main_rfh(), std::move(request2));
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return permission_request_manager()->IsRequestInProgress(); }));
@@ -373,12 +381,14 @@ TEST_F(AmbientLoginPermissionControllerTest,
 
   std::unique_ptr<AmbientLoginPermissionRequest> request1 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), request1_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          request1_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   std::unique_ptr<AmbientLoginPermissionRequest> request2 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), request2_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          request2_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   AmbientLoginPermissionRequest* request2_ptr = request2.get();
 
   // Queue `request1` (still in `pending_permission_requests_` before
@@ -428,12 +438,14 @@ TEST_F(AmbientLoginPermissionControllerTest,
 
   std::unique_ptr<AmbientLoginPermissionRequest> request1 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), request1_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          request1_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
   std::unique_ptr<AmbientLoginPermissionRequest> request2 =
       std::make_unique<AmbientLoginPermissionRequest>(
-          GURL("https://example.com"), GURL("https://example.com"),
-          CreateSinglePasskey(), request2_selected_callback.Get());
+          GURL("https://example.com"), CreateSinglePasskey(),
+          request2_selected_callback.Get(),
+          AmbientLoginPermissionRequest::Options{});
 
   // Queue `request1`, call `Reset()`, queue `request2`, and call `Reset()`
   // again before `DequeueRequestIfNeeded()` runs. `Reset()` cancels and

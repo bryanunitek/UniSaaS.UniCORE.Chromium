@@ -40,6 +40,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
+#include "base/task/deferred_sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -140,8 +141,6 @@
 #include "content/public/browser/network_service_util.h"
 #include "content/public/browser/origin_trials_controller_delegate.h"
 #include "content/public/browser/peak_gpu_memory_tracker_factory.h"
-#include "content/public/browser/reduce_accept_language_controller_delegate.h"
-#include "content/public/browser/reduce_accept_language_utils.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/runtime_feature_state/runtime_feature_state_document_data.h"
 #include "content/public/browser/security_principal.h"
@@ -1963,6 +1962,10 @@ NavigationRequest::NavigationRequest(
         blink::kFencedFrameForcedSandboxFlags;
   }
 
+  if (common_params_->url.IsAboutSrcdoc()) {
+    commit_params_->srcdoc_value = frame_tree_node_->srcdoc_value();
+  }
+
   if (from_begin_navigation_) {
     // This is needed to commit data: and about: URLs in the same SiteInstance
     // as the initiator frame. Note that this may not necessarily match the
@@ -2151,21 +2154,6 @@ NavigationRequest::NavigationRequest(
       headers.MergeFrom(client_hints_headers);
     }
 
-    // Add reduced accept language header.
-    if (auto reduce_accept_lang_utils =
-            ReduceAcceptLanguageUtils::Create(browser_context);
-        reduce_accept_lang_utils && !devtools_accept_language_override_) {
-      // Add the Accept-Language header with the reduce accept language value.
-      // Chromium network stack won't overwrite the value if Accept-Language
-      // header was already added in the request header.
-      net::HttpRequestHeaders accept_language_headers;
-      reduce_accept_lang_utils.value()
-          .AddNavigationRequestAcceptLanguageHeaders(
-              url::Origin::Create(common_params_->url), frame_tree_node_,
-              &accept_language_headers);
-      headers.MergeFrom(accept_language_headers);
-    }
-
     headers.AddHeadersFromString(begin_params_->headers);
     AddAdditionalRequestHeaders(
         &headers, common_params_->url, common_params_->navigation_type,
@@ -2218,13 +2206,14 @@ NavigationRequest::NavigationRequest(
   if (NeedsUrlLoader() && common_params_->url.SchemeIsHTTPOrHTTPS()) {
     if (GetContentClient()->browser()->ShouldPreconnectNavigation(
             frame_tree_node_->current_frame_host()) &&
-        IsAllowedByConnectionAllowlist(/*is_redirect=*/false)) {
+        IsAllowedByConnectionAllowlist(/*is_redirect=*/false,
+                                       /*should_report=*/false)) {
       auto* storage_partition =
           frame_tree_node_->current_frame_host()->GetStoragePartition();
 
       // Initiator frame's `network_restriction_id` is not passed because the
       // preconnection has already been checked against the connection-allowlist
-      // by the `IsAllowedByConnectionAllowlist(false)` call above.
+      // by the `IsAllowedByConnectionAllowlist()` call above.
       storage_partition->GetNetworkContext()->PreconnectSockets(
           1, common_params_->url, network::mojom::CredentialsMode::kInclude,
           GetIsolationInfo().network_anonymization_key(),
@@ -2464,6 +2453,9 @@ NavigationRequest::~NavigationRequest() {
 
   if (IsNavigationStarted()) {
     GetDelegate()->DidFinishNavigation(this);
+    if (subresource_loader_proxy_task_runner_) {
+      subresource_loader_proxy_task_runner_->Start();
+    }
     ProcessOriginAgentClusterEndResult();
     if (IsInMainFrame()) {
       MaybeRecordTraceEventsAndHistograms();
@@ -2511,6 +2503,9 @@ NavigationRequest::~NavigationRequest() {
     }
   } else {
     GetDelegate()->DidCancelNavigationBeforeStart(this);
+    if (subresource_loader_proxy_task_runner_) {
+      subresource_loader_proxy_task_runner_->Start();
+    }
   }
 
   if (!navigation_start_to_commit_ended_) {
@@ -3055,7 +3050,8 @@ void NavigationRequest::BeginNavigationImpl() {
   }
 
   // Connection Allowlist: check whether navigation to the url is allowed.
-  if (!IsAllowedByConnectionAllowlist(/*is_redirect=*/false)) {
+  if (!IsAllowedByConnectionAllowlist(/*is_redirect=*/false,
+                                      /*should_report=*/true)) {
     // Record that this navigation is blocked by the initiator's
     // Connection-Allowlist before StartNavigation() notifies observers. This
     // lets observers (e.g. //chrome's LoadingPredictor) suppress speculative
@@ -3556,6 +3552,10 @@ void NavigationRequest::ResetForCrossDocumentRestart() {
                     net_error_);  // Navigation StartToCommit
     navigation_start_to_commit_ended_ = true;
   }
+  if (subresource_loader_proxy_task_runner_) {
+    subresource_loader_proxy_task_runner_->Start();
+    subresource_loader_proxy_task_runner_.reset();
+  }
 
   // Reset the state of the NavigationRequest, and the navigation_handle_id.
   StopCommitTimeout();
@@ -3843,7 +3843,8 @@ void NavigationRequest::OnRequestRedirected(
   ScopedCrashKeys crash_keys(*this);
 
   if (!was_redirected_ &&
-      !IsAllowedByConnectionAllowlist(/*is_redirect=*/true)) {
+      !IsAllowedByConnectionAllowlist(/*is_redirect=*/true,
+                                      /*should_report=*/true)) {
     // As in BeginNavigationImpl(), record that this navigation is blocked by
     // the initiator's Connection-Allowlist so observers can suppress
     // speculative network activity for it. (Today no speculative work runs
@@ -6347,7 +6348,7 @@ void NavigationRequest::OnStartChecksComplete(
   // for this frame. PDF content frames run in a restricted PDF renderer process
   // that must not receive service worker capabilities for the hosting origin.
   bool can_create_service_worker =
-      !IsPdf() && (frame_tree_node_->pending_frame_policy().sandbox_flags &
+      !IsPdf() && (commit_params_->frame_policy.sandbox_flags &
                    network::mojom::WebSandboxFlags::kOrigin) !=
                       network::mojom::WebSandboxFlags::kOrigin;
   if (can_create_service_worker) {
@@ -6835,19 +6836,6 @@ void NavigationRequest::OnRedirectChecksComplete(
     }
   }
 
-  // Add reduced accept language header to the current request.
-  // If devtools has overridden the Accept-Language header, skip reduce
-  // Accept-Language header.
-  if (auto reduce_accept_lang_utils =
-          ReduceAcceptLanguageUtils::Create(browser_context);
-      reduce_accept_lang_utils && !devtools_accept_language_override_) {
-    net::HttpRequestHeaders accept_language_headers;
-    reduce_accept_lang_utils.value().AddNavigationRequestAcceptLanguageHeaders(
-        url::Origin::Create(common_params_->url), frame_tree_node_,
-        &accept_language_headers);
-    headers_update_params.modified_headers.MergeFrom(accept_language_headers);
-  }
-
   loader_->FollowRedirect(std::move(headers_update_params));
 }
 
@@ -7181,7 +7169,7 @@ void NavigationRequest::InheritServiceWorkerControllerFromParentIfNeeded() {
   // PDF content frame or has an opaque sandboxed origin. PDF content frames run
   // in a restricted PDF renderer process that must not receive service worker
   // capabilities for the hosting origin.
-  if (IsPdf() || (frame_tree_node_->pending_frame_policy().sandbox_flags &
+  if (IsPdf() || (commit_params_->frame_policy.sandbox_flags &
                   network::mojom::WebSandboxFlags::kOrigin) ==
                      network::mojom::WebSandboxFlags::kOrigin) {
     return;
@@ -8247,7 +8235,8 @@ void NavigationRequest::UpdateSiteInfo(
   SetExpectedProcess(post_redirect_process);
 }
 
-bool NavigationRequest::IsAllowedByConnectionAllowlist(bool is_redirect) {
+bool NavigationRequest::IsAllowedByConnectionAllowlist(bool is_redirect,
+                                                       bool should_report) {
   // The connection allowlist base feature is the kill switch for the feature.
   // It is checked first. Then connection allowlist also requires origin trial
   // enabled. In order to check the origin trial status, the initiator policy
@@ -8282,8 +8271,13 @@ bool NavigationRequest::IsAllowedByConnectionAllowlist(bool is_redirect) {
   net::NetworkAnonymizationKey network_anonymization_key;
   std::optional<base::UnguessableToken> reporting_source;
 
+  // A null `network_context` means no violation reports will be queued. Don't
+  // report when the caller asks not to (e.g. for speculative preconnect
+  // checks), or for history navigations: their URLs come from session history,
+  // not from the initiator, so reporting them to the initiator would leak
+  // URLs of other pages in the session history. See crbug.com/572312779.
   RenderFrameHostImpl* initiator_rfh = GetInitiatorDocumentRenderFrameHost();
-  if (initiator_rfh) {
+  if (initiator_rfh && should_report && !IsHistory()) {
     network_context =
         initiator_rfh->GetProcess()->GetStoragePartition()->GetNetworkContext();
     network_anonymization_key = initiator_rfh->GetIsolationInfoForSubresources()
@@ -8975,6 +8969,11 @@ void NavigationRequest::SanitizeRedirectsForCommit(
 
   if (should_sanitize_final_url_for_error_page) {
     common_params->url = common_params->url.DeprecatedGetOriginAsURL();
+    // Nonstandard URLs sanitize to an empty URL, but failed navigations require
+    // a nonempty URL. Do not expose the original redirect target as a fallback.
+    if (common_params->url.is_empty()) {
+      common_params->url = GURL(kBlockedURL);
+    }
   }
 
   // It is safe to convert GURL to an Origin and back in the code below because
@@ -10143,6 +10142,16 @@ void NavigationRequest::SetFetchLaterLoaderFactoryContextForTesting(
   CHECK(fetch_later_loader_factory_context_);
 }
 
+scoped_refptr<base::DeferredSequencedTaskRunner>
+NavigationRequest::GetOrCreateSubresourceLoaderProxyTaskRunner() {
+  if (!subresource_loader_proxy_task_runner_) {
+    subresource_loader_proxy_task_runner_ =
+        base::MakeRefCounted<base::DeferredSequencedTaskRunner>(
+            GetUIThreadTaskRunner({BrowserTaskType::kSubresourceLoaderProxy}));
+  }
+  return subresource_loader_proxy_task_runner_;
+}
+
 void NavigationRequest::ReadyToCommitNavigation(bool is_error) {
   TRACE_EVENT("navigation", "NavigationRequest::ReadyToCommitNavigation",
               perfetto::Flow::FromPointer(this));
@@ -10249,7 +10258,11 @@ void NavigationRequest::ReadyToCommitNavigation(bool is_error) {
   }
 
 #if !BUILDFLAG(IS_ANDROID)
-  if (IsIsolatedContext(GetRenderFrameHost()->GetProcess()) ||
+  // Documents with an opaque origin (e.g. sandboxed iframes that weren't moved
+  // to their own process) can share an isolated process, but are not isolated
+  // contexts. See `blink::LocalDOMWindow::IsIsolatedContext()`.
+  if ((IsIsolatedContext(GetRenderFrameHost()->GetProcess()) &&
+       origin_to_commit && !origin_to_commit->opaque()) ||
       (origin_to_commit &&
        GetContentClient()->browser()->GetDirectSocketsDelegate() &&
        GetContentClient()

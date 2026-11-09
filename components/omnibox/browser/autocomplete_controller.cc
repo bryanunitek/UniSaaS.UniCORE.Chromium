@@ -1494,10 +1494,8 @@ void AutocompleteController::InitializeSyncProviders(int provider_types) {
   }
   if (provider_types &
       static_cast<int>(AutocompleteProvider::Type::kHistoryFuzzy)) {
-    auto history_fuzzy_provider =
-        base::MakeRefCounted<HistoryFuzzyProvider>(provider_client_.get());
-    history_fuzzy_provider_ = history_fuzzy_provider.get();
-    providers_.push_back(std::move(history_fuzzy_provider));
+    providers_.push_back(
+        base::MakeRefCounted<HistoryFuzzyProvider>(provider_client_.get()));
   }
   if (provider_types & static_cast<int>(AutocompleteProvider::Type::kOpenTab)) {
     auto open_tab_provider =
@@ -1999,7 +1997,7 @@ void AutocompleteController::UpdateAssociatedKeywords(
 
 void AutocompleteController::UpdateKeywordDescriptions(
     AutocompleteResult* result) {
-  // No need to update the description on Android since description for plain
+  // No need to update the description on mobile since description for plain
   // text match is not allowed.
   // The Lens searchbox does not require the search engine name description
   // label since all suggestions will be from a single source.
@@ -2009,7 +2007,7 @@ void AutocompleteController::UpdateKeywordDescriptions(
     return;
   }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   // Do not include search engine name for the DSE.
   auto* default_engine = template_url_service_->GetDefaultSearchProvider();
 #endif
@@ -2021,7 +2019,7 @@ void AutocompleteController::UpdateKeywordDescriptions(
         continue;
       }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
       if (default_engine && i->keyword == default_engine->keyword()) {
         continue;
       }

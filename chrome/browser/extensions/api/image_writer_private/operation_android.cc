@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,16 +41,28 @@ namespace extensions::image_writer {
 
 namespace {
 
-constexpr size_t kTransferBufferSize = 64 * 1024;  // 64 KiB
+constexpr uint32_t kDefaultBlockSize = 512;
+constexpr size_t kUsb3TransferBufferSize = 512 * 1024;  // 512 KiB
+// USB 2.0 drives use smaller transfers: Linux usb-storage caps them at 240
+// sectors because some older bridges fail near 256 (USB 3 drives get 2048).
+constexpr size_t kUsb2TransferBufferSize = 64 * 1024;  // 64 KiB
+// Bulk endpoints report wMaxPacketSize 1024 on USB 3 and 512 on USB 2.0.
+constexpr uint32_t kUsb3BulkMaxPacketSize = 1024;
 static_assert(
-    std::has_single_bit(kTransferBufferSize),
-    "kTransferBufferSize must be a power of two so it is a multiple of any "
-    "accepted power-of-two block size <= kTransferBufferSize.");
+    std::has_single_bit(kUsb3TransferBufferSize) &&
+        std::has_single_bit(kUsb2TransferBufferSize) &&
+        kUsb2TransferBufferSize <= kUsb3TransferBufferSize,
+    "Transfer buffer sizes must be powers of two so they are multiples of any "
+    "accepted power-of-two block size.");
+static_assert(
+    kUsb3TransferBufferSize / kDefaultBlockSize <=
+        std::numeric_limits<uint16_t>::max(),
+    "kUsb3TransferBufferSize must fit within the 16-bit block count of SCSI "
+    "READ (10) and WRITE (10).");
 // A standard GPT uses 1 block for the GPT header plus 32 blocks for 128
 // partition entries of 128 bytes each at 512 bytes/sector (33 blocks total; at
 // 4 KiB sectors this is a safe over-approximation).
 constexpr uint16_t kBackupGptBlocks = 33;
-constexpr uint32_t kDefaultBlockSize = 512;
 constexpr base::TimeDelta kUsbCommandTimeout = base::Seconds(10);
 // Flushing a multi-gigabyte image to slow USB flash media can take longer than
 // standard 10s block transfers.
@@ -59,6 +72,7 @@ enum class TransferMode { kWrite, kVerify };
 
 // Describes the optional data phase of a USB Mass Storage Bulk-Only Transport
 // (BOT) transaction:
+// - `std::monostate`: Idle placeholder when no transaction is in progress.
 // - `NoDataPhase`: Command has no data transfer phase
 //   (`dCBWDataTransferLength == 0`, `bmCBWFlags == 0x00`).
 // - `DataInPhase`: Device-to-host transfer of `length` bytes over bulk-IN
@@ -72,7 +86,8 @@ struct DataInPhase {
 struct DataOutPhase {
   base::raw_span<const uint8_t> data;
 };
-using DataPhase = std::variant<NoDataPhase, DataInPhase, DataOutPhase>;
+using DataPhase =
+    std::variant<std::monostate, NoDataPhase, DataInPhase, DataOutPhase>;
 
 struct Capacity10Response {
   uint32_t last_logical_block_address = 0;
@@ -85,7 +100,8 @@ struct Capacity10Response {
 // 0xFFFFFFFF (`READ CAPACITY (16)` required for >2 TiB media;
 // TODO(crbug.com/538632205)), or reports an invalid block size.
 std::optional<Capacity10Response> ParseReadCapacity10Response(
-    base::span<const uint8_t> data) {
+    base::span<const uint8_t> data,
+    size_t max_transfer_size) {
   if (data.size() < kScsiReadCapacity10ResponseLength) {
     return std::nullopt;
   }
@@ -94,7 +110,7 @@ std::optional<Capacity10Response> ParseReadCapacity10Response(
       base::U32FromBigEndian(data.subspan<4, 4>());
   if (parsed_last_block == 0xFFFFFFFF || parsed_last_block == 0 ||
       parsed_block_size < kDefaultBlockSize ||
-      parsed_block_size > kTransferBufferSize ||
+      parsed_block_size > max_transfer_size ||
       !std::has_single_bit(parsed_block_size)) {
     return std::nullopt;
   }
@@ -163,6 +179,7 @@ class UsbBotTransport {
                           TransactionCallback callback) {
     CHECK(callback);
     CHECK(!callback_);
+    CHECK(!std::holds_alternative<std::monostate>(data_phase));
     tag_ = ++next_tag_;
     data_phase_ = data_phase;
     timeout_ms_ = static_cast<uint32_t>(timeout.InMilliseconds());
@@ -192,7 +209,7 @@ class UsbBotTransport {
  private:
   void OnCommandBlockSent(device::mojom::UsbTransferStatus status) {
     if (status != device::mojom::UsbTransferStatus::COMPLETED) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(std::nullopt, {});
     }
     if (const auto* data_in = std::get_if<DataInPhase>(&data_phase_)) {
@@ -209,6 +226,7 @@ class UsbBotTransport {
                          base::Unretained(this)));
       return;
     }
+    CHECK(std::holds_alternative<NoDataPhase>(data_phase_));
     ReadCommandStatus();
   }
 
@@ -224,7 +242,7 @@ class UsbBotTransport {
     }
     if (status != device::mojom::UsbTransferStatus::COMPLETED &&
         status != device::mojom::UsbTransferStatus::SHORT_PACKET) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(std::nullopt, {});
     }
     received_data_.assign(data.begin(), data.end());
@@ -232,7 +250,7 @@ class UsbBotTransport {
   }
 
   void OnDataOutSent(device::mojom::UsbTransferStatus status) {
-    data_phase_ = NoDataPhase{};
+    data_phase_ = std::monostate{};
     if (status == device::mojom::UsbTransferStatus::STALLED) {
       device_->ClearHalt(device::mojom::UsbTransferDirection::OUTBOUND,
                          endpoints_.endpoint_out,
@@ -248,14 +266,14 @@ class UsbBotTransport {
 
   void OnDataStallCleared(bool success) {
     if (!success) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(std::nullopt, {});
     }
     ReadCommandStatus();
   }
 
   void ReadCommandStatus() {
-    data_phase_ = NoDataPhase{};
+    data_phase_ = std::monostate{};
     device_->GenericTransferIn(
         endpoints_.endpoint_in, kCommandStatusWrapperSize, timeout_ms_,
         base::BindOnce(&UsbBotTransport::OnCommandStatusReceived,
@@ -317,6 +335,7 @@ class UsbScsiCommandRunner {
                             CommandCallback callback) {
     CHECK(callback);
     CHECK(!callback_);
+    CHECK(!std::holds_alternative<std::monostate>(data_phase));
     scsi_command_ = std::move(scsi_command);
     data_phase_ = data_phase;
     attempts_left_ = attempts_left;
@@ -339,17 +358,17 @@ class UsbScsiCommandRunner {
   void OnCommandTransactionDone(std::optional<uint8_t> csw_status,
                                 std::vector<uint8_t> received_data) {
     if (!csw_status.has_value()) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(false, {});
     }
     if (*csw_status == 0) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(true, std::move(received_data));
     }
     // TODO(crbug.com/538632205): Perform Bulk-Only Mass Storage Reset and
     // ClearHalt recovery when `csw_status == 2` (Phase Error).
     if (*csw_status != 1) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(false, {});
     }
     // Issue `REQUEST SENSE` (opcode 0x03) on `CHECK CONDITION` (status 1) to
@@ -374,12 +393,12 @@ class UsbScsiCommandRunner {
     // 0x70 for current errors or 0x71 for deferred errors), where the sense key
     // is in byte 2 (bits 0..3) and ASC / ASCQ are in bytes 12 and 13.
     if (csw_status != 0 || sense_data.size() < 14) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(false, {});
     }
     const uint8_t response_code = sense_data[0] & 0x7F;
     if (response_code != 0x70 && response_code != 0x71) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(false, {});
     }
     const uint8_t sense_key = sense_data[2] & 0x0F;
@@ -392,7 +411,7 @@ class UsbScsiCommandRunner {
         (sense_key == kScsiSenseKeyNotReady &&
          asc == kScsiAscLogicalUnitNotReady && ascq == kScsiAscqBecomingReady);
     if (!is_retryable || attempts_left_ <= 1) {
-      data_phase_ = NoDataPhase{};
+      data_phase_ = std::monostate{};
       return std::move(callback_).Run(false, {});
     }
     --attempts_left_;
@@ -494,8 +513,13 @@ class MojoUsbBotSession : public Operation::UsbSession {
   }
 
   void OnReadCapacityDone(bool ok, std::vector<uint8_t> data) {
+    const size_t max_transfer_size =
+        endpoints_.max_packet_size >= kUsb3BulkMaxPacketSize
+            ? kUsb3TransferBufferSize
+            : kUsb2TransferBufferSize;
     std::optional<Capacity10Response> capacity =
-        ok ? ParseReadCapacity10Response(data) : std::nullopt;
+        ok ? ParseReadCapacity10Response(data, max_transfer_size)
+           : std::nullopt;
     if (!capacity.has_value()) {
       return Finish(base::unexpected(error::kDeviceOpenError));
     }
@@ -513,13 +537,12 @@ class MojoUsbBotSession : public Operation::UsbSession {
                                          ? error::kDeviceWriteError
                                          : error::kHashReadError));
     }
-    // `ParseReadCapacity10Response()` rejects `block_size >
-    // kTransferBufferSize`.
-    CHECK_LE(block_size_, kTransferBufferSize);
+    // `ParseReadCapacity10Response()` rejects `block_size > max_transfer_size`.
+    CHECK_LE(block_size_, max_transfer_size);
     // Cap `chunk_size_` at `total_size_ / 2` so small test images still emit an
     // intermediate progress event before 100%.
     const size_t clamped_half = static_cast<size_t>(
-        std::clamp<int64_t>(total_size_ / 2, block_size_, kTransferBufferSize));
+        std::clamp<int64_t>(total_size_ / 2, block_size_, max_transfer_size));
     chunk_size_ = std::max<size_t>(block_size_,
                                    (clamped_half / block_size_) * block_size_);
     ProcessNextChunk();
@@ -725,7 +748,7 @@ class MojoUsbBotSession : public Operation::UsbSession {
   // blocks, not bytes).
   uint32_t last_block_index_ = 0;
   uint32_t current_block_index_ = 0;
-  size_t chunk_size_ = kTransferBufferSize;
+  size_t chunk_size_ = kUsb3TransferBufferSize;
   bool opened_ = false;
   bool claimed_ = false;
   bool finished_ = false;
@@ -771,7 +794,7 @@ struct LocalFileTransferState {
 // not the UI thread). Because `OperationManager::CancelWrite()` cancels an
 // operation by posting `Operation::Cancel()` onto `Operation::task_runner_` and
 // `Operation::IsCancelled()` / `Operation::SetProgress()` `CHECK` that they
-// run on `Operation::task_runner_`, each 64 KiB chunk is posted back onto
+// run on `Operation::task_runner_`, each chunk is posted back onto
 // `Operation::task_runner_` (matching `Operation::MD5Chunk` in `operation.cc`)
 // so a queued `Cancel()` / `Abort()` task can interleave between chunks.
 void ProcessLocalFileTransferChunk(
@@ -842,7 +865,7 @@ void ProcessLocalFileTransferChunk(
 }
 
 // Streams `image_path` into (or compares it against) `device_path` in chunks of
-// up to `kTransferBufferSize` posted onto `Operation::task_runner_`.
+// up to `kUsb3TransferBufferSize` posted onto `Operation::task_runner_`.
 void StartLocalFileTransfer(
     const base::FilePath& image_path,
     const base::FilePath& device_path,
@@ -875,7 +898,7 @@ void StartLocalFileTransfer(
   // Cap `chunk_size` at `total_size / 2` so small test files still emit an
   // intermediate progress event before 100%.
   const size_t chunk_size = static_cast<size_t>(
-      std::clamp<int64_t>(total_size / 2, 1, kTransferBufferSize));
+      std::clamp<int64_t>(total_size / 2, 1, kUsb3TransferBufferSize));
   auto state = std::make_unique<LocalFileTransferState>(
       std::move(image_file), std::move(device_file), mode, total_size,
       chunk_size, std::move(is_cancelled), std::move(set_progress),

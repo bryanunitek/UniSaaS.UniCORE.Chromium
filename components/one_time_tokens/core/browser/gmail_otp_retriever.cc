@@ -30,33 +30,23 @@ namespace {
 void RecordSenderDomainMatchRejectionReason(
     GmailOtpSenderDomainMatchType reason,
     bool is_cached) {
-  if (is_cached) {
-    base::UmaHistogramEnumeration(
-        "OneTimeTokens.GmailOtpRetriever."
-        "SenderDomainMatchRejectionReason.Cached",
-        reason);
-  } else {
-    base::UmaHistogramEnumeration(
-        "OneTimeTokens.GmailOtpRetriever."
-        "SenderDomainMatchRejectionReason.Received",
-        reason);
-  }
+  base::UmaHistogramEnumeration(
+      is_cached ? "OneTimeTokens.GmailAgentic."
+                  "SenderDomainMatchRejectionReason.Cached"
+                : "OneTimeTokens.GmailAgentic."
+                  "SenderDomainMatchRejectionReason.Received",
+      reason);
 }
 
 void RecordSenderDomainMatchAcceptedMatchType(
     GmailOtpSenderDomainMatchType match_type,
     bool is_cached) {
-  if (is_cached) {
-    base::UmaHistogramEnumeration(
-        "OneTimeTokens.GmailOtpRetriever."
-        "SenderDomainMatchAcceptedMatchType.Cached",
-        match_type);
-  } else {
-    base::UmaHistogramEnumeration(
-        "OneTimeTokens.GmailOtpRetriever."
-        "SenderDomainMatchAcceptedMatchType.Received",
-        match_type);
-  }
+  base::UmaHistogramEnumeration(
+      is_cached ? "OneTimeTokens.GmailAgentic."
+                  "SenderDomainMatchAcceptedMatchType.Cached"
+                : "OneTimeTokens.GmailAgentic."
+                  "SenderDomainMatchAcceptedMatchType.Received",
+      match_type);
 }
 
 }  // namespace
@@ -315,6 +305,7 @@ void GmailOtpRetriever::OnReceivedTokenMatchChecked(
     }
   } else {
     RecordSenderDomainMatchRejectionReason(match_type, /*is_cached=*/false);
+    has_sender_domain_mismatch_ = true;
   }
 
   MaybeCompleteOrWaitForPendingRequests();
@@ -360,6 +351,13 @@ void GmailOtpRetriever::MaybeCompleteOrWaitForPendingRequests() {
   }
 
   if (error_.has_value()) {
+    // Decided here rather than in `OnOneTimeTokenTimeout()` because domain
+    // checks still in flight at the timeout can reject a token afterwards.
+    // Backend errors take priority over the mismatch.
+    if (*error_ == OneTimeTokenRetrievalError::kSubscriptionExpired &&
+        has_sender_domain_mismatch_) {
+      error_ = OneTimeTokenRetrievalError::kGmailOtpSenderDomainMismatch;
+    }
     subscription_ = {};
     weak_ptr_factory_.InvalidateWeakPtrs();
     std::move(retrieve_otp_callback_).Run(base::unexpected(*error_));

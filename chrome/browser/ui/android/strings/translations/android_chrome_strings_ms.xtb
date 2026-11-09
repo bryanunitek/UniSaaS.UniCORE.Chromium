@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Jangan tawarkan untuk menterjemahkan tapak ini</translation>
 <translation id="1143193470214071120">Tutup tetingkap atau urus tetingkap</translation>
 <translation id="1143486892058798649">Simpan pautan sebagai…</translation>
+<translation id="1149644372535087155">Simpan kata laluan dalam Chrome</translation>
 <translation id="1149725087019908252">Mengimbas <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> akan dibuka dalam Chrome. Dengan meneruskan penggunaan, anda bersetuju menerima <ph name="BEGIN_LINK1" />Syarat Perkhidmatan Google<ph name="END_LINK1" /> dan <ph name="BEGIN_LINK2" />Syarat Perkhidmatan Tambahan Google Chrome dan Chrome OS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Anda tiada kata laluan yang disimpan dalam Google Password Manager.</translation>
@@ -188,6 +189,7 @@ Orang yang mengetahui ungkapan laluan anda sahaja yang dapat membaca data anda y
 <translation id="1749561566933687563">Segerakkan penanda halaman anda</translation>
 <translation id="1750238553597293878">Kekal menggunakan kata laluan dalam Google Account anda</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">Pulihkan tetingkap <ph name="TITLE_OF_WINDOW" />.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Halaman, 1 halaman dalam senarai}other{Halaman, # halaman dalam senarai}}</translation>
 <translation id="1771929606532798550">Maklumat tentang penggunaan Chrome anda dihantar kepada Google tetapi maklumat itu tidak terikat dengan anda\n\nJika berlaku ranap sistem pada Chrome, butiran tentang ranap sistem mungkin menyertakan beberapa maklumat peribadi\n\nJika anda menyegerakkan sejarah kepada Google Account anda, metrik juga mungkin menyertakan maklumat tentang URL yang anda lawati</translation>
 <translation id="1778457539567749232">Tandai sebagai belum dibaca</translation>
@@ -299,6 +301,7 @@ Orang yang mengetahui ungkapan laluan anda sahaja yang dapat membaca data anda y
 <translation id="2190355936436201913">(kosong)</translation>
 <translation id="219283042927675668">Tab dalam kumpulan</translation>
 <translation id="2194856509914051091">Perkara yang perlu dipertimbangkan</translation>
+<translation id="2195339740518523951">Dapatkan keselamatan Chrome yang paling kukuh</translation>
 <translation id="2196695604589508993">Buka sejarah</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, Tab Perkongsian Yang Tersemat</translation>
 <translation id="22091350895006575">Tambahkan nama pengguna</translation>
@@ -1256,6 +1259,7 @@ Google Account anda mungkin mempunyai sejarah penyemakan imbas dalam bentuk lain
 <translation id="6022659036123304283">Peribadikan Chrome anda</translation>
 <translation id="6023820583797130428">Buka menu untuk kembali</translation>
 <translation id="6026538407078977628">Kembangkan kepada skrin penuh</translation>
+<translation id="6027619584715411062">Log masuk untuk mendapatkan penanda halaman, kata laluan dan pelbagai lagi pada semua peranti anda.</translation>
 <translation id="6039379616847168523">Lompat ke tab seterusnya</translation>
 <translation id="6040143037577758943">Tutup</translation>
 <translation id="604124094241169006">Automatik</translation>
@@ -1600,6 +1604,7 @@ Untuk menukar tetapan ini, <ph name="BEGIN_LINK" />padamkan data Chrome dalam ak
 <translation id="7190921792980745354">Sekat <ph name="MEMBER_FULL_NAME" />?</translation>
 <translation id="7191430249889272776">Tab dibuka di latar belakang.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Anda perlu menukar kata laluan ini sekarang}other{Anda perlu menukar kata laluan ini sekarang}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{Pulihkan tetingkap <ph name="TAB_COUNT_ONE" /> tab.}other{Pulihkan tetingkap <ph name="TAB_COUNT_MANY" /> tab.}}</translation>
 <translation id="7196215469483532480">Penjelasan panduan privasi dibuka pada ketinggian penuh</translation>
 <translation id="7196455519852483601">Anda boleh padamkan beberapa atau semua sejarah, kuki dan data laman anda serta pelbagai lagi</translation>
 <translation id="7197682514647286393">Padamkan data semakan imbas</translation>
@@ -1853,6 +1858,7 @@ Untuk menukar tetapan ini, <ph name="BEGIN_LINK" />padamkan data Chrome dalam ak
 <translation id="8135406045838672858">PDF yang dimuat turun akan dibuka secara automatik dengan <ph name="APP_NAME" /></translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Pautan diterima}other{# pautan diterima}}</translation>
 <translation id="8137562778192957619">Anda tidak perlu mengingati kata laluan ini. Kata laluan ini akan disimpan pada Google Password Manager.</translation>
+<translation id="8149825829235553327">Lindungi tab Inkognito anda</translation>
 <translation id="8151185429379586178">Alat pembangun</translation>
 <translation id="8152331954420209374">Akses Lens</translation>
 <translation id="8153206878708357851">Togol penyemakan imbas karet</translation>

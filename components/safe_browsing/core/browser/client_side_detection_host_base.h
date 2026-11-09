@@ -20,6 +20,7 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/history/core/browser/history_service_observer.h"
 #include "components/history/core/browser/history_types.h"
@@ -140,6 +141,11 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
   // used to provide the intelligent scan delegate the information about the
   // page.
   virtual void GetInnerText(HostInnerTextCallback callback) = 0;
+
+  // Returns the title explicitly provided by the current page (e.g. `<title>`
+  // or `document.title`), or an empty string if the page has no title. Must not
+  // fall back to synthesizing a title from the URL.
+  virtual std::string GetPageTitle() const = 0;
 
   // Calls the CSD service to classify phishing through thresholds presented in
   // `verdict`.
@@ -537,6 +543,15 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
   bool is_classifying() const { return is_classifying_; }
   void set_is_classifying(bool value) { is_classifying_ = value; }
 
+  bool is_checking_uniform_image() const { return is_checking_uniform_image_; }
+  bool is_uniform_image_retry_timer_running() const {
+    return keyboard_lock_uniform_image_retry_timer_.IsRunning();
+  }
+  void set_last_phishing_detector_result(PhishingDetectorResult result) {
+    last_phishing_detector_result_ = result;
+  }
+  void ResetUniformImageRetryState();
+
   ClientSideDetectionType last_request_type() const {
     return last_request_type_;
   }
@@ -564,8 +579,9 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
 
   using ScreenshotCallback = base::OnceCallback<void(const gfx::Image&)>;
 
-  // Captures the current page for visual classification and runs `callback`
-  // with the result, or with an empty image if the capture failed.
+  // Captures the current page for visual classification or image embedding,
+  // and runs `callback` with the result, or with an empty image if the capture
+  // failed.
   virtual void CaptureScreenshot(ScreenshotCallback callback) = 0;
 
   // Decides whether visual features (the blurred page image) may be attached
@@ -600,9 +616,12 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
       const gfx::Image& image);
 
   // Browser-side implementation of `MaybeStartImageEmbedding()`: applies the
-  // visual-features gate, runs the image embedder on the retained
-  // classification image when needed, and otherwise continues to
-  // `MaybeStartIntelligentScanForScamDetection()`.
+  // visual-features gate, runs the image embedder when needed, and otherwise
+  // continues to `MaybeStartIntelligentScanForScamDetection()`. The embedder
+  // runs on the retained classification image; when none is retained (e.g.
+  // classification was skipped for a non-page-load trigger), the page is
+  // captured again via `CaptureScreenshot()` first, as the renderer-side
+  // embedder does on demand.
   void StartBrowserSideImageEmbedding(
       std::unique_ptr<ClientPhishingRequest> verdict,
       std::optional<bool> did_match_high_confidence_allowlist,
@@ -657,6 +676,33 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
   // `Scorer` is destroyed on a background thread, so in-flight requests are
   // cancelled and the cached raw pointers dropped (crbug.com/561910278).
   void OnScorerChanged();
+
+  // Receives the capture requested by `StartBrowserSideImageEmbedding()` when
+  // no classification image was retained. An empty `image` is reported as
+  // `ImageEmbeddingResult::kFailed`; the ping proceeds either way.
+  void OnImageEmbeddingCaptureDone(
+      std::unique_ptr<ClientPhishingRequest> verdict,
+      std::optional<bool> did_match_high_confidence_allowlist,
+      bool is_invalid_ip,
+      bool can_extract_visual_features,
+      const gfx::Image& image);
+
+  // Sets the current `Scorer` from `csd_service_` on `image_embedder_` and runs
+  // it on `image`, reporting to `OnImageEmbeddingDone()`.
+  void BeginBrowserSideImageEmbedding(
+      std::unique_ptr<ClientPhishingRequest> verdict,
+      std::optional<bool> did_match_high_confidence_allowlist,
+      bool is_invalid_ip,
+      bool can_extract_visual_features,
+      const gfx::Image& image);
+
+  void TriggerSecondForceRequest();
+
+  void TriggerKeyboardLockUniformImageRetry(
+      std::unique_ptr<ClientPhishingRequest> verdict,
+      std::optional<bool> did_match_high_confidence_allowlist,
+      bool is_invalid_ip,
+      PhishingDetectorResult result);
 
   // MaybeTriggerCreditCardFormPing is a helper that determines whether
   // a credit card form event should trigger a CSD ping. It takes
@@ -744,8 +790,26 @@ class ClientSideDetectionHostBase : public autofill::AutofillManager::Observer,
   // PreClassificationCheck until just prior to the network request being sent.
   bool is_csd_running_ = false;
   bool is_classifying_ = false;
+  bool is_checking_uniform_image_ = false;
+  int keyboard_lock_uniform_image_retry_count_ = 0;
+  PhishingDetectorResult last_phishing_detector_result_ =
+      PhishingDetectorResult::CLASSIFICATION_SUCCESS;
+  base::OneShotTimer keyboard_lock_uniform_image_retry_timer_;
   ClientSideDetectionType last_request_type_ =
       ClientSideDetectionType::CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED;
+
+  // Timer used to delay the second FORCE_REQUEST pre-classification when
+  // `kClientSideDetectionSecondForceRequestWithDelay` is enabled.
+  base::OneShotTimer second_force_request_timer_;
+
+  // True once the delayed second FORCE_REQUEST has been triggered on the
+  // current navigation. Reset in `CancelPendingRequests()`.
+  bool has_triggered_second_force_request_ = false;
+
+  // URL of the first FORCE_REQUEST ping. Reset in `CancelPendingRequests()`.
+  // TODO(crbug.com/579072786): Remove once the renderer allows classification
+  // after same-document URL changes.
+  GURL second_force_request_url_;
 
   // Records the start time of when image embedding started.
   base::TimeTicks image_embedding_start_time_;

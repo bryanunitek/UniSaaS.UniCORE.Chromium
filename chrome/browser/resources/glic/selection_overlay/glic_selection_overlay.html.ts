@@ -63,6 +63,7 @@ export function getHtml(this: GlicSelectionOverlayElement) {
       this.enableSelectionOverlayPromptBox ? html`
       <div id="floatingPromptContainer"
           ?hidden="${!this.showFloatingPrompt}"
+          ?above-selection="${this.promptAboveSelection}"
           style="${this.floatingPromptStyle}">
         ${this.enableSelectionOverlayPromptBox ? html`
           <div class="searchbox-row">
@@ -81,7 +82,8 @@ export function getHtml(this: GlicSelectionOverlayElement) {
                   autocomplete="off">
               <cr-icon-button id="submitPromptButton"
                   ?hidden="${!this.hasPromptText}"
-                  title="$i18n{submitPrompt}"
+                  ?disabled="${!this.pageContextReceived}"
+                  title="${this.getSubmitPromptTitle()}"
                   aria-label="$i18n{submitPrompt}"
                   @click="${this.onSubmitPromptClick}">
               </cr-icon-button>

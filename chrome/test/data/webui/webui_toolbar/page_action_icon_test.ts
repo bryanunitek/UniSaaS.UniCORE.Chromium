@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import 'chrome://webui-toolbar.top-chrome/lazy_load.js';
 
 import type {HelpBubbleOptions} from '//resources/cr_components/help_bubble/help_bubble_controller.js';
 import {hexColorToSkColor} from '//resources/js/color_utils.js';
@@ -10,8 +10,9 @@ import type {CrIconElement} from 'chrome://resources/cr_elements/cr_icon/cr_icon
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
+import type {PageActionIconElement} from 'chrome://webui-toolbar.top-chrome/lazy_load.js';
 import {BrowserProxyImpl, IconTable, IconType, PageActionAnimationStyle, PageActionId, PageActionTrigger, TrackedElementManager} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
-import type {PageActionIconElement, PageActionState} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import type {PageActionState} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 import {TestToolbarBrowserProxy} from './test_toolbar_browser_proxy.js';
 import type {TestToolbarUiHandler} from './test_toolbar_browser_proxy.js';
@@ -854,6 +855,148 @@ suite('PageActionIconTest', function() {
         // Verify it remains on static icon and no animated icon is rendered
         assertTrue(!!icon.shadowRoot.querySelector('icon-from-table'));
         assertTrue(!icon.shadowRoot.querySelector('#animatedIcon'));
+      });
+
+  test(
+      'Cancels pending glow up icon animation on tab switch before next frame',
+      async function() {
+        icon.glowUpEnabled = true;
+
+        const iconTable = IconTable.getInstance();
+        iconTable.applyUpdates([
+          {
+            handleId: 1n,
+            iconUrlOrName: 'webui-toolbar:star',
+            iconType: IconType.kIconSet,
+            color: null,
+          },
+          {
+            handleId: 2n,
+            iconUrlOrName: 'webui-toolbar:star_filled',
+            iconType: IconType.kIconSet,
+            color: null,
+          },
+        ]);
+
+        icon.state = {
+          ...createBaseState(),
+          pageActionId: PageActionId.kActionBookmarkThisTab,
+          icon: {handleId: 1n},
+          tabSwitchToken: 1,
+        };
+        await icon.updateComplete;
+
+        // Start star -> star_filled animation and await pure microtasks (not
+        // setTimeout-based microtasksFinished()) so requestAnimationFrame is
+        // queued deterministically before any vsync frame can fire.
+        icon.state = {
+          ...icon.state,
+          icon: {handleId: 2n},
+          tabSwitchToken: 1,
+        };
+        await icon.updateComplete;
+        const animatedIcon =
+            icon.shadowRoot.querySelector<CrIconElement>('#animatedIcon');
+        assertTrue(!!animatedIcon);
+        await animatedIcon.updateComplete;
+        await Promise.resolve();
+
+        // Before the animation frame fires, receive a navigation / tab switch
+        // token increment that unmounts #animatedIcon.
+        icon.state = {
+          ...icon.state,
+          tabSwitchToken: 2,
+        };
+        await icon.updateComplete;
+        assertFalse(!!icon.shadowRoot.querySelector('#animatedIcon'));
+
+        // Advancing frames must not hit assert(crIcon) in playIconAnimation.
+        await nextFrame();
+        assertTrue(!!icon.shadowRoot.querySelector('icon-from-table'));
+        assertFalse(!!icon.shadowRoot.querySelector('#animatedIcon'));
+
+        // Also verify cancellation mid-await right after icon.updateComplete
+        // (before crIcon.updateComplete / requestAnimationFrame scheduling --
+        // that is, we *don't* call `await animatedIcon.updateComplete;` or
+        // `await Promise.resolve();` this time).
+        icon.state = {
+          ...icon.state,
+          icon: {handleId: 1n},
+          tabSwitchToken: 2,
+        };
+        await icon.updateComplete;
+        assertTrue(!!icon.shadowRoot.querySelector('#animatedIcon'));
+        icon.state = {
+          ...icon.state,
+          tabSwitchToken: 3,
+        };
+        await icon.updateComplete;
+        await nextFrame();
+        assertTrue(!!icon.shadowRoot.querySelector('icon-from-table'));
+        assertFalse(!!icon.shadowRoot.querySelector('#animatedIcon'));
+      });
+
+  test(
+      'Cancels pending glow up icon animation on disconnect before next frame',
+      async function() {
+        icon.glowUpEnabled = true;
+
+        const iconTable = IconTable.getInstance();
+        iconTable.applyUpdates([
+          {
+            handleId: 1n,
+            iconUrlOrName: 'webui-toolbar:star',
+            iconType: IconType.kIconSet,
+            color: null,
+          },
+          {
+            handleId: 2n,
+            iconUrlOrName: 'webui-toolbar:star_filled',
+            iconType: IconType.kIconSet,
+            color: null,
+          },
+        ]);
+
+        icon.state = {
+          ...createBaseState(),
+          pageActionId: PageActionId.kActionBookmarkThisTab,
+          icon: {handleId: 2n},
+          tabSwitchToken: 1,
+        };
+        await icon.updateComplete;
+
+        // Start star_filled -> star animation and queue requestAnimationFrame
+        // using pure microtask awaits so zero vsync frames elapse.
+        icon.state = {
+          ...icon.state,
+          icon: {handleId: 1n},
+          tabSwitchToken: 1,
+        };
+        await icon.updateComplete;
+        const animatedIcon =
+            icon.shadowRoot.querySelector<CrIconElement>('#animatedIcon');
+        assertTrue(!!animatedIcon);
+        await animatedIcon.updateComplete;
+        await Promise.resolve();
+
+        // Disconnect the element before the animation frame runs (e.g. NTP
+        // hiding the bookmark action or omnibox suppressing page actions).
+        icon.remove();
+        await icon.updateComplete;
+
+        // Advancing frames must not throw Assertion failed on detached element.
+        await nextFrame();
+        assertFalse(!!icon.shadowRoot.querySelector('#animatedIcon'));
+
+        // Mutating state while disconnected must not start a new animation.
+        icon.state = {
+          ...icon.state,
+          icon: {handleId: 2n},
+          tabSwitchToken: 1,
+        };
+        await icon.updateComplete;
+        await nextFrame();
+        assertFalse(!!icon.shadowRoot.querySelector('#animatedIcon'));
       });
 
   test(

@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Ekki bjóða upp á að þýða þessi vefsvæði</translation>
 <translation id="1143193470214071120">Lokaðu glugga eða stjórnaðu gluggum</translation>
 <translation id="1143486892058798649">Vista tengil sem…</translation>
+<translation id="1149644372535087155">Vistaðu aðgangsorð í Chrome</translation>
 <translation id="1149725087019908252">Skannar <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> opnast í Chrome. Með því að halda áfram samþykkirðu <ph name="BEGIN_LINK1" />þjónustuskilmála Google<ph name="END_LINK1" /> og <ph name="BEGIN_LINK2" />viðbótarþjónustuskilmála Google Chrome og ChromeOS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Þú ert ekki með nein aðgangsorð vistuð í Google-aðgangsorðastjórnun.</translation>
@@ -188,6 +189,7 @@ Aðeins einstaklingar sem eru með aðgangsorðið þitt geta lesið dulkóðuð
 <translation id="1749561566933687563">Samstilltu bókamerkin þín</translation>
 <translation id="1750238553597293878">Haltu áfram að nota aðgangsorðin á Google-reikningnum þínum</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">Endurheimta gluggann „<ph name="TITLE_OF_WINDOW" />“.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Síður, 1 síða á lista}one{Síður, # síða á lista}other{Síður, # síður á lista}}</translation>
 <translation id="1771929606532798550">Google fær sendar upplýsingar um notkun þína á Chrome en þær eru ekki tengdar við þig\n\nEf Chrome hrynur er hugsanlegt að upplýsingar um hrunið feli í sér einhverjar persónuupplýsingar\n\nEf þú samstillir ferilinn þinn við Google-reikninginn þinn kunna mæligildi einnig að innihalda upplýsingar um vefslóðirnar sem þú opnar</translation>
 <translation id="1778457539567749232">Merkja sem ólesið</translation>
@@ -299,6 +301,7 @@ Aðeins einstaklingar sem eru með aðgangsorðið þitt geta lesið dulkóðuð
 <translation id="2190355936436201913">(autt)</translation>
 <translation id="219283042927675668">Flipar í hóp</translation>
 <translation id="2194856509914051091">Atriði til að hafa í huga</translation>
+<translation id="2195339740518523951">Fá mesta öryggi Chrome</translation>
 <translation id="2196695604589508993">Opna feril</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, festur flipi í deilingu</translation>
 <translation id="22091350895006575">Bæta notandanafni við</translation>
@@ -1256,6 +1259,7 @@ Google reikningurinn þinn kann að vera með annars konar vefskoðunarferil, sv
 <translation id="6022659036123304283">Gerðu Chrome að þínu</translation>
 <translation id="6023820583797130428">Opnaðu valmyndina til að fara til baka</translation>
 <translation id="6026538407078977628">Birta á öllum skjánum</translation>
+<translation id="6027619584715411062">Skráðu þig inn til að sækja bókamerkin, aðgangsorðin og fleira í öllum tækjunum þínum.</translation>
 <translation id="6039379616847168523">Stökkva í næsta flipa</translation>
 <translation id="6040143037577758943">Loka</translation>
 <translation id="604124094241169006">Sjálfvirkt</translation>
@@ -1600,6 +1604,7 @@ Til að breyta þessari stillingu skaltu <ph name="BEGIN_LINK" />eyða Chrome-g�
 <translation id="7190921792980745354">Setja <ph name="MEMBER_FULL_NAME" /> á bannlista?</translation>
 <translation id="7191430249889272776">Flipi opnaður í bakgrunni.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Þú ættir að breyta því strax}one{Þú ættir að breyta þeim strax}other{Þú ættir að breyta þeim strax}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{Endurheimta glugga með <ph name="TAB_COUNT_ONE" /> flipa.}one{Endurheimta glugga með <ph name="TAB_COUNT_MANY" /> flipum.}other{Endurheimta glugga með <ph name="TAB_COUNT_MANY" /> flipum.}}</translation>
 <translation id="7196215469483532480">Útskýring á leiðbeiningum um persónuvernd opnuð á öllum skjánum</translation>
 <translation id="7196455519852483601">Þú getur eytt ferlinum þínum, fótsporum, vefsvæðagögnum og fleiru að hluta til eða í heild sinni.</translation>
 <translation id="7197682514647286393">Eyddu vefskoðunargögnum fljótt og örugglega</translation>
@@ -1853,6 +1858,7 @@ Til að breyta þessari stillingu skaltu <ph name="BEGIN_LINK" />eyða Chrome-g�
 <translation id="8135406045838672858">Sóttar PDF-skrár opnast sjálfkrafa í <ph name="APP_NAME" /></translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Tengill móttekinn}one{# tengill móttekinn}other{# tenglar mótteknir}}</translation>
 <translation id="8137562778192957619">Þú þarft ekki að muna þetta aðgangsorð. Það verður vistað í Google-aðgangsorðastjórnun.</translation>
+<translation id="8149825829235553327">Verndaðu huliðsflipana þína</translation>
 <translation id="8151185429379586178">Forritunartól</translation>
 <translation id="8152331954420209374">Fara í Linsu</translation>
 <translation id="8153206878708357851">Víxla skoðun með textabendli</translation>

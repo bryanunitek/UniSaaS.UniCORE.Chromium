@@ -541,6 +541,12 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
                 : GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU_PAGE;
     }
 
+    private static void recordGlicEntryPointClick(
+            @GlicInvocationSource int source, @Nullable Tab tab) {
+        boolean isNtp = tab != null && UrlUtilities.isNtpUrl(tab.getUrl());
+        GlicMetrics.recordEntryPointClick(source, isNtp);
+    }
+
     @Override
     public List<ModelList> buildContextMenu() {
         int nextCustomMenuItemId = CUSTOM_MENU_ITEM_ID_START;
@@ -1354,8 +1360,7 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
             mNativeDelegate.setPictureInPicture(enterPiP);
         } else if (itemId == R.id.contextmenu_show_interest_in_element) {
             recordContextMenuSelection(ContextMenuUma.Action.SHOW_INTEREST_IN_ELEMENT);
-            WebContents webContents = mItemDelegate.getWebContents();
-            webContents.showInterestInElement(mParams.getInterestForNodeID());
+            mNativeDelegate.showInterestInElement();
         } else if (itemId == R.id.contextmenu_open_image_in_new_tab) {
             recordContextMenuSelection(ContextMenuUma.Action.OPEN_IMAGE_IN_NEW_TAB);
             GURL url =
@@ -1476,15 +1481,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
             }
         } else if (itemId == R.id.contextmenu_ask_gemini) {
             recordContextMenuSelection(ContextMenuUma.Action.ASK_GEMINI);
+            @GlicInvocationSource int source = getAskGeminiInvocationSource();
             Tab askGeminiTab = getTab();
-            mClickedGlicSource = getAskGeminiInvocationSource();
+            recordGlicEntryPointClick(source, askGeminiTab);
+            mClickedGlicSource = source;
             if (askGeminiTab != null) {
-                GlicKeyedServiceHandler.invoke(
-                        getProfile(), askGeminiTab, GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU);
+                GlicKeyedServiceHandler.invoke(getProfile(), askGeminiTab, source);
             }
         } else if (itemId == R.id.contextmenu_ask_gemini_image) {
             recordContextMenuSelection(ContextMenuUma.Action.ASK_GEMINI_IMAGE);
             Tab askGeminiImageTab = getTab();
+            recordGlicEntryPointClick(GlicInvocationSource.SHARED_IMAGE, askGeminiImageTab);
             mClickedGlicSource = GlicInvocationSource.SHARED_IMAGE;
             if (askGeminiImageTab != null) {
                 GlicKeyedServiceHandler.shareContextImage(

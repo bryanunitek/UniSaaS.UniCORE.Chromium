@@ -9,7 +9,6 @@
 <translation id="1013952917065545813">Pode voltar aqui para reabrir separadores que tenha fechado recentemente.</translation>
 <translation id="1016495303386450659">Item atualizado</translation>
 <translation id="1018804590490383958">Ler e preencher automaticamente</translation>
-<translation id="1019990162050689579">Atividade da app Gemini</translation>
 <translation id="102471647093736603">Prima sem soltar para mover</translation>
 <translation id="102645702181682900">Tarefa iniciada</translation>
 <translation id="102916930470544692">Chave de acesso</translation>
@@ -40,6 +39,7 @@
 <translation id="1085677983426914530">Não foi possível abrir o ficheiro <ph name="FILENAME" /></translation>
 <translation id="1086486568852410168">Pesquisar com o Google Lens</translation>
 <translation id="1095093219235104018">Encontrar e preencher com o Gemini</translation>
+<translation id="1096245844813536669">Envia a sua pesquisa automaticamente quando para de falar</translation>
 <translation id="1096992026380844478">As definições de sincronização vão ser restauradas com base na última cópia de segurança. <ph name="BEGIN_LINK" />Veja o que pode sincronizar<ph name="END_LINK" /></translation>
 <translation id="1103523840287552314">Traduzir sempre <ph name="LANGUAGE" /></translation>
 <translation id="1110772719190051587">Desbloqueie com o Face ID</translation>
@@ -50,6 +50,7 @@
 <translation id="1122068467107743258">Trabalho</translation>
 <translation id="1126696498560056882">Gerir contas neste dispositivo</translation>
 <translation id="1126809382673880764">Não protege contra transferências, extensões ou Websites perigosos. Continuará a obter a proteção da Navegação segura, quando disponível, noutros Serviços Google, como o Gmail e a Pesquisa.</translation>
+<translation id="112943553659469376">"<ph name="PROMPT" />"</translation>
 <translation id="1133418583142946603">Adicionar separador atual</translation>
 <translation id="1136104150802877429">Mostra críticas sobre produtos</translation>
 <translation id="1142371195993008685">Desativar as notificações para <ph name="FEATURE_NAME" /></translation>
@@ -385,6 +386,7 @@
 <translation id="2104436223719117661">Pesquisas populares</translation>
 <translation id="21133533946938348">Fixar Separador</translation>
 <translation id="2117650889962717098">Mantenha a sua navegação privada mudando para o Modo de navegação anónima</translation>
+<translation id="2119126821484134587">Para oferecer ajuda personalizada, o Gemini partilha alguns dos seus dados (como partes dos seus chats, a localização e outras informações relevantes) com outros serviços Google, como o Maps e o Voos. Estes serviços podem usar essas informações para melhorar, mesmo que elimine o seu histórico das Apps Gemini mais tarde. Saiba mais no <ph name="BEGIN_LINK" />Centro de Privacidade das Apps Gemini<ph name="END_LINK" />.</translation>
 <translation id="2119636449201577317">Abrir na app…</translation>
 <translation id="2119962645034852864">Alguns serviços não estão disponíveis para a sua conta</translation>
 <translation id="2120553909046681540">A sua organização desativou a navegação anónima.</translation>
@@ -506,6 +508,7 @@
 <translation id="2496180316473517155">Histórico de navegação</translation>
 <translation id="2496626742194544812">Ir para o primeiro separador</translation>
 <translation id="2499505845365628575">Pode encontrar todo o seu histórico de navegação através do botão <ph name="HISTORY_BUTTON_ACCESSIBILITY_LABEL" />.</translation>
+<translation id="2499948218922929716">Receba notificações sobre atualizações de segurança, temas personalizados e muito mais.</translation>
 <translation id="251033673027346551">Visite a Carteira do Google para gerir as <ph name="BEGIN_LINK" />preferências de privacidade e dados<ph name="END_LINK" />.</translation>
 <translation id="2511117522375201202">Tem <ph name="NUMBER_OF_PASSWORDS" /> palavras-passe comprometidas que podem pôr a sua segurança em risco.</translation>
 <translation id="2512709994717613803">Nível <ph name="LEVEL_NUMBER" /></translation>
@@ -669,6 +672,7 @@
 <translation id="3038136505713492417">Valide a sua identidade para usar as suas chaves de acesso neste dispositivo</translation>
 <translation id="3039671569659952257">Eliminar pasta</translation>
 <translation id="3041835740069544003">Agora, o Chrome pode detetar e preencher mais formulários com a Compreensão de formulários mais inteligente. Para o fazer, o conteúdo e os URLs das páginas podem ser tratados num espaço privado na nuvem. Faça a gestão nas definições.</translation>
+<translation id="3042118633250374317">A Google usa o seu histórico para oferecer os serviços, proteger a Google, os respetivos utilizadores e o público, e desenvolver e melhorar os serviços com a ajuda de revisores humanos. Não inclua informações que não quer que sejam revistas nem usadas.</translation>
 <translation id="3050988301648974170">Abra a Verificação de Palavra-passe</translation>
 <translation id="3053332585453689122">Envia os URLs que visita e uma pequena amostra de conteúdo de páginas, transferências, atividade de extensões e informações do sistema para a Navegação Segura do Google de forma a verificar se são prejudiciais.</translation>
 <translation id="3055102495753300780">Armazenamento de informações</translation>
@@ -718,6 +722,7 @@
 <translation id="3186796054637504691">Limpar histórico e dados dos sites</translation>
 <translation id="3190558889382726167">Palavra-passe guardada</translation>
 <translation id="3190736958609431397">Desativar acompanhamento</translation>
+<translation id="3192820089569442694">Algo correu mal com o seu pedido de exclusão de dados</translation>
 <translation id="3208260410153224535">A sua organização desativou o início de sessão. Os novos marcadores, palavras-passe e muito mais são guardados apenas neste dispositivo.</translation>
 <translation id="3211969308836412674">Desafixar site</translation>
 <translation id="3213807041830307252">Compre, traduza e identifique o que vê com a câmara e a galeria de fotos.</translation>
@@ -784,6 +789,7 @@
 <translation id="344589138074534176">Saiba mais acerca do Google Lens</translation>
 <translation id="3449029510150690417">Crie o seu novo grupo de separadores atribuindo-lhe um nome e uma cor</translation>
 <translation id="345348365500626747">Morada encontrada</translation>
+<translation id="3453878468834191501">O separador atual é partilhado com o Gemini quando inicia um novo chat. <ph name="BEGIN_LINK" />Saiba mais sobre a IA e a privacidade<ph name="END_LINK" /></translation>
 <translation id="3459644598174926977">Use o Live com o Gemini para fazer perguntas sobre uma página, debater ideias em voz alta e conversar.</translation>
 <translation id="3462768334899086950">Isto significa que vai perder o ficheiro não guardado e os separadores atuais</translation>
 <translation id="3464194322481586217">Não foi possível acompanhar o preço.</translation>
@@ -847,6 +853,7 @@
 <translation id="3641456520301071208">Os sites podem solicitar a sua localização</translation>
 <translation id="3642060527569456384">Os grupos de separadores são guardados e atualizados automaticamente em todos os seus dispositivos.</translation>
 <translation id="3643338347976071250">{count,plural, =1{{count} palavra-passe está guardada apenas neste dispositivo. Para usá-la nos seus outros dispositivos, guarde-a na sua Conta Google, {email}.}other{{count} palavras-passe estão guardadas apenas neste dispositivo. Para usá-las nos seus outros dispositivos, guarde-as na sua Conta Google, {email}.}}</translation>
+<translation id="3657176844107584515"><ph name="EMAIL" />, subscrição da Google.</translation>
 <translation id="3659297405161482746">Não foram encontrados métodos de pagamento</translation>
 <translation id="3662966164093827811">{count,plural, =1{1 selecionado}other{# selecionados}}</translation>
 <translation id="3668035568083954765">Proteja a sua privacidade e mantenha-se em segurança</translation>
@@ -943,12 +950,14 @@
 <translation id="3955740319737378355">Concluir</translation>
 <translation id="3955822496205734389">Tem palavras-passe fracas.</translation>
 <translation id="3957016963627617921">Faça mais com o Gemini no Chrome</translation>
+<translation id="3957737662589242353"><ph name="NAME" />, <ph name="EMAIL" />, subscrição da Google.</translation>
 <translation id="3958312024468322930">Arraste-o para a dock na parte inferior do ecrã principal</translation>
 <translation id="3962326069546168954">Guardar</translation>
 <translation id="3967327056943561740">Marcadores</translation>
 <translation id="3967822245660637423">Transferência concluída</translation>
 <translation id="3973560090698854095">Esta ação elimina as moradas guardadas na sua Conta Google <ph name="USER_EMAIL" />.</translation>
 <translation id="398604237578616937">Com sessão iniciada como <ph name="USER_EMAIL" />. Abra o menu da conta.</translation>
+<translation id="3986082989454912832">Atender</translation>
 <translation id="3986739045730058129">Aceder ao separador</translation>
 <translation id="3992684624889376114">Acerca desta página</translation>
 <translation id="3993594519743675442">Ocultar Definir lembrete</translation>
@@ -1108,6 +1117,7 @@
 <translation id="4488754974567924717">Informamos se as suas palavras-passe estiverem comprometidas</translation>
 <translation id="4489536976005181779">{count,plural, =1{Página adicionada à sua Lista de leitura na sua conta, {email}}other{Páginas adicionadas à sua Lista de leitura na sua conta, {email}}}</translation>
 <translation id="4493604894403585654">Tem sessão iniciada como <ph name="USER_EMAIL" />. Pode parar a sincronização em qualquer altura nas definições. A Google pode personalizar a Pesquisa e outros serviços com base no seu histórico.</translation>
+<translation id="4495251723189610737">Os seus chats vão ser guardados no seu histórico do Gemini. O histórico inclui o seu áudio, vídeos e partilhas de ecrã do Gemini Live, o que partilha com o Gemini (como comandos, <ph name="BEGIN_LINK" />carregamentos<ph name="END_LINK" /> e <ph name="BEGIN_LINK" />ecrãs<ph name="END_LINK" />), respostas do Gemini, tarefas e chamadas de ferramentas, feedback, informações de Websites que visita com o Gemini, dados de utilização de produtos, a localização geral do seu dispositivo, o endereço IP e as moradas de casa ou do trabalho na sua Conta Google. Também pode incluir dados de apps que associa ao Gemini.</translation>
 <translation id="4502423230170890588">Remover deste dispositivo</translation>
 <translation id="4508486880075514067">Expandir para ecrã inteiro</translation>
 <translation id="4508750114462689118">Fechar a promoção de início de sessão</translation>
@@ -1212,6 +1222,7 @@
 <translation id="4808744395915275922">Atualizações</translation>
 <translation id="4813345808229079766">Ligação</translation>
 <translation id="4821595350501541683">Os separadores foram fechados e os dados de navegação foram eliminados</translation>
+<translation id="4821645169621230110">Como o seu histórico é usado</translation>
 <translation id="4823322556950229674">Pode premir sem soltar para mover a barra de endereço e o botão anterior para a parte inferior</translation>
 <translation id="4824480232751123840">Volume</translation>
 <translation id="4824497107140370669">{count,plural, =0{{domain}}=1{{domain} e mais 1}other{{domain} e mais {count}}}</translation>
@@ -1239,6 +1250,7 @@
 <translation id="4877597489778380935">Lembrar-me mais tarde</translation>
 <translation id="4881695831933465202">Abrir</translation>
 <translation id="4883766694719903356">Grelha de separadores de navegação anónima</translation>
+<translation id="4884205780547482830">Os seus dados ajudam a treinar a IA generativa</translation>
 <translation id="4884937942297374058">A Proteção melhorada está desativada</translation>
 <translation id="4887391901725877182">Legendas</translation>
 <translation id="488785315393301722">Mostrar Detalhes</translation>
@@ -1618,6 +1630,7 @@ A Entrega também tem de estar ativada na secção Geral das Definições e os s
 <translation id="6078236141387574983">Reajuste a altura da página</translation>
 <translation id="6084848228346514841">Selecionar separadores</translation>
 <translation id="6089212833343035912">PIN do Gestor de Palavras-passe da Google</translation>
+<translation id="6090690847556987004">Algo correu mal com esta definição. Atualize o Chrome e o iPadOS, e reinicie o dispositivo para tentar novamente. Se isto continuar a acontecer, o seu iPhone pode não ser compatível com esta definição.</translation>
 <translation id="6090760257419195752">Avisos ignorados</translation>
 <translation id="6094325891006032858">Ative a Navegação segura melhorada</translation>
 <translation id="6096965253650248286"><ph name="COUNT" /> encontrado(s)</translation>
@@ -1689,7 +1702,6 @@ A Entrega também tem de estar ativada na secção Geral das Definições e os s
 <translation id="628251768213143684">Pode sempre gerir o que é guardado na sua Conta Google</translation>
 <translation id="6284652193729350524">Propor tradução de <ph name="LANGUAGE" /></translation>
 <translation id="6293101329759844770">Para ativar a Navegação segura, abra <ph name="BEGIN_LINK" />Serviços Google<ph name="END_LINK" /> e toque em Navegação segura.</translation>
-<translation id="6295140892595702619">Use o microfone para conversar com o Gemini. Quando fala com o Gemini, o áudio é armazenado na Atividade das Apps Gemini (se estiver ativada). Os seus dados não são usados para melhorar os modelos de IA generativa</translation>
 <translation id="6295751040240588413">Alcunha do cartão inválida</translation>
 <translation id="629730747756840877">Conta</translation>
 <translation id="6301104306974789820">Receba notificações de acompanhamento de preço</translation>
@@ -1884,6 +1896,7 @@ A Entrega também tem de estar ativada na secção Geral das Definições e os s
 <translation id="6830728435402077660">Inseguro</translation>
 <translation id="6831043979455480757">Traduzir</translation>
 <translation id="6842136130964845393">Para se certificar de que pode sempre aceder às suas palavras-passe guardadas, valide a sua identidade</translation>
+<translation id="6843744036364481304">Que histórico do chat é guardado</translation>
 <translation id="6844773122575789617">Ativar Modo IA</translation>
 <translation id="6851516051005285358">Pedir site para computador</translation>
 <translation id="6857446173140146664">Eliminar fundo</translation>
@@ -1939,7 +1952,6 @@ Para continuar a partir do computador, mude para <ph name="OTHER_EMAIL" />. Tem 
 <translation id="6979737339423435258">Sempre</translation>
 <translation id="6980507581230208647">Tema rosa</translation>
 <translation id="6983306615164277634">Também pode tocar sem soltar na barra de endereço para alterar a posição.</translation>
-<translation id="6987201788018524855">Explore funcionalidades úteis que ainda não conhece</translation>
 <translation id="6989636517316575338">Faça perguntas sobre qualquer página</translation>
 <translation id="6990519590575500580">FaceTime</translation>
 <translation id="6998236305642926573">Todas as tarefas</translation>
@@ -2008,6 +2020,7 @@ Para continuar a partir do computador, mude para <ph name="OTHER_EMAIL" />. Tem 
 <translation id="7223134495231529579">Guardar em Descargas</translation>
 <translation id="722339453342442311">Verificar agora</translation>
 <translation id="7227235818314667565">Gerir partilha</translation>
+<translation id="7232376892719594461">Nem as suas conversas com o Gemini nem os seus <ph name="BEGIN_LINK" />dados do Google Workspace<ph name="END_LINK" /> são revistos ou usados para treinar os modelos de IA generativa.</translation>
 <translation id="7233006041370588369">Selecione uma palavra-passe para preencher.</translation>
 <translation id="7238074332967840767">Segurança</translation>
 <translation id="723874023660911012">Mudar de perfil</translation>
@@ -2089,6 +2102,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="7486006552035434095">Mantenha os seus dispositivos sincronizados</translation>
 <translation id="7491131399623468277">Aceder às Definições…</translation>
 <translation id="7491161827858509164">Para ver os ficheiros que transferiu anteriormente, abra a app <ph name="BEGIN_LINK" />Files<ph name="END_LINK" /></translation>
+<translation id="7496554840683586365">Este site está a tentar abrir a App Store. Esta ação faz com que saia da navegação anónima.</translation>
 <translation id="7498234416455752244">Continuar a editar</translation>
 <translation id="7500244509706269886">Preencher automaticamente formulário</translation>
 <translation id="750493650310597496">0 selecionados</translation>
@@ -2112,6 +2126,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="7557508262441527045">Sessão terminada</translation>
 <translation id="7561196759112975576">Sempre</translation>
 <translation id="7561982940498449837">Fechar menu</translation>
+<translation id="7562347727679121642">Adicionar imagem à pesquisa</translation>
 <translation id="7566349809380613217">Abrir <ph name="GROUP_TITLE" />, grupo partilhado de <ph name="NUMBER_OF_TABS" />, <ph name="CREATION_TEXT" /></translation>
 <translation id="7567579665882069209">Os marcadores estão ocultos</translation>
 <translation id="7575664680938145959">Abertura de links com um toque</translation>
@@ -2517,6 +2532,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="8746155870861185046">Partilhar destaque</translation>
 <translation id="8748678031495824833">Abrir ferramentas de IA na página</translation>
 <translation id="8750037785291841318">Os seus separadores serão apresentados aqui</translation>
+<translation id="8751126814549746156">O seu histórico é eliminado automaticamente após 18 meses. Pode alterar este período nas Definições. Os chats revistos pelos fornecedores de serviços são separados da sua conta e mantidos durante, no máximo, 3 anos. Pode <ph name="BEGIN_LINK" />desativar<ph name="END_LINK" /> a definição Histórico em qualquer altura.</translation>
 <translation id="8756969031206844760">Quer atualizar a palavra-passe?</translation>
 <translation id="8763613688786959833">Ir para o último separador</translation>
 <translation id="8766790350274092814">As palavras-passe de <ph name="WEBSITE" /> e <ph name="SECOND_WEBSITE" /> vão ser apagadas. As suas contas não vão ser apagadas.</translation>
@@ -2562,6 +2578,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="8893208530912252670">Vídeos</translation>
 <translation id="890009681345348416">Mais de 40 palavras-passe preenchidas automaticamente</translation>
 <translation id="8900845556227858314">App do navegador</translation>
+<translation id="8903042868629070803">Se tiver 18 anos ou mais, a Google também usa o seu histórico para <ph name="BEGIN_LINK" />treinar modelos de IA generativa<ph name="END_LINK" />. Pode <ph name="BEGIN_LINK" />desativar esta opção<ph name="END_LINK" /> para chats futuros em qualquer altura.</translation>
 <translation id="890565330728586731">Anterior</translation>
 <translation id="8907722425137681851">Localizar na página…</translation>
 <translation id="8909135823018751308">Partilhar…</translation>
@@ -2623,6 +2640,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="9090979472668095374">Ouvir respostas</translation>
 <translation id="9094033019050270033">Atualizar a palavra-passe</translation>
 <translation id="9098541895599151034">Apagar <ph name="NUMBER_OF_ACCOUNTS" /> palavras-passe?</translation>
+<translation id="909874878420399003">Envio automático</translation>
 <translation id="9099233023029360602">Perguntar sempre que conta usar</translation>
 <translation id="9099821309562615674">Certifique-se de que o texto que está a traduzir é nítido e está enquadrado.</translation>
 <translation id="9100610230175265781">Frase de acesso obrigatória</translation>
@@ -2656,6 +2674,7 @@ Pode reiniciar em qualquer altura.</translation>
 <translation id="9203951165704618409">Mude a barra de endereço de cima para baixo para ter uma experiência de navegação personalizada.</translation>
 <translation id="9205189991633470489">Bloqueio da Navegação anónima</translation>
 <translation id="9206887540681440657">Velocidade</translation>
+<translation id="9218088788182688902">Algo correu mal com esta definição. Atualize o Chrome e o iPadOS, e reinicie o dispositivo para tentar novamente. Se isto continuar a acontecer, o seu iPad pode não ser compatível com esta definição.</translation>
 <translation id="9218430445555521422">Predefinir</translation>
 <translation id="9219103736887031265">Imagens</translation>
 <translation id="9219154867334666734">Pesquisar separadores…</translation>

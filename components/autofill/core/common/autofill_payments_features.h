@@ -81,8 +81,6 @@ BASE_DECLARE_FEATURE(kAutofillEnableOAuth2TokenFix);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnableOffersAndLoyaltyCardsSettings);
 COMPONENT_EXPORT(AUTOFILL)
-BASE_DECLARE_FEATURE(kAutofillEnableOffersInClankKeyboardAccessory);
-COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnableOmniboxAutofill);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnablePayNowPayLaterTabs);
@@ -132,7 +130,7 @@ BASE_DECLARE_FEATURE(kAutofillParseVcnCardOnFileStandaloneCvcFields);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillPreferBuyNowPayLaterBlocklists);
 COMPONENT_EXPORT(AUTOFILL)
-BASE_DECLARE_FEATURE(kAutofillRetryImageFetchOnFailure);
+BASE_DECLARE_FEATURE(kAutofillRequireSecureContextForIbanManualFilling);
 #if BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillSaveCardBottomSheetStrikeLimitIos);

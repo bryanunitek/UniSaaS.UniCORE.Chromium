@@ -4,6 +4,7 @@
 
 module toolbar_ui_api.mojom;
 
+import "components/browser_apis/ui_controllers/toolbar/extensions_bar_data_model.mojom";
 import "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom";
 import "components/browser_apis/ui_controllers/toolbar/icon_handle.mojom";
 import "components/content_settings/core/common/content_settings_types.mojom";
@@ -210,6 +211,14 @@ interface ToolbarUIService {
   // on the home button.
   OnHomeButtonDropText(string text);
 
+  // Navigates the current tab to `url` dropped on the toolbar.
+  OnToolbarDropUrl(url.mojom.Url url);
+
+  // Called when plain text (`text/plain` without `text/uri-list`) is dropped
+  // on the toolbar. Navigates the current tab to the query URL if `text` is a
+  // search query, or to `text` itself if it is a valid URL.
+  OnToolbarDropText(string text);
+
   // Navigates the current tab to the currently dragged file at `drop_position`.
   OnToolbarDropFile(gfx.mojom.PointF drop_position);
 
@@ -231,11 +240,14 @@ interface ToolbarUIService {
   // Called when the app menu button focus state changes.
   OnAppMenuFocusChanged(bool focused);
 
-  // Executes the user action for the extension with the given ID.
-  ExecuteExtensionAction(string extension_id);
+  // Executes the user action for the extensions toolbar button with the given
+  // ID.
+  ExecuteExtensionAction(extensions_bar.mojom.ExtensionActionId id);
 
-  // Displays the context menu for the extension with the given ID.
-  ShowExtensionContextMenu(string extension_id, ui.mojom.MenuSourceType source);
+  // Displays the context menu for the extensions toolbar button with the given
+  // ID.
+  ShowExtensionContextMenu(extensions_bar.mojom.ExtensionActionId id,
+                           ui.mojom.MenuSourceType source);
 
   // Adjusts the copied or dragged text and returns the adjusted text,
   // the adjusted URL, and whether a URL should be written to the payload.
@@ -250,4 +262,7 @@ interface ToolbarUIService {
 
   // Called when the Glic button is clicked to toggle or open the Glic panel.
   OnGlicButtonClicked();
+
+  // Called when the Glic actor task icon is clicked.
+  OnGlicActorTaskIconClicked();
 };

@@ -20,8 +20,10 @@
 #include "components/browser_apis/ui_controllers/bookmark_bar/bookmark_bar_ui_controller_observer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/window_open_disposition_utils.h"
 #include "ui/gfx/geometry/point.h"
+#include "url/url_constants.h"
 
 namespace bookmark_bar_api {
 
@@ -108,44 +110,50 @@ BookmarkBarUIControllerImpl::GetDisplayOptions() {
   return snapshot;
 }
 
-BookmarkBarUIControllerImpl::OpenAppsPageResult
-BookmarkBarUIControllerImpl::OpenAppsPage(
-    ui::mojom::WindowOpenDisposition disposition) {
-  adapters_->action_adapter().OpenAppsPage(disposition);
+BookmarkBarUIControllerImpl::OnAppsShortcutPressedResult
+BookmarkBarUIControllerImpl::OnAppsShortcutPressed(int32_t event_flags) {
+  adapters_->action_adapter().OpenAppsPage(
+      ui::DispositionFromEventFlags(event_flags));
   return std::monostate();
 }
 
-BookmarkBarUIControllerImpl::OpenBookmarkResult
-BookmarkBarUIControllerImpl::OpenBookmark(
-    int64_t node_id,
-    ui::mojom::WindowOpenDisposition disposition) {
+BookmarkBarUIControllerImpl::OnBookmarkPressedResult
+BookmarkBarUIControllerImpl::OnBookmarkPressed(int64_t node_id,
+                                               int32_t event_flags) {
   const bookmarks::BookmarkNode* const node =
       adapters_->model_adapter().GetNodeById(node_id);
-  if (!node) {
+  if (!node || !node->is_url()) {
     return base::unexpected(
         MakeError(mojo_base::mojom::Code::kNotFound, "Bookmark not found"));
+  }
+  const ui::mojom::WindowOpenDisposition disposition =
+      ui::DispositionFromEventFlags(event_flags);
+  // A bookmarklet runs on the current page, so it can't open elsewhere.
+  if (node->url().SchemeIs(url::kJavaScriptScheme) &&
+      disposition != ui::mojom::WindowOpenDisposition::kCurrentTab) {
+    return std::monostate();
   }
   adapters_->action_adapter().OpenBookmark(node, disposition);
   return std::monostate();
 }
 
-BookmarkBarUIControllerImpl::OpenAllInFolderResult
-BookmarkBarUIControllerImpl::OpenAllInFolder(
-    mojom::NodeIdPtr folder,
-    ui::mojom::WindowOpenDisposition disposition) {
+BookmarkBarUIControllerImpl::OnFolderPressedResult
+BookmarkBarUIControllerImpl::OnFolderPressed(mojom::NodeIdPtr folder,
+                                             int32_t event_flags) {
   std::vector<const bookmarks::BookmarkNode*> nodes =
       GetUnderlyingNodes(adapters_->model_adapter(), *folder);
   if (nodes.empty()) {
     return base::unexpected(
         MakeError(mojo_base::mojom::Code::kNotFound, "Folder not found"));
   }
+  const ui::mojom::WindowOpenDisposition disposition =
+      ui::DispositionFromEventFlags(event_flags);
+  if (disposition == ui::mojom::WindowOpenDisposition::kCurrentTab) {
+    adapters_->action_adapter().RecordFolderOpened();
+    NotifyShowFolderMenu(*folder);
+    return std::monostate();
+  }
   adapters_->action_adapter().OpenFolderNodes(nodes, disposition);
-  return std::monostate();
-}
-
-BookmarkBarUIControllerImpl::RecordFolderOpenedResult
-BookmarkBarUIControllerImpl::RecordFolderOpened() {
-  adapters_->action_adapter().RecordFolderOpened();
   return std::monostate();
 }
 
@@ -154,9 +162,8 @@ BookmarkBarUIControllerImpl::ShowContextMenu(
     mojom::NodeIdPtr target,
     const gfx::Point& point,
     ui::mojom::MenuSourceType source_type) {
-  ModelAdapter& model_adapter = adapters_->model_adapter();
   std::vector<const bookmarks::BookmarkNode*> nodes =
-      GetUnderlyingNodes(model_adapter, *target);
+      GetUnderlyingNodes(adapters_->model_adapter(), *target);
   if (nodes.empty()) {
     return base::unexpected(
         MakeError(mojo_base::mojom::Code::kNotFound, "Target not found"));
@@ -164,7 +171,7 @@ BookmarkBarUIControllerImpl::ShowContextMenu(
 
   // The paste check may finish later, so the menu is shown from the callback.
   // The caller doesn't wait for it.
-  model_adapter.CanPasteFromClipboard(
+  adapters_->action_adapter().CanPasteFromClipboard(
       nodes, base::BindOnce(&BookmarkBarUIControllerImpl::OnPasteCheckComplete,
                             weak_ptr_factory_.GetWeakPtr(), std::move(target),
                             point, source_type));
@@ -178,6 +185,16 @@ void BookmarkBarUIControllerImpl::NotifyDisplayOptionsChanged() {
   }
   for (auto& remote : remote_observers_) {
     remote->OnDisplayOptionsChanged(options.Clone());
+  }
+}
+
+void BookmarkBarUIControllerImpl::NotifyShowFolderMenu(
+    const mojom::NodeId& folder) {
+  for (BookmarkBarUIControllerObserver& observer : observers_) {
+    observer.ShowFolderMenu(folder);
+  }
+  for (auto& remote : remote_observers_) {
+    remote->ShowFolderMenu(folder.Clone());
   }
 }
 

@@ -6,7 +6,6 @@
  * #type=style-lit
  * #import=chrome://resources/cr_elements/cr_shared_style_lit.css.js
  * #import=chrome://resources/cr_elements/cr_icons_lit.css.js
- * #scheme=relative
  * #include=cr-shared-style-lit cr-icons-lit
  * #css_wrapper_metadata_end */
 
@@ -542,9 +541,6 @@ ntp-lens-upload-dialog {
 
 #lhsWrapper {
   flex-shrink: 0;
-  /* This is one layer above rhs, so that the tooltips can overflow on top of
-   * rhs. */
-  z-index: 2;
 }
 
 /* The query container for the @container rules above. This can't be

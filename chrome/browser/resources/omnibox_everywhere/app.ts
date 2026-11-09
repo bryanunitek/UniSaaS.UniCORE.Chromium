@@ -196,6 +196,7 @@ export class OmniboxEverywhereAppElement extends
   private omniboxEverywhereListenerIds_: number[] = [];
   private wasJustActivated_ = false;
   private activationTimeoutId_: number|null = null;
+  private impressionRecordedForSession_ = false;
 
   constructor() {
     super();
@@ -210,8 +211,7 @@ export class OmniboxEverywhereAppElement extends
     this.eventTracker_.add(window, 'blur', this.onWindowBlur_.bind(this));
     this.eventTracker_.add(window, 'click', this.onAppClick_.bind(this));
     this.eventTracker_.add(
-        document.documentElement, 'visibilitychange',
-        this.onVisibilitychange_.bind(this));
+        document, 'visibilitychange', this.onVisibilitychange_.bind(this));
     this.eventTracker_.add(
         window, 'keydown', (e: KeyboardEvent) => this.onKeyDown_(e));
     this.setupListeners_();
@@ -233,6 +233,11 @@ export class OmniboxEverywhereAppElement extends
       // focused.
       this.smallLoomnibox_ = this.isPersistentMode_ && !this.isActive_;
     }
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+    this.maybeRecordFreImpression_();
   }
 
   private setupListeners_() {
@@ -287,6 +292,9 @@ export class OmniboxEverywhereAppElement extends
 
     this.searchboxListenerIds_.push(
         this.callbackRouter_.setFreState.addListener((state: FreState) => {
+          if (this.freStage_ !== state.stage) {
+            this.impressionRecordedForSession_ = false;
+          }
           this.freStage_ = state.stage;
           this.hotkeyTokens_ = state.currentHotkeyTokens;
           const freElement =
@@ -320,6 +328,8 @@ export class OmniboxEverywhereAppElement extends
             onOpenComposebox),
         omniboxEverywhereCallbackRouter.onContextMenuClosed.addListener(
             onContextMenuClosed),
+        omniboxEverywhereCallbackRouter.onOverflowMenuClosed.addListener(
+            () => this.searchbox?.onOverflowMenuClosed()),
         omniboxEverywhereCallbackRouter.onScreenshotCaptureCancelled
             .addListener(onScreenshotCaptureCancelled),
     );
@@ -431,6 +441,27 @@ export class OmniboxEverywhereAppElement extends
     return (this.freStage_ === FreStage.kShortcutSetupChin ||
             this.freStage_ === FreStage.kShortcutReminderChin) &&
         !this.isComposeboxMode_;
+  }
+
+  private maybeRecordFreImpression_() {
+    if (this.impressionRecordedForSession_ || !this.isActive_ ||
+        document.visibilityState !== 'visible') {
+      return;
+    }
+    let selector: string|null = null;
+    if (this.isFreIntroModal_()) {
+      selector = 'fre-modal';
+    } else if (this.isFreShortcutSetupChin_()) {
+      selector = '#freShortcutSetupChin';
+    } else if (this.isFreShortcutReminderChin_()) {
+      selector = '#freShortcutReminderChin';
+    }
+    if (!selector || !this.shadowRoot?.querySelector(selector)) {
+      return;
+    }
+    this.impressionRecordedForSession_ = true;
+    SearchboxBrowserProxy.getInstance().handler.recordFreImpression(
+        this.freStage_);
   }
 
   protected isMostVisitedHidden_(): boolean {
@@ -624,6 +655,7 @@ export class OmniboxEverywhereAppElement extends
   private onWindowFocus_() {
     this.isActive_ = true;
     this.focusActiveInput_();
+    this.maybeRecordFreImpression_();
     this.wasJustActivated_ = true;
     if (this.activationTimeoutId_ !== null) {
       clearTimeout(this.activationTimeoutId_);
@@ -666,11 +698,13 @@ export class OmniboxEverywhereAppElement extends
 
   private async onVisibilitychange_() {
     if (document.visibilityState !== 'visible') {
+      this.impressionRecordedForSession_ = false;
       return;
     }
 
     await this.updateComplete;
     this.focusActiveInput_();
+    this.maybeRecordFreImpression_();
   }
 
   // TODO(b/540973063): Extract common voice search lifecycle handling into

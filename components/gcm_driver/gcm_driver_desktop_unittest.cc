@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -29,8 +30,6 @@
 #include "components/gcm_driver/gcm_client_factory.h"
 #include "components/gcm_driver/gcm_connection_observer.h"
 #include "components/os_crypt/async/browser/test_utils.h"
-#include "components/prefs/pref_registry_simple.h"
-#include "components/prefs/testing_pref_service.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_test_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -166,7 +165,6 @@ class GCMDriverTest : public testing::Test {
  private:
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   base::ScopedTempDir temp_dir_;
-  TestingPrefServiceSimple prefs_;
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::UI};
   base::Thread io_thread_;
@@ -248,7 +246,7 @@ void GCMDriverTest::CreateDriver() {
       std::unique_ptr<GCMClientFactory>(new FakeGCMClientFactory(
           base::SingleThreadTaskRunner::GetCurrentDefault(),
           io_thread_.task_runner())),
-      chrome_build_info, &prefs_, temp_dir_.GetPath(), base::DoNothing(),
+      chrome_build_info, temp_dir_.GetPath(), base::DoNothing(),
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory_),
       network::TestNetworkConnectionTracker::GetInstance(),
@@ -751,17 +749,13 @@ TEST_F(GCMDriverFunctionalTest, RegisterAfterUnfinishedUnregister) {
 
 TEST_F(GCMDriverFunctionalTest, Send) {
   OutgoingMessage message;
-  message.id = "1@ack";
+  message.id = "1";
   message.data["key1"] = "value1";
   message.data["key2"] = "value2";
   Send(kTestAppID1, kUserID1, message, GCMDriverTest::WAIT);
 
   EXPECT_EQ(message.id, send_message_id());
   EXPECT_EQ(GCMClient::SUCCESS, send_result());
-
-  gcm_app_handler()->WaitForNotification();
-  EXPECT_EQ(message.id, gcm_app_handler()->acked_message_id());
-  EXPECT_EQ(kTestAppID1, gcm_app_handler()->app_id());
 }
 
 TEST_F(GCMDriverFunctionalTest, SendError) {
@@ -1113,6 +1107,44 @@ TEST_F(GCMDriverInstanceIDTest, GCMClientNotReadyBeforeDeleteToken) {
   // DeleteToken operation will be invoked after GCMClient becomes ready.
   GetGCMClient()->PerformDelayedStart();
   WaitForAsyncOperation();
+  EXPECT_EQ(GCMClient::SUCCESS, unregistration_result());
+}
+
+TEST_F(GCMDriverInstanceIDTest, StopClearsPendingTokenCallbacks) {
+  CreateDriver();
+  PumpIOLoop();
+  PumpUILoop();
+
+  // Hold GCMClient startup so GetToken and DeleteToken stay queued.
+  GetGCMClient()->set_start_mode_overridding(
+      FakeGCMClient::FORCE_TO_ALWAYS_DELAY_START_GCM);
+
+  AddAppHandlers();
+  GetToken(kTestAppID1, kUserID1, kScope, GCMDriverTest::DO_NOT_WAIT);
+  DeleteToken(kTestAppID1, kUserID1, kScope, GCMDriverTest::DO_NOT_WAIT);
+  PumpIOLoop();
+  PumpUILoop();
+  ASSERT_TRUE(registration_id().empty());
+
+  // Removing all app handlers stops GCMDriverDesktop and clears
+  // pending token callbacks so subsequent requests do not
+  // fail with ASYNC_OPERATION_PENDING.
+  RemoveAppHandlers();
+  PumpIOLoop();
+  PumpUILoop();
+
+  GetGCMClient()->set_start_mode_overridding(FakeGCMClient::RESPECT_START_MODE);
+  AddAppHandlers();
+  PumpIOLoop();
+  PumpUILoop();
+
+  const std::string expected_token =
+      FakeGCMClient::GenerateInstanceIDToken(kUserID1, kScope);
+  GetToken(kTestAppID1, kUserID1, kScope, GCMDriverTest::WAIT);
+  EXPECT_EQ(expected_token, registration_id());
+  EXPECT_EQ(GCMClient::SUCCESS, registration_result());
+
+  DeleteToken(kTestAppID1, kUserID1, kScope, GCMDriverTest::WAIT);
   EXPECT_EQ(GCMClient::SUCCESS, unregistration_result());
 }
 

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://contextual-tasks/strings.m.js';
+import 'chrome://webui-test/strings.m.js';
 import 'chrome://resources/cr_components/composebox/file_thumbnail.js';
 
 import type {TabFaviconElement} from 'chrome://resources/cr_components/composebox/composebox_tab_favicon.js';
@@ -421,6 +421,41 @@ function createThumbnailElement(isAndroid: boolean):
       assertEquals(
           (thumbnail as HTMLImageElement).src,
           fileThumbnailElement.file.dataUrl);
+    });
+
+    [{name: 'photo.heic', type: 'image/heic', objectUrl: 'blob:foo'},
+     {name: 'IMG_1234.HEIC', type: 'image/heif', objectUrl: 'blob:foo'},
+     {name: 'photo.HEIF', type: '', objectUrl: 'blob:foo'},
+     {name: 'browser.heic', type: 'image/heic', dataUrl: 'data:image/heic,'},
+    ].forEach(fileOverrides => {
+      const name = fileOverrides.name;
+      test(`display HEIF image ${name} as document chip`, async () => {
+        // Arrange.
+        fileThumbnailElement.file = createFile(1, fileOverrides);
+        await microtasksFinished();
+
+        // Assert the undecodable image is shown as a document chip.
+        assertFalse(
+            !!fileThumbnailElement.shadowRoot.querySelector('.img-thumbnail'));
+        const title =
+            fileThumbnailElement.shadowRoot.querySelector('#documentTitle');
+        assertTrue(!!title);
+        assertEquals(name, title.textContent);
+      });
+    });
+
+    test('display HEIF image with thumbnailUrl as image', async () => {
+      // Arrange.
+      fileThumbnailElement.file = createFile(1, {
+        name: 'photo.heic',
+        type: 'image/heic',
+        thumbnailUrl: 'https://example.com/thumbnail.png',
+      });
+      await microtasksFinished();
+
+      // Assert the server-provided thumbnail is shown.
+      assertTrue(
+          !!fileThumbnailElement.shadowRoot.querySelector('.img-thumbnail'));
     });
 
     test('display video file', async () => {

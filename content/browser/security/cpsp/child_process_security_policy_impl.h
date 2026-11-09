@@ -313,7 +313,8 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // citadel checks which require UI thread data structures.
   bool CanCommitNewOrigin(ChildProcessId child_id, const url::Origin& origin);
 
-  // Helper for CanCommitNewOrigin() and CanCommitURL().
+  // Helper for CanCommitNewOrigin() and CanCommitURL(). Must be called on the
+  // UI thread.
   bool CanCommitMaybeOpaqueNewOrigin(ChildProcessId child_id,
                                      const GURL& url,
                                      bool url_is_precursor_of_opaque_origin);
@@ -337,6 +338,7 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // handlers. Used primarily as a helper for CanCommitOriginAndUrl and thus not
   // exposed publicly.
   bool CanCommitURL(ChildProcessId child_id, const GURL& url);
+  bool CanCommitURL_Cpp(ChildProcessId child_id, const GURL& url);
   // TODO(crbug.com/379869738): Remove this method when usages are ported.
   bool CanCommitURL(int child_id, const GURL& url);
 
@@ -643,22 +645,18 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
 
   // Notifies process state of |child_id| about the IsolationContext it will
   // host.  The main side effect is proper setting of the lowest
-  // BrowsingInstanceId associated with the process state.
+  // BrowsingInstanceId associated with the process state. Must be called after
+  // LockProcess() has assigned a valid ProcessLock to the process.
   void IncludeIsolationContext(int child_id,
                                const IsolationContext& isolation_context);
 
   // Sets the process identified by |child_id| as only permitted to access data
-  // for the origin specified by |site_info|'s process_lock_url(). Most callers
+  // for the origin specified by |process_lock|. Most callers
   // should use RenderProcessHostImpl::SetProcessLock instead of calling this
-  // directly. |isolation_context| provides the context, such as
-  // BrowsingInstance, from which this process locked was created. This
-  // information is used when making isolation decisions for this process, such
-  // as determining which isolated origins pertain to it.
-  void LockProcess(const IsolationContext& isolation_context,
-                   ChildProcessId child_id,
-                   const ProcessLock& process_lock);
-  void LockProcess_Cpp(const IsolationContext& isolation_context,
-                       ChildProcessId child_id,
+  // directly. Call IncludeIsolationContext() separately to track the
+  // BrowsingInstances using this process.
+  void LockProcess(ChildProcessId child_id, const ProcessLock& process_lock);
+  void LockProcess_Cpp(ChildProcessId child_id,
                        const ProcessLock& process_lock);
 
   // Marks the process identified by |child_id| as "used", meaning that it has
@@ -812,6 +810,7 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // This might need to be revisited in the future if the list of committed
   // origins grows too large.
   void AddCommittedOrigin(int child_id, const url::Origin& origin);
+  void AddCommittedOrigin_Cpp(int child_id, const url::Origin& origin);
 
   // Allows tests to modify the delay in cleaning up BrowsingInstanceIds. If the
   // delay is set to zero, cleanup happens immediately.
@@ -836,10 +835,14 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   bool MatchesCommittedOriginForTesting(ChildProcessId child_id,
                                         const GURL& url,
                                         bool url_is_for_precursor_origin);
+  bool MatchesCommittedOriginForTesting_Cpp(ChildProcessId child_id,
+                                            const GURL& url,
+                                            bool url_is_for_precursor_origin);
 
   // Returns the number of committed origins tracked for the process
   // `child_id`, or 0 if the process isn't found.
   size_t GetCommittedOriginCountForTesting(ChildProcessId child_id);
+  size_t GetCommittedOriginCountForTesting_Cpp(ChildProcessId child_id);
 
   // Exposes LookupOriginAgentClusterState() for tests.
   std::optional<OriginAgentClusterIsolationState>

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {html} from '//resources/lit/v3_0/lit.rollup.js';
+import {html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {LeftHandSideElement} from './left_hand_side.js';
 
@@ -13,20 +13,25 @@ export function getHtml(this: LeftHandSideElement) {
       ? html`<cr-threads-rail id="folded"
                  ?hidden="${this.isExpandedReady_ && this.isExpanded_}"
                  @expand-rail="${this.onExpandRail_}"
-                 @click="${this.onFoldedClick_}">
+                 @click="${this.onFoldedClick_}"
+                 @pointerenter="${this.onFoldedPointerenter_}"
+                 @pointerleave="${this.onFoldedPointerleave_}"
+                 @focusin="${this.onFoldedFocusin_}"
+                 @focusout="${this.onFoldedFocusout_}">
              </cr-threads-rail>`
       : ''}
-  <ntp-iframe id="expanded"
-      class="${this.isExpandedReady_ ? 'ready' : ''}"
-      allow="unbounded-element"
-      style="${this.enableThreadsRailHybrid_
-                 ? `width: ${this.expandedWidth_}px;`
-                 : ''}"
-      src="${this.expandedLhsUrl_}"
-      ?inert="${!this.isExpandedReady_}"
-      ?hidden="${this.enableThreadsRailHybrid_ &&
-                 (!this.isExpandedReady_ || !this.isExpanded_)}">
-  </ntp-iframe>
+  ${!this.enableThreadsRailHybrid_ || this.hasPreloaded_
+      ? html`<ntp-iframe id="expanded"
+            class="${this.isExpandedReady_ ? 'ready' : ''}"
+            allow="clipboard-write; unbounded-element"
+            style="${this.enableThreadsRailHybrid_
+                       ? `width: ${this.expandedWidth_}px;`
+                       : ''}"
+            src="${this.expandedLhsUrl_}"
+            ?hidden="${!this.isExpandedReady_ ||
+                       (this.enableThreadsRailHybrid_ && !this.isExpanded_)}">
+        </ntp-iframe>`
+      : ''}
   <!--_html_template_end_-->`;
   // clang-format on
 }

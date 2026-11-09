@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_actuation_handler.h"
 
+#import <UIKit/UIKit.h>
 #import <stdint.h>
 
 #import <memory>
@@ -28,6 +29,7 @@
 #import "components/sessions/core/session_id.h"
 #import "components/ttc/app/public/tool_types.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_actuation_data_types.h"
+#import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_tool_definitions.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/tools/ttc_tool_validator.h"
 #import "ios/chrome/browser/ai_prototyping/ttc/model/ttc_journal.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_browser_agent.h"
@@ -38,37 +40,73 @@
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/chrome/browser/intelligence/actor/tools/utils/actor_browser_utils.h"
 #import "ios/chrome/browser/intelligence/actor/tools/utils/actor_tool_utils.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/browser_util.h"
+#import "ios/chrome/browser/tab_insertion/model/tab_insertion_browser_agent.h"
 #import "ios/web/public/browser_state.h"
+#import "ios/web/public/navigation/navigation_manager.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_id.h"
+#import "url/gurl.h"
 
 namespace {
+
+// Journal event name for tool actuation execution.
+constexpr char kActuationExecuteEventName[] = "ActuationExecute";
+
+// Fraction of the active viewport dimension scrolled for `"page"` granularity.
+constexpr float kPageScrollViewportFraction = 0.8f;
 
 // Internal title used when creating the session's Actor task; not surfaced in
 // user-facing UI.
 constexpr char kTtcTaskTitle[] = "TTC Session";
 
-// Returns the `SessionID` of the regular `Browser` owning `web_state`, or an
-// invalid `SessionID` if `web_state` is not attached to a regular browser.
-SessionID GetBrowserIdForWebState(web::WebState* web_state) {
+// Argument key for the target URL in `open_url`.
+constexpr char kUrlKey[] = "url";
+
+// Returns the regular `Browser` owning `web_state`, or `nullptr` if
+// `web_state` is null or not attached to a regular browser.
+Browser* GetBrowserForWebState(web::WebState* web_state) {
   if (!web_state) {
-    return SessionID::InvalidValue();
+    return nullptr;
   }
   ProfileIOS* profile =
       ProfileIOS::FromBrowserState(web_state->GetBrowserState());
   if (!profile) {
-    return SessionID::InvalidValue();
+    return nullptr;
   }
   BrowserAndIndex browser_and_index = actor::FindBrowserAndIndexFromProfile(
       profile, web_state->GetUniqueIdentifier(), /*include_incognito=*/false);
-  if (!browser_and_index.browser) {
+  return browser_and_index.browser;
+}
+
+// Resolves the regular `Browser` to target from `browser`, falling back to the
+// regular `Browser` owning `target_web_state`. Returns `nullptr` if neither
+// identifies a regular browser.
+Browser* ResolveRegularBrowser(Browser* browser,
+                               web::WebState* target_web_state) {
+  if (browser && browser->type() == Browser::Type::kRegular) {
+    return browser;
+  }
+  return GetBrowserForWebState(target_web_state);
+}
+
+// Returns the `SessionID` of `browser` when it is a regular `Browser` with an
+// attached `ActorBrowserAgent`, or an invalid `SessionID` otherwise.
+SessionID GetBrowserId(Browser* browser) {
+  if (!browser || browser->type() != Browser::Type::kRegular) {
     return SessionID::InvalidValue();
   }
-  ActorBrowserAgent* agent =
-      ActorBrowserAgent::FromBrowser(browser_and_index.browser);
+  ActorBrowserAgent* agent = ActorBrowserAgent::FromBrowser(browser);
   return agent ? agent->browser_id() : SessionID::InvalidValue();
+}
+
+// Returns whether `action` requires a non-null `target_web_state` when
+// dispatched through TTC.
+bool ActionRequiresTargetWebState(
+    const optimization_guide::proto::Action& action) {
+  return action.action_case() != optimization_guide::proto::Action::kCreateTab;
 }
 
 // Sets `tab_id` on `sub_action` if not already explicitly populated.
@@ -79,11 +117,13 @@ void SetTabIdIfUnset(SubAction* sub_action, int32_t tab_id) {
   }
 }
 
-// Injects the current tab and window ID into the given action proto if not
-// already explicitly specified by the action.
+// Injects the current tab ID, window ID, and viewport-derived scroll distance
+// into `action` if not already explicitly specified by the action.
 void InjectDataIntoAction(optimization_guide::proto::Action& action,
-                          web::WebStateID web_state_id,
+                          web::WebState* web_state,
                           SessionID window_id) {
+  web::WebStateID web_state_id =
+      web_state ? web_state->GetUniqueIdentifier() : web::WebStateID();
   if (web_state_id.valid()) {
     int32_t tab_id = web_state_id.identifier();
     switch (action.action_case()) {
@@ -113,9 +153,31 @@ void InjectDataIntoAction(optimization_guide::proto::Action& action,
           action.mutable_wait()->set_observe_tab_id(tab_id);
         }
         break;
-      case optimization_guide::proto::Action::kScroll:
-        SetTabIdIfUnset(action.mutable_scroll(), tab_id);
+      case optimization_guide::proto::Action::kScroll: {
+        optimization_guide::proto::ScrollAction* scroll_action =
+            action.mutable_scroll();
+        SetTabIdIfUnset(scroll_action, tab_id);
+        // When `scroll_page` uses `"page"` granularity, `TtcToolValidator`
+        // leaves `distance` unset so it can be computed from 80% of the active
+        // viewport dimension. If the view is unattached or zero-sized,
+        // `distance` is left unset so `ScrollTool::Validate` rejects the
+        // action with `kArgumentsInvalid`.
+        if (!scroll_action->has_distance()) {
+          const CGSize viewport_size = web_state->GetView().bounds.size;
+          const optimization_guide::proto::ScrollAction::ScrollDirection dir =
+              scroll_action->direction();
+          const CGFloat dimension =
+              (dir == optimization_guide::proto::ScrollAction::LEFT ||
+               dir == optimization_guide::proto::ScrollAction::RIGHT)
+                  ? viewport_size.width
+                  : viewport_size.height;
+          if (dimension > 0.0) {
+            scroll_action->set_distance(static_cast<float>(dimension) *
+                                        kPageScrollViewportFraction);
+          }
+        }
         break;
+      }
       case optimization_guide::proto::Action::kScrollTo:
         SetTabIdIfUnset(action.mutable_scroll_to(), tab_id);
         break;
@@ -218,6 +280,12 @@ void TtcActuationHandler::set_journal(TTCJournal* journal) {
   journal_ = journal ? journal->GetWeakPtr() : nullptr;
 }
 
+void TtcActuationHandler::SetCloseSessionCallback(
+    base::RepeatingClosure callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  close_session_callback_ = std::move(callback);
+}
+
 #pragma mark - Teardown
 
 void TtcActuationHandler::Disconnect() {
@@ -226,6 +294,7 @@ void TtcActuationHandler::Disconnect() {
   weak_ptr_factory_.InvalidateWeakPtrs();
   TtcTaskInterventionHandler* intervention_delegate =
       std::exchange(intervention_delegate_, nil);
+  close_session_callback_.Reset();
 
   actor::ActorTaskId task_id = std::exchange(task_id_, actor::ActorTaskId());
   actor::ActorService* actor_service = std::exchange(actor_service_, nullptr);
@@ -250,10 +319,22 @@ void TtcActuationHandler::Disconnect() {
 #pragma mark - Public Actuation
 
 void TtcActuationHandler::ProcessToolCall(const ttc::ToolRequest& tool_request,
-                                          web::WebState* active_web_state,
+                                          web::WebState* target_web_state,
+                                          Browser* browser,
                                           ActuationCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(callback);
+
+  if (tool_request.name == ttc::kToolCloseSession) {
+    CloseSession(std::move(callback));
+    return;
+  }
+
+  if (TtcToolValidator::IsOpenUrlInNewTab(tool_request)) {
+    OpenUrlInNewTab(tool_request, target_web_state, browser,
+                    std::move(callback));
+    return;
+  }
 
   auto request = TtcToolValidator::CreateActuationRequest(tool_request);
   if (!request.has_value()) {
@@ -265,12 +346,14 @@ void TtcActuationHandler::ProcessToolCall(const ttc::ToolRequest& tool_request,
     return;
   }
 
-  DispatchActuationRequest(*request, active_web_state, std::move(callback));
+  DispatchActuationRequest(*request, target_web_state, browser,
+                           std::move(callback));
 }
 
 void TtcActuationHandler::DispatchActuationRequest(
     const TtcActuationRequest& request,
-    web::WebState* active_web_state,
+    web::WebState* target_web_state,
+    Browser* browser,
     ActuationCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(callback);
@@ -281,12 +364,13 @@ void TtcActuationHandler::DispatchActuationRequest(
     return;
   }
 
-  web::BrowserState* browser_state =
-      active_web_state ? active_web_state->GetBrowserState() : nullptr;
-  if (!browser_state || browser_state->IsOffTheRecord()) {
-    FailWithError(std::move(callback),
-                  actor::mojom::ActionResultCode::kTabWentAway);
-    return;
+  if (target_web_state) {
+    web::BrowserState* browser_state = target_web_state->GetBrowserState();
+    if (!browser_state || browser_state->IsOffTheRecord()) {
+      FailWithError(std::move(callback),
+                    actor::mojom::ActionResultCode::kTabWentAway);
+      return;
+    }
   }
 
   if (request.action_protos.empty()) {
@@ -302,8 +386,8 @@ void TtcActuationHandler::DispatchActuationRequest(
     return;
   }
 
-  web::WebStateID web_state_id = active_web_state->GetUniqueIdentifier();
-  SessionID window_id = GetBrowserIdForWebState(active_web_state);
+  SessionID window_id =
+      GetBrowserId(ResolveRegularBrowser(browser, target_web_state));
   std::vector<optimization_guide::proto::Action> actions;
   actions.reserve(request.action_protos.size());
 
@@ -314,23 +398,25 @@ void TtcActuationHandler::DispatchActuationRequest(
                     actor::mojom::ActionResultCode::kArgumentsInvalid);
       return;
     }
-    InjectDataIntoAction(action, web_state_id, window_id);
+    if (!target_web_state && ActionRequiresTargetWebState(action)) {
+      FailWithError(std::move(callback),
+                    actor::mojom::ActionResultCode::kTabWentAway);
+      return;
+    }
+    InjectDataIntoAction(action, target_web_state, window_id);
+    if (action.action_case() == optimization_guide::proto::Action::kCreateTab &&
+        !action.create_tab().has_window_id()) {
+      FailWithError(std::move(callback),
+                    actor::mojom::ActionResultCode::kWindowWentAway);
+      return;
+    }
     actions.push_back(std::move(action));
   }
 
-  if (task_id_.is_null()) {
-    task_id_ = actor_service_->CreateTask(
-        kTtcTaskTitle,
-        actor::TaskSourceInfo(actor::TaskSourceInfo::Client::kTtc,
-                              /*id=*/std::nullopt),
-        /*allow_incognito_web_states=*/false);
-    if (task_id_.is_null()) {
-      FailWithError(std::move(callback),
-                    actor::mojom::ActionResultCode::kTaskWentAway);
-      return;
-    }
-    actor_service_->SetTaskInterventionDelegate(task_id_,
-                                                intervention_delegate_);
+  if (!EnsureTaskCreated()) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kTaskWentAway);
+    return;
   }
 
   active_callback_ = std::move(callback);
@@ -338,6 +424,7 @@ void TtcActuationHandler::DispatchActuationRequest(
 
   actor_service_->PerformActions(
       task_id_, std::move(actions), request.task_update,
+      /*added_writable_mainframe_origins=*/{},
       base::BindOnce(&TtcActuationHandler::OnPerformActionsFinished,
                      weak_ptr_factory_.GetWeakPtr(), task_id_));
 }
@@ -360,6 +447,141 @@ void TtcActuationHandler::StopTask(actor::ActorTaskStoppedReason reason) {
 }
 
 #pragma mark - Private
+
+bool TtcActuationHandler::EnsureTaskCreated() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!actor_service_) {
+    return false;
+  }
+  if (task_id_.is_null()) {
+    task_id_ = actor_service_->CreateTask(
+        kTtcTaskTitle,
+        actor::TaskSourceInfo(actor::TaskSourceInfo::Client::kTtc,
+                              /*id=*/std::nullopt),
+        /*allow_incognito_web_states=*/false);
+    if (task_id_.is_null()) {
+      return false;
+    }
+    actor_service_->SetTaskInterventionDelegate(task_id_,
+                                                intervention_delegate_);
+  }
+  return true;
+}
+
+void TtcActuationHandler::CloseSession(ActuationCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!close_session_callback_) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kExecutorDestroyed);
+    return;
+  }
+  std::unique_ptr<TTCJournal::PendingAsyncEntry> async_entry;
+  if (journal_) {
+    async_entry = journal_->BeginAsyncEvent(
+        TTCJournalComponent::kActuation, kActuationExecuteEventName,
+        TTCJournalDetailsBuilder()
+            .SetSummary(
+                base::StrCat({"Tool started: ", ttc::kToolCloseSession}))
+            .Build());
+  }
+  EndActuationAsyncEntry(std::move(async_entry),
+                         actor::mojom::ActionResultCode::kOk,
+                         /*error_message=*/{});
+  // Guard with `weak_this` in case the caller tears down or disconnects
+  // `this` during the synchronous tool response.
+  base::WeakPtr<TtcActuationHandler> weak_this = weak_ptr_factory_.GetWeakPtr();
+  std::move(callback).Run(ttc::ToolResponse::Success());
+  if (weak_this && weak_this->close_session_callback_) {
+    weak_this->close_session_callback_.Run();
+  }
+}
+
+void TtcActuationHandler::OpenUrlInNewTab(const ttc::ToolRequest& tool_request,
+                                          web::WebState* target_web_state,
+                                          Browser* browser,
+                                          ActuationCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::expected<void, std::string> validation =
+      TtcToolValidator::ValidateToolCall(tool_request);
+  if (!validation.has_value()) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kArgumentsInvalid,
+                  validation.error());
+    return;
+  }
+
+  if (!actor_service_) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kTaskWentAway);
+    return;
+  }
+
+  if (target_web_state) {
+    web::BrowserState* browser_state = target_web_state->GetBrowserState();
+    if (!browser_state || browser_state->IsOffTheRecord()) {
+      FailWithError(std::move(callback),
+                    actor::mojom::ActionResultCode::kTabWentAway);
+      return;
+    }
+  }
+
+  if (active_callback_) {
+    FailWithError(
+        std::move(callback),
+        actor::mojom::ActionResultCode::kExecutionEngineExistingAction);
+    return;
+  }
+
+  Browser* resolved_browser = ResolveRegularBrowser(browser, target_web_state);
+  TabInsertionBrowserAgent* insertion_agent =
+      resolved_browser ? TabInsertionBrowserAgent::FromBrowser(resolved_browser)
+                       : nullptr;
+  if (!insertion_agent) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kWindowWentAway);
+    return;
+  }
+
+  if (!EnsureTaskCreated()) {
+    FailWithError(std::move(callback),
+                  actor::mojom::ActionResultCode::kTaskWentAway);
+    return;
+  }
+
+  std::unique_ptr<TTCJournal::PendingAsyncEntry> async_entry;
+  if (journal_) {
+    async_entry = journal_->BeginAsyncEvent(
+        TTCJournalComponent::kActuation, kActuationExecuteEventName,
+        TTCJournalDetailsBuilder()
+            .SetSummary(base::StrCat({"Tool started: ", ttc::kToolOpenUrl}))
+            .Add("task_id", task_id_.value())
+            .Build());
+  }
+
+  const std::string* url_string = tool_request.arguments.FindString(kUrlKey);
+  web::NavigationManager::WebLoadParams load_params(
+      GURL(url_string ? *url_string : std::string()));
+  TabInsertion::Params insertion_params;
+  insertion_params.in_background = false;
+  insertion_params.parent = target_web_state;
+  web::WebState* new_web_state =
+      insertion_agent->InsertWebState(load_params, insertion_params);
+  if (!new_web_state) {
+    EndActuationAsyncEntry(
+        std::move(async_entry),
+        actor::mojom::ActionResultCode::kNewTabCreationFailed,
+        /*error_message=*/{});
+    std::move(callback).Run(ttc::ToolResponse::Error(
+        actor::mojom::ActionResultCode::kNewTabCreationFailed));
+    return;
+  }
+
+  actor_service_->AddControlledWebState(task_id_, new_web_state);
+  EndActuationAsyncEntry(std::move(async_entry),
+                         actor::mojom::ActionResultCode::kOk,
+                         /*error_message=*/{});
+  std::move(callback).Run(ttc::ToolResponse::Success());
+}
 
 void TtcActuationHandler::OnPerformActionsFinished(
     actor::ActorTaskId task_id,
@@ -394,9 +616,10 @@ void TtcActuationHandler::OnPerformActionsFinished(
 
   EndActuationAsyncEntry(std::move(async_entry), result_code, error_message);
 
-  std::move(callback).Run(result_code == actor::mojom::ActionResultCode::kOk
-                              ? ttc::ToolResponse::Success()
-                              : ttc::ToolResponse::Error(result_code));
+  std::move(callback).Run(
+      result_code == actor::mojom::ActionResultCode::kOk
+          ? ttc::ToolResponse::Success()
+          : ttc::ToolResponse::Error(result_code, std::move(error_message)));
 }
 
 #pragma mark - Journal Logging
@@ -416,7 +639,7 @@ void TtcActuationHandler::FailWithError(ActuationCallback callback,
                            .AddError(error)
                            .Build());
   }
-  std::move(callback).Run(ttc::ToolResponse::Error(code));
+  std::move(callback).Run(ttc::ToolResponse::Error(code, std::string(reason)));
 }
 
 std::unique_ptr<TTCJournal::PendingAsyncEntry>
@@ -435,7 +658,7 @@ TtcActuationHandler::BeginActuationAsyncEntry(
   }
   std::string joined_names = base::JoinString(action_names, ", ");
   return journal_->BeginAsyncEvent(
-      TTCJournalComponent::kActuation, "ActuationExecute",
+      TTCJournalComponent::kActuation, kActuationExecuteEventName,
       TTCJournalDetailsBuilder()
           .SetSummary(base::StrCat({"Tool started: ", joined_names}))
           .Add("task_id", task_id_.value())
@@ -494,6 +717,10 @@ void TtcActuationHandler::OnTaskStopped(actor::ActorTaskId task_id) {
             (void (^)(ActorFormSuggestion* selectedSuggestion,
                       BOOL shouldStorePermission))completionHandler {
   completionHandler(suggestions.firstObject, NO);
+}
+
+- (void)actorTaskDidCancelSuggestionSelection:(actor::ActorTaskId)taskID {
+  // No-op: suggestions are selected synchronously, so none is ever pending.
 }
 
 - (void)actorTask:(actor::ActorTaskId)taskID

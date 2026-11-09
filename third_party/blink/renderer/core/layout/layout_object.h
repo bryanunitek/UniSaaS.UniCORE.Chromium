@@ -3118,6 +3118,15 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
       SetShouldCheckForPaintInvalidation();
       layout_object_.SetShouldDoFullPaintInvalidation(reason);
     }
+    void SetSubtreeShouldDoFullPaintInvalidation(
+        PaintInvalidationReason reason = PaintInvalidationReason::kSubtree) {
+      DCHECK_EQ(layout_object_.GetDocument().Lifecycle().GetState(),
+                DocumentLifecycle::kInPrePaint);
+      // Avoid marking ancestors for paint invalidation; see
+      // SetShouldDoFullPaintInvalidation() above.
+      SetShouldCheckForPaintInvalidation();
+      layout_object_.SetSubtreeShouldDoFullPaintInvalidation(reason);
+    }
     void SetShouldDoFullPaintInvalidationWithoutLayoutChange(
         PaintInvalidationReason reason) {
       DCHECK_EQ(layout_object_.GetDocument().Lifecycle().GetState(),
@@ -3662,15 +3671,6 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
     svg_descendant_may_have_transform_related_operations_ = false;
   }
 
-  void SetHasValidCachedGeometry(bool b) {
-    NOT_DESTROYED();
-    has_valid_cached_geometry_ = b;
-  }
-  bool HasValidCachedGeometry() const {
-    NOT_DESTROYED();
-    return has_valid_cached_geometry_;
-  }
-
   bool HavePhysicalFragmentsChanged() const {
     NOT_DESTROYED();
     DCHECK(IsBox());
@@ -4053,11 +4053,6 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   // layout results, by reading out the post-layout results from the children.
   unsigned has_broken_spine_ : 1 = false;
 
-  // True if LayoutBox::frame_size_ has the latest value computed from its
-  // physical fragments.
-  // This is set to false when LayoutBox::layout_results_ is updated.
-  unsigned has_valid_cached_geometry_ : 1 = false;
-
   // For LayoutBox, true if the physical fragments might be different from
   // previous_layout_results_. Cleared when previous fragments are saved.
   unsigned have_physical_fragments_changed_ : 1 = false;
@@ -4108,7 +4103,6 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   }
 
  private:
-  friend class LineLayoutItem;
   friend class LocalFrameView;
 
   Member<const ComputedStyle> style_;

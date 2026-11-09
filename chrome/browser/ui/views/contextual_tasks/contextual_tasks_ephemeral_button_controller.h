@@ -80,6 +80,12 @@ class ContextualTasksEphemeralButtonController
   // AimEligibilityService observation:
   void OnAimEligibilityResponseChanged();
 
+  // EntryPointEligibilityManager observation. Under Pinning V2, losing
+  // entry point eligibility (e.g. the default search engine changes) hides the
+  // ephemeral button for every task instead of leaving a thread-state button
+  // behind until navigation, auto-dismiss, or tab close.
+  void OnEntryPointEligibilityChanged(bool is_eligible);
+
   // SidePanelEntryObserver override:
   void OnEntryShown(SidePanelEntry* entry) override;
   void OnEntryWillHide(SidePanelEntry* entry,
@@ -152,6 +158,10 @@ class ContextualTasksEphemeralButtonController
   void OnSidePanelAlignmentChanged();
   void MaybeNotifyVisibilityShouldChange();
   void RecordTaskOpenClickCounts(const OpenSidePanelSessionCounts& counts);
+  // Shows the ephemeral button toast if the button is still visible in its
+  // collapsed state. Posted from MaybeNotifyVisibilityShouldChange() under the
+  // pin button refactor so the popped-out action has been laid out first.
+  void MaybeShowEphemeralButtonPromo();
   void FlushOpenClickCounts(bool flush_all);
   void UpdatePinnedButtonActiveIndicator();
   void UpdatePinButtonTooltip();
@@ -204,6 +214,7 @@ class ContextualTasksEphemeralButtonController
   base::CallbackListSubscription tab_change_subscription_;
   base::CallbackListSubscription tab_discard_subscription_;
   base::CallbackListSubscription aim_eligibility_service_subscription_;
+  base::CallbackListSubscription entry_point_eligibility_subscription_;
   ui::ScopedUnownedUserData<ContextualTasksEphemeralButtonController>
       scoped_unowned_user_data_;
   base::ScopedObservation<contextual_tasks::ContextualTasksService,

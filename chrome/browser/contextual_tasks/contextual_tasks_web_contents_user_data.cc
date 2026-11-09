@@ -34,6 +34,7 @@
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/contextual_search/desktop_query_contextualizer_delegate.h"
+#include "components/contextual_search/contextual_search_metrics_recorder.h"
 #include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/contextual_search/contextual_search_types.h"
@@ -62,6 +63,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
 #include "third_party/lens_server_proto/search_communication.pb.h"
+#include "third_party/omnibox_proto/input_type.pb.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -256,6 +258,19 @@ bool IsCommittedResourceActive(
          !session_handle.IsTabDeselected(*resource.tab_id, resource.url, title);
 }
 
+// Returns the serialized `OnContextStateChanged` message for the initial
+// `CONTEXT_STATE_NONE` state (with empty `input_types`). Pre-initializing
+// `last_sent_context_state_serialized` to these bytes preserves the behavior of
+// not sending a redundant `CONTEXT_STATE_NONE` message on initial handshake
+// when no context was added (`set_context_state(CONTEXT_STATE_NONE)` serializes
+// to non-empty bytes under Protobuf Edition 2024 explicit presence).
+std::string SerializeDefaultContextState() {
+  lens::ClientToSearchMessage::OnContextStateChanged state_changed;
+  state_changed.set_context_state(
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_NONE);
+  return state_changed.SerializeAsString();
+}
+
 }  // namespace
 
 ContextualTasksWebContentsUserData::ExtensionFrameInfo::ExtensionFrameInfo() =
@@ -312,8 +327,15 @@ struct ContextualTasksWebContentsUserData::PageSearchState
   bool context_library_is_active = false;
   bool tab_picker_is_active = false;
   bool is_zero_state = false;
+  // Whether `is_zero_state` reflects a known state, i.e. the page has reported
+  // its state via `OnPageChanged()` or a query was submitted since the page
+  // connected or the input plate was last cleared.
+  bool has_known_page_state = false;
   std::vector<contextual_tasks::UrlResource> committed_url_resources;
+  bool server_supports_tabs = true;
   ContextState last_sent_context_state = ContextState::kNone;
+  std::string last_sent_context_state_serialized =
+      SerializeDefaultContextState();
   std::string last_sent_suggest_inputs_serialized;
 
   PAGE_USER_DATA_KEY_DECL();
@@ -359,6 +381,23 @@ ContextualTasksWebContentsUserData::ContextualTasksWebContentsUserData(
                           base::Unretained(this)));
   MaybeRefreshTabContextSubscription(helper->session_handle());
 }
+
+ContextualTasksWebContentsUserData::PendingSubmit::PendingSubmit(
+    std::string query_text,
+    std::vector<lens::AddedContext> lens_added_contexts,
+    std::optional<base::UnguessableToken> overlay_token)
+    : query_text(std::move(query_text)),
+      lens_added_contexts(std::move(lens_added_contexts)),
+      overlay_token(overlay_token) {}
+
+ContextualTasksWebContentsUserData::PendingSubmit::PendingSubmit(
+    PendingSubmit&&) noexcept = default;
+
+ContextualTasksWebContentsUserData::PendingSubmit&
+ContextualTasksWebContentsUserData::PendingSubmit::operator=(
+    PendingSubmit&&) noexcept = default;
+
+ContextualTasksWebContentsUserData::PendingSubmit::~PendingSubmit() = default;
 
 ContextualTasksWebContentsUserData::~ContextualTasksWebContentsUserData() {
   if (observed_controller_) {
@@ -583,8 +622,12 @@ void ContextualTasksWebContentsUserData::OnDocumentConnected(
   page_state.context_library_is_active = false;
   page_state.tab_picker_is_active = false;
   page_state.is_zero_state = false;
+  page_state.has_known_page_state = false;
   page_state.committed_url_resources.clear();
+  page_state.server_supports_tabs = true;
   page_state.last_sent_context_state = ContextState::kNone;
+  page_state.last_sent_context_state_serialized =
+      SerializeDefaultContextState();
   page_state.last_sent_suggest_inputs_serialized.clear();
   page_state.connected_document_id = doc_id;
   page_state.service_worker_post_message_cb = std::move(post_message_cb);
@@ -627,6 +670,15 @@ ContextualTasksWebContentsUserData::GetConnectedDocumentIdForTesting() const {
   return page_state ? page_state->connected_document_id : base::EmptyString();
 }
 
+ContextualTasksWebContentsUserData::PageState
+ContextualTasksWebContentsUserData::GetPageState() const {
+  const auto* page_state = GetPrimaryPageSearchState();
+  if (!page_state || !page_state->has_known_page_state) {
+    return PageState::kUnknown;
+  }
+  return page_state->is_zero_state ? PageState::kZeroState : PageState::kThread;
+}
+
 ContextualTasksWebContentsUserData::PageSearchDebugState
 ContextualTasksWebContentsUserData::GetPageSearchDebugState() const {
   PageSearchDebugState debug_state;
@@ -657,11 +709,37 @@ bool ContextualTasksWebContentsUserData::OnSearchMessageReceived(
 
   switch (search_to_client_message.event_message_case()) {
     case lens::SearchToClientMessage::kHandshakeResponse: {
-      int32_t raw_auth_index =
-          search_to_client_message.handshake_response().auth_user_index();
+      const auto& handshake_response =
+          search_to_client_message.handshake_response();
+      int32_t raw_auth_index = handshake_response.auth_user_index();
       size_t auth_user_index = static_cast<size_t>(std::max(0, raw_auth_index));
       if (auto* session_handle = GetOrCreateContextualSessionHandle()) {
         session_handle->set_auth_user_index(auth_user_index);
+      }
+      auto& page_state = GetPrimaryPageSearchState();
+      // Before the server rolls out `HandshakeResponse.capabilities`, it sends
+      // an empty capabilities list and unconditionally enables tabs integration
+      // when `Chrome-Search-Capabilities-Version` is present, so `TABS` is
+      // assumed to be supported. Once rolled out, the side panel response
+      // always includes `LENS`, indicating the server supports capabilities and
+      // intentionally may omit `TABS`.
+      // TODO(crbug.com/533072697): Remove the interim `LENS` capability check
+      // once the server fully rolls out `HandshakeResponse.capabilities` and
+      // check `TABS` directly.
+      bool has_lens_capability = false;
+      bool has_tabs_capability = false;
+      for (int capability : handshake_response.capabilities()) {
+        has_lens_capability |=
+            capability == lens::SearchToClientMessage::HandshakeResponse::LENS;
+        has_tabs_capability |=
+            capability == lens::SearchToClientMessage::HandshakeResponse::TABS;
+      }
+      page_state.server_supports_tabs =
+          !has_lens_capability || has_tabs_capability;
+      if (!page_state.server_supports_tabs) {
+        RemoveImplicitTabContext();
+        UpdateContextLibraryInputState();
+        RefreshActiveTaskContext();
       }
       OnHandshakeComplete();
       return true;
@@ -794,6 +872,7 @@ void ContextualTasksWebContentsUserData::UpdateContextLibraryInputState() {
   }
   UpdateContextState();
   UpdateSuggestInputs();
+  MaybeFinishPendingSubmit();
 }
 
 bool ContextualTasksWebContentsUserData::HasContextLibraryTabs() {
@@ -805,10 +884,19 @@ bool ContextualTasksWebContentsUserData::HasContextLibraryTabs() {
   return !tab_context.attached.empty() || !tab_context.restored.empty();
 }
 
-bool ContextualTasksWebContentsUserData::ShouldMountContextLibrary() {
+bool ContextualTasksWebContentsUserData::CanShareTabsForCurrentPage() {
   Profile* profile =
       Profile::FromBrowserContext(GetWebContents().GetBrowserContext());
   if (!CanShareTabContext(profile)) {
+    return false;
+  }
+  const auto* page_state =
+      PageSearchState::GetForPage(GetWebContents().GetPrimaryPage());
+  return !page_state || page_state->server_supports_tabs;
+}
+
+bool ContextualTasksWebContentsUserData::ShouldMountContextLibrary() {
+  if (!CanShareTabsForCurrentPage()) {
     return false;
   }
   return HasContextLibraryTabs() || IsSmartTabSharingActive();
@@ -824,6 +912,7 @@ void ContextualTasksWebContentsUserData::OnTabContextRemoved(
     const base::UnguessableToken& context_token) {
   pending_context_uploads_.erase(context_token);
   failed_context_uploads_.erase(context_token);
+  MaybeFinishPendingSubmit();
 }
 
 void ContextualTasksWebContentsUserData::OnContextUploadStatusChanged(
@@ -844,6 +933,7 @@ void ContextualTasksWebContentsUserData::OnContextUploadStatusChanged(
     pending_context_uploads_.insert(context_token);
     failed_context_uploads_.erase(context_token);
   }
+  MaybeFinishPendingSubmit();
   UpdateContextState();
   UpdateSuggestInputs();
 }
@@ -901,7 +991,11 @@ void ContextualTasksWebContentsUserData::RenderFrameDeleted(
 
 void ContextualTasksWebContentsUserData::HandleOnSubmitQueryRequest(
     std::string_view query_text) {
-  if (submit_pending_) {
+  auto& page_state = GetPrimaryPageSearchState();
+  page_state.is_zero_state = false;
+  page_state.has_known_page_state = true;
+
+  if (pending_submit_.has_value()) {
     return;
   }
 
@@ -942,6 +1036,16 @@ void ContextualTasksWebContentsUserData::HandleOnSubmitQueryRequest(
     return;
   }
 
+  base::RecordAction(base::UserMetricsAction(
+      "ContextualTasks.Composebox.UserAction.QuerySubmitted"));
+  if (auto* browser = GetBrowserWindowInterface()) {
+    auto* controller = ContextualTasksPanelController::From(browser);
+    if (controller && controller->IsPanelOpenForContextualTask() &&
+        controller->GetActiveWebContents() == &GetWebContents()) {
+      controller->OnAiInteraction();
+    }
+  }
+
   // Read the Lens state now, since it may change while contextualizing.
   std::optional<base::UnguessableToken> overlay_token = GetLensOverlayToken();
   std::vector<lens::AddedContext> lens_added_contexts =
@@ -961,15 +1065,15 @@ void ContextualTasksWebContentsUserData::HandleOnSubmitQueryRequest(
   params.on_ineligible_callback = base::BindRepeating(
       &ContextualTasksWebContentsUserData::OnPageContextIneligible,
       weak_ptr_factory_.GetWeakPtr());
+  pending_submit_.emplace(std::string(query_text),
+                          std::move(lens_added_contexts), overlay_token);
   // The contextualizer's session handle is ignored: it is null when there was
   // nothing to contextualize, so the callback gets the session handle itself.
   params.complete_callback = base::IgnoreArgs<
       base::WeakPtr<contextual_search::ContextualSearchSessionHandle>>(
       base::BindOnce(
           &ContextualTasksWebContentsUserData::OnSubmitQueryContextualized,
-          weak_ptr_factory_.GetWeakPtr(), std::string(query_text),
-          std::move(lens_added_contexts), overlay_token));
-  submit_pending_ = true;
+          weak_ptr_factory_.GetWeakPtr()));
   query_contextualizer_->Contextualize(std::move(params));
 }
 
@@ -1037,27 +1141,46 @@ std::vector<int32_t> ContextualTasksWebContentsUserData::GetPendingDelayedTabs(
   return tabs;
 }
 
-void ContextualTasksWebContentsUserData::OnSubmitQueryContextualized(
-    std::string query_text,
-    std::vector<lens::AddedContext> lens_added_contexts,
-    std::optional<base::UnguessableToken> overlay_token) {
-  if (!submit_pending_) {
+void ContextualTasksWebContentsUserData::OnSubmitQueryContextualized() {
+  if (!pending_submit_.has_value()) {
     return;
   }
-  submit_pending_ = false;
+  pending_submit_->contextualized = true;
+  MaybeFinishPendingSubmit();
+}
 
-  const bool has_lens_added_context = !lens_added_contexts.empty();
+void ContextualTasksWebContentsUserData::MaybeFinishPendingSubmit() {
+  if (!pending_submit_.has_value() || !pending_submit_->contextualized) {
+    return;
+  }
+  if (std::ranges::any_of(
+          GetSelectedTabs(), [&](const contextual_search::TabInfo& tab) {
+            return pending_context_uploads_.contains(tab.context_token);
+          })) {
+    return;
+  }
+  PendingSubmit submit = *std::exchange(pending_submit_, std::nullopt);
+  const size_t query_text_length = submit.query_text.size();
+
+  const bool has_lens_added_context = !submit.lens_added_contexts.empty();
   lens::ClientToSearchMessage response_message;
   auto* on_submit_response =
       response_message.mutable_on_submit_query_response();
-  for (auto& lens_added_context : lens_added_contexts) {
+  for (auto& lens_added_context : submit.lens_added_contexts) {
     *on_submit_response->add_added_contexts() = std::move(lens_added_context);
   }
   auto* session_handle = GetOrCreateContextualSessionHandle();
   if (session_handle) {
-    if (!query_text.empty()) {
+    if (auto* metrics_recorder = session_handle->GetMetricsRecorder()) {
+      if (metrics_recorder->source() !=
+          contextual_search::ContextualSearchSource::kContextualTasks) {
+        metrics_recorder->UpdateContextualSearchSource(
+            contextual_search::ContextualSearchSource::kContextualTasks);
+      }
+    }
+    if (!submit.query_text.empty()) {
       ThreadTurn turn;
-      turn.query = std::move(query_text);
+      turn.query = std::move(submit.query_text);
       session_handle->AddThreadTurn(turn);
     }
     if (ShouldToggleOffAfterSubmit() && IsSmartTabSharingActive()) {
@@ -1069,23 +1192,19 @@ void ContextualTasksWebContentsUserData::OnSubmitQueryContextualized(
       NotifyExtensionFramesTabContextUpdated();
     }
     AppendTabContextsToOnSubmitQueryResponse(&response_message, session_handle,
-                                             overlay_token);
+                                             submit.overlay_token);
   }
   PostSearchMessage(response_message);
 
   if (session_handle) {
     std::vector<base::UnguessableToken> submitted_tokens;
-    if (has_lens_added_context && overlay_token.has_value() &&
+    if (has_lens_added_context && submit.overlay_token.has_value() &&
         !std::ranges::contains(session_handle->GetSubmittedContextTokens(),
-                               *overlay_token)) {
-      submitted_tokens.push_back(*overlay_token);
+                               *submit.overlay_token)) {
+      submitted_tokens.push_back(*submit.overlay_token);
     }
-    // The page owns the query text, so no query length metrics are recorded
-    // here. This moves the uploaded tabs into the session's persisted tabs so
-    // they are tracked across turns and are not re-added on the next
-    // submission.
     session_handle->MarkQuerySubmitted(std::move(submitted_tokens),
-                                       /*query_text_length=*/std::nullopt);
+                                       query_text_length);
   }
 
   // Submission moved the uploaded tabs into the session's persisted tabs, so
@@ -1096,7 +1215,7 @@ void ContextualTasksWebContentsUserData::OnSubmitQueryContextualized(
 }
 
 void ContextualTasksWebContentsUserData::OnPageContextIneligible() {
-  if (!submit_pending_ || !GetIsProtectedPageErrorEnabled()) {
+  if (!pending_submit_.has_value() || !GetIsProtectedPageErrorEnabled()) {
     return;
   }
   auto* browser = GetBrowserWindowInterface();
@@ -1120,6 +1239,7 @@ void ContextualTasksWebContentsUserData::OnPageChanged(bool is_zero_state) {
   }
   auto& page_state = GetPrimaryPageSearchState();
   page_state.is_zero_state = is_zero_state;
+  page_state.has_known_page_state = true;
   if (page_state.is_handshake_complete) {
     page_state.handshake_complete_time = base::TimeTicks::Now();
     page_state.has_recorded_first_thread_context_library_update = false;
@@ -1170,8 +1290,7 @@ void ContextualTasksWebContentsUserData::
 
   if (!base::FeatureList::IsEnabled(
           contextual_tasks::kContextualTasksContextLibrary) ||
-      !CanShareTabContext(
-          Profile::FromBrowserContext(GetWebContents().GetBrowserContext()))) {
+      !CanShareTabsForCurrentPage()) {
     base::UmaHistogramEnumeration(
         "ContextualTasks.ThreadContextLibrary.UpdateOutcome",
         ThreadContextLibraryUpdateOutcome::kFeatureDisabled);
@@ -1323,7 +1442,7 @@ bool ContextualTasksWebContentsUserData::IsSmartTabSharingEnabled() {
 }
 
 bool ContextualTasksWebContentsUserData::IsSmartTabSharingActive() {
-  if (!IsSmartTabSharingEnabled()) {
+  if (!IsSmartTabSharingEnabled() || !CanShareTabsForCurrentPage()) {
     return false;
   }
   if (subscribed_model_) {
@@ -1598,10 +1717,6 @@ ContextualTasksWebContentsUserData::ComputeContextState() {
 void ContextualTasksWebContentsUserData::UpdateContextState() {
   ContextState current_state = ComputeContextState();
   auto& page_state = GetPrimaryPageSearchState();
-  if (current_state == page_state.last_sent_context_state) {
-    return;
-  }
-  page_state.last_sent_context_state = current_state;
 
   lens::ClientToSearchMessage message;
   auto* state_changed = message.mutable_on_context_state_changed();
@@ -1622,6 +1737,22 @@ void ContextualTasksWebContentsUserData::UpdateContextState() {
               CONTEXT_STATE_READY);
       break;
   }
+  if (page_state.is_lens_crop_mounted) {
+    state_changed->add_input_types(omnibox::INPUT_TYPE_LENS_IMAGE);
+  }
+  for (const auto& tab : GetSelectedTabs()) {
+    if (!failed_context_uploads_.contains(tab.context_token)) {
+      state_changed->add_input_types(omnibox::INPUT_TYPE_BROWSER_TAB);
+    }
+  }
+
+  std::string serialized;
+  state_changed->SerializeToString(&serialized);
+  if (serialized == page_state.last_sent_context_state_serialized) {
+    return;
+  }
+  page_state.last_sent_context_state = current_state;
+  page_state.last_sent_context_state_serialized = std::move(serialized);
   PostSearchMessage(message);
 }
 
@@ -1798,7 +1929,10 @@ ContextualTasksWebContentsUserData::GetLensSearchController() const {
 #endif
 
 void ContextualTasksWebContentsUserData::DoSubmitQueryCleanup() {
-  GetPrimaryPageSearchState().is_zero_state = false;
+  auto& page_state = GetPrimaryPageSearchState();
+  page_state.is_zero_state = false;
+  page_state.has_known_page_state = true;
+  has_unsubmitted_query_ = false;
   implicit_tab_.reset();
   pending_context_uploads_.clear();
   failed_context_uploads_.clear();
@@ -2092,6 +2226,7 @@ void ContextualTasksWebContentsUserData::ClearFiles(
 #endif
   }
   implicit_tab_.reset();
+  has_unsubmitted_query_ = false;
   pending_context_uploads_.clear();
   failed_context_uploads_.clear();
   if (auto* session_handle = GetOrCreateContextualSessionHandle()) {
@@ -2105,11 +2240,12 @@ void ContextualTasksWebContentsUserData::ClearFiles(
 }
 
 void ContextualTasksWebContentsUserData::ClearInputPlateState() {
-  submit_pending_ = false;
+  pending_submit_.reset();
   preserve_prestaged_context_ = false;
   RemoveLensCrop();
   auto& page_state = GetPrimaryPageSearchState();
   page_state.is_zero_state = false;
+  page_state.has_known_page_state = false;
   page_state.last_lens_crop_data_uri.clear();
   if (page_state.is_lens_crop_mounted) {
     page_state.is_lens_crop_mounted = false;
@@ -2199,9 +2335,8 @@ void ContextualTasksWebContentsUserData::UpdateImplicitTabContext() {
   SiteExclusionDetail site_exclusion_detail;
   const bool can_add_implicit_tab =
       session_handle && contextual_tasks::GetIsTabAutoSuggestionChipEnabled() &&
-      contextual_tasks::CanShareTabContext(profile) &&
-      !IsSmartTabSharingActive() && active_tab && tab_contents &&
-      session_id.is_valid() &&
+      CanShareTabsForCurrentPage() && !IsSmartTabSharingActive() &&
+      active_tab && tab_contents && session_id.is_valid() &&
       contextual_tasks::IsValidUrlForSuggestedTab(last_committed_url, profile,
                                                   site_exclusion_detail) &&
       !session_handle->IsTabDeselected(session_id, last_committed_url,
@@ -2491,12 +2626,33 @@ void ContextualTasksWebContentsUserData::
         removed_id;
   }
 
+  BrowserWindowInterface* browser_window = GetBrowserWindowInterface();
+  TabListInterface* tab_list =
+      browser_window ? TabListInterface::From(browser_window) : nullptr;
+  tabs::TabInterface* active_tab =
+      tab_list ? tab_list->GetActiveTab() : nullptr;
+  content::WebContents* active_tab_contents =
+      active_tab ? active_tab->GetContents() : nullptr;
+  const SessionID active_tab_id =
+      active_tab_contents
+          ? sessions::SessionTabHelper::IdForTab(active_tab_contents)
+          : SessionID::InvalidValue();
+  std::optional<int64_t> active_tab_context_id;
+
+  const auto matches_active_tab =
+      [&](const contextual_search::FileInfo& file_info) {
+        return active_tab_id.is_valid() &&
+               file_info.tab_session_id == active_tab_id;
+      };
+
+  const bool has_lens_added_contexts =
+      on_submit_response->added_contexts_size() > 0;
   size_t explicit_tab_count = 0;
   size_t implicit_tab_count = 0;
+  const auto& attached_tabs = session_handle->GetTabContextState().attached;
   const std::string session_id = session_handle->search_session_id();
   if (!session_id.empty()) {
     const auto selected_tabs = GetSelectedTabs();
-    const auto& attached_tabs = session_handle->GetTabContextState().attached;
     // Add uploaded tab contexts directly from the session handle.
     for (const auto& file_info :
          session_handle->GetUploadedContextFileInfos()) {
@@ -2506,9 +2662,14 @@ void ContextualTasksWebContentsUserData::
           !file_info.request_id.has_value()) {
         continue;
       }
-      // If this file corresponds to the lens overlay token, it will be handled
-      // separately when Lens crop is finalized.
+      // If this file corresponds to the lens overlay token, it was handled
+      // separately when Lens contexts were added. Still record its context ID
+      // when it belongs to the active tab and Lens added contexts are present.
       if (overlay_token.has_value() && file_info.file_token == *overlay_token) {
+        if (!active_tab_context_id.has_value() && has_lens_added_contexts &&
+            matches_active_tab(file_info)) {
+          active_tab_context_id = file_info.GetContextId();
+        }
         continue;
       }
       const bool is_implicit_upload =
@@ -2536,6 +2697,19 @@ void ContextualTasksWebContentsUserData::
               : lens::LensOverlayContextualInputUploadType::
                     CONTEXTUAL_INPUT_UPLOAD_TYPE_EXPLICIT;
       added->set_contextual_input_upload_type(upload_type);
+      if (file_info.viewport_request_id.has_value()) {
+        auto* viewport_added = on_submit_response->add_added_contexts();
+        viewport_added->set_search_session_id(session_id);
+        *viewport_added->mutable_request_id() = *file_info.viewport_request_id;
+        viewport_added->mutable_request_id()->set_media_type(
+            lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE);
+        viewport_added->set_contextual_input_upload_type(upload_type);
+      }
+      // If a context ID is found for the active tab's session ID, record it to
+      // attach to the server metadata for the active tab.
+      if (!active_tab_context_id.has_value() && matches_active_tab(file_info)) {
+        active_tab_context_id = file_info.GetContextId();
+      }
       const bool is_implicit =
           is_implicit_upload || upload_type !=
                                     lens::LensOverlayContextualInputUploadType::
@@ -2546,6 +2720,35 @@ void ContextualTasksWebContentsUserData::
         ++explicit_tab_count;
       }
     }
+  }
+
+  // If the active tab context was not found in the current turn's uploads
+  // (`GetUploadedContextFileInfos()` is cleared after each submission, and
+  // unchanged tabs skip re-upload on follow-up turns), fall back to
+  // `attached_tabs` to check tabs persisted from earlier turns in the current
+  // conversation, provided the tab has not been deselected. `attached_tabs`
+  // already tracks submitted tab contexts and their request IDs directly
+  // without scanning non-tab submitted files.
+  if (active_tab_id.is_valid() && !active_tab_context_id.has_value() &&
+      !(IsTabDeselectionEnabled() && !IsSmartTabSharingActive() &&
+        session_handle->IsTabDeselected(
+            active_tab_id, active_tab_contents->GetLastCommittedURL(),
+            base::UTF16ToUTF8(active_tab_contents->GetTitle())))) {
+    for (const auto& tab : attached_tabs) {
+      if (tab.submitted && tab.tab_id == active_tab_id.id() &&
+          tab.request_id.has_value() && tab.request_id->has_context_id()) {
+        active_tab_context_id = tab.request_id->context_id();
+        break;
+      }
+    }
+  }
+
+  // If a context ID was found for the active tab, attach it to the server
+  // metadata for the active tab.
+  if (active_tab_context_id.has_value()) {
+    auto* metadata = on_submit_response->add_context_turn_metadata();
+    metadata->set_context_id(*active_tab_context_id);
+    metadata->mutable_tab_metadata()->set_is_active_tab(true);
   }
   base::UmaHistogramCounts100(
       "ContextualTasks.TabCoins.AttachedCountAtSubmission",
@@ -2562,6 +2765,8 @@ std::vector<lens::AddedContext>
 ContextualTasksWebContentsUserData::GetLensAddedContexts(
     std::optional<base::UnguessableToken>& overlay_token) {
 #if !BUILDFLAG(IS_ANDROID)
+  const std::optional<base::UnguessableToken> candidate_overlay_token =
+      std::exchange(overlay_token, std::nullopt);
   auto* controller = GetLensSearchController();
   if (!controller || controller->IsClosing() ||
       !controller->IsCurrentTabSameOrigin()) {
@@ -2588,9 +2793,9 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
   uploaded_files.insert(uploaded_files.end(), submitted_files.begin(),
                         submitted_files.end());
 
-  if (overlay_token.has_value()) {
+  if (candidate_overlay_token.has_value()) {
     for (const auto& info : uploaded_files) {
-      if (info.file_token == *overlay_token && !info.is_superceded &&
+      if (info.file_token == *candidate_overlay_token && !info.is_superceded &&
           contextual_search::IsValidContextUploadStatusForMultimodalRequest(
               info.upload_status) &&
           info.request_id.has_value()) {
@@ -2618,6 +2823,25 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
     return {};
   }
 
+  const base::WeakPtr<contextual_search::InputStateModel> model =
+      GetOrCreateInputStateModel();
+  const bool has_lens_crop = model && model->lens_crop().has_value();
+
+  // When no Lens crop chip is mounted in the composebox (`!has_lens_crop`),
+  // this submission is a follow-up query without a Lens region selection (e.g.
+  // LRP -> AIM) while the initial Lens Overlay remains open. Only attach the
+  // overlay file if it carries tab context (`tab_session_id`), and skip
+  // region-only image uploads so the Turn 0 region crop is not resent.
+  if (!has_lens_crop) {
+    if (!file_info->tab_session_id.has_value() ||
+        (IsTabDeselectionEnabled() && !IsSmartTabSharingActive() &&
+         session_handle->IsTabDeselected(*file_info->tab_session_id,
+                                         file_info->tab_url.value_or(GURL()),
+                                         file_info->tab_title.value_or("")))) {
+      return {};
+    }
+  }
+
   auto* query_controller = controller->lens_overlay_query_controller();
   std::string search_session_id = session_handle->search_session_id();
   if (search_session_id.empty() && query_controller) {
@@ -2627,9 +2851,7 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
     return {};
   }
 
-  if (!overlay_token.has_value()) {
-    overlay_token = file_info->file_token;
-  }
+  overlay_token = file_info->file_token;
 
   lens::LensOverlayContextualInputUploadType upload_type =
       lens::LensOverlayContextualInputUploadType::
@@ -2648,7 +2870,7 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
 
   std::vector<lens::AddedContext> added_contexts;
   lens::LensOverlayRequestId file_request_id = *file_info->request_id;
-  if (!file_info->viewport_request_id.has_value()) {
+  if (has_lens_crop && !file_info->viewport_request_id.has_value()) {
     file_request_id.set_media_type(
         lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE);
   }
@@ -2656,7 +2878,7 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
 
   // When separate viewport request IDs are enabled, attach a second
   // AddedContext entry for the viewport image upload request so the webpage/PDF
-  // context (`file_info->request_id`) and the region crop
+  // context (`file_info->request_id`) and the viewport image
   // (`file_info->viewport_request_id`) are both sent, matching
   // `ComposeboxQueryController::CreateClientToAimRequest()`.
   if (file_info->viewport_request_id.has_value()) {
@@ -2664,31 +2886,36 @@ ContextualTasksWebContentsUserData::GetLensAddedContexts(
         build_added_context(*file_info->viewport_request_id));
   }
 
-  // Visual Search Interaction Data attaches to the viewport entry when separate
-  // viewport request IDs are used, since the region crop applies to the
-  // viewport image.
-  std::optional<lens::LensOverlayVisualSearchInteractionData>
-      visual_search_interaction_data;
-  if (overlay_token.has_value()) {
-    visual_search_interaction_data =
-        session_handle->GetVisualSearchInteractionData(*overlay_token,
-                                                       std::nullopt);
-  }
-  if (!visual_search_interaction_data.has_value() && query_controller) {
-    visual_search_interaction_data =
-        query_controller->GetVisualSearchInteractionData();
-  }
-  if (!visual_search_interaction_data.has_value()) {
-    visual_search_interaction_data = CreateCropInteractionData(
-        overlay->selected_region(), overlay->initial_screenshot());
-  }
-  if (visual_search_interaction_data.has_value()) {
-    *added_contexts.back().mutable_visual_search_interaction_data() =
-        std::move(*visual_search_interaction_data);
+  // Only attach Visual Search Interaction Data when a Lens crop chip is
+  // actively mounted in the composebox (`has_lens_crop`). For follow-up queries
+  // without a Lens region selection (such as LRP -> AIM), attaching the
+  // previous turn's `zoomed_crop` would cause the server to resend the cropped
+  // region image on the new turn.
+  if (has_lens_crop) {
+    std::optional<lens::LensOverlayVisualSearchInteractionData>
+        visual_search_interaction_data;
+    if (overlay_token.has_value()) {
+      visual_search_interaction_data =
+          session_handle->GetVisualSearchInteractionData(*overlay_token,
+                                                         std::nullopt);
+    }
+    if (!visual_search_interaction_data.has_value() && query_controller) {
+      visual_search_interaction_data =
+          query_controller->GetVisualSearchInteractionData();
+    }
+    if (!visual_search_interaction_data.has_value()) {
+      visual_search_interaction_data = CreateCropInteractionData(
+          overlay->selected_region(), overlay->initial_screenshot());
+    }
+    if (visual_search_interaction_data.has_value()) {
+      *added_contexts.back().mutable_visual_search_interaction_data() =
+          std::move(*visual_search_interaction_data);
+    }
   }
 
   return added_contexts;
 #else
+  overlay_token.reset();
   return {};
 #endif
 }

@@ -723,8 +723,12 @@ bool CanvasRenderingContext2D::CanCreateBacking() {
 
 scoped_refptr<StaticBitmapImage> blink::CanvasRenderingContext2D::GetImage() {
   if (IsHibernating()) {
-    return UnacceleratedStaticBitmapImage::Create(
+    auto image = UnacceleratedStaticBitmapImage::Create(
         GetHibernationHandler()->GetImage());
+    if (image) {
+      image->SetOriginClean(OriginClean());
+    }
+    return image;
   }
 
   return PaintRenderingResultsToSnapshot(kBackBuffer);
@@ -1023,26 +1027,30 @@ UniqueFontSelector* CanvasRenderingContext2D::GetFontSelector() const {
 }
 
 void CanvasRenderingContext2D::Reshape(gfx::Size old_size, gfx::Size new_size) {
+  if (old_size == new_size) {
+    ResetInternal();
+    return;
+  }
+
   if (IsHibernating()) {
     CanvasHibernationHandler::ReportHibernationEvent(
         CanvasHibernationHandler::HibernationEvent::kHibernationEndedOnReset);
     GetHibernationHandler()->Clear();
   }
+
   ResetState();
   ClearCanvas(old_size);
   set_clear_frame(true);
 
-  if (old_size != new_size) {
-    ResetBacking();
-    ResetRecorder();
-    did_fail_to_create_backing_ = false;
+  ResetBacking();
+  ResetRecorder();
+  did_fail_to_create_backing_ = false;
 
-    canvas()->ResetLayer();
-    Host()->UpdateMemoryUsage();
-    Host()->ClearDirtyRect();
-    if (isContextLost()) {
-      RestoreFromInvalidSizeIfNeeded();
-    }
+  canvas()->ResetLayer();
+  Host()->UpdateMemoryUsage();
+  Host()->ClearDirtyRect();
+  if (isContextLost()) {
+    RestoreFromInvalidSizeIfNeeded();
   }
 }
 

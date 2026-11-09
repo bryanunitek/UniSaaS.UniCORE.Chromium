@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ttc/core/tool_controller.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,6 +27,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_task.h"
+#include "chrome/browser/actor/actor_test_util.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/tab_annotation_manager.h"
 #include "chrome/browser/actor/tools/find_and_highlight_tool_request.h"
 #include "chrome/browser/actor/tools/gemini_panel_tool_request.h"
@@ -45,14 +47,19 @@
 #include "chrome/browser/actor/tools/window_management_tool_request.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/translate/translate_test_utils.h"
 #include "chrome/browser/ttc/core/session_controller.h"
+#include "chrome/browser/ttc/core/session_controller_impl.h"
 #include "chrome/browser/ttc/core/ttc_core_browser_test_base.h"
 #include "chrome/browser/ttc/core/ttc_keyed_service.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/common/actor/actor_constants.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/search_test_utils.h"
 #include "components/actor/core/actor_features.h"
 #include "components/actor/core/safety_list_manager.h"
@@ -86,10 +93,12 @@
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "url/gurl.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"
+#include "base/android/device_info.h"
+#else
 #include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task_metadata.h"
-#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/tab_observation_strategy.h"
 #include "chrome/browser/actor/ui/actor_ui_state_manager.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller_interface.h"
@@ -98,7 +107,6 @@
 #include "chrome/browser/glic/test_support/glic_browser_test.h"  // nogncheck
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/actor/action_result.h"
@@ -599,6 +607,46 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, OpenUrlInNewTab) {
   content::WebContents* active_contents = web_contents();
   EXPECT_NE(active_contents, source_contents);
   EXPECT_EQ(active_contents->GetLastCommittedURL(), target_url);
+  EXPECT_EQ(source_contents->GetLastCommittedURL(), start_url);
+}
+
+// "Open a new tab" must open the New Tab Page rather than requiring the model
+// to invent a URL for `open_url`.
+IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, CreateTabOpensNewTabPage) {
+  const GURL start_url =
+      embedded_https_test_server().GetURL("example.com", "/title1.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), start_url));
+  content::WebContents* source_contents = web_contents();
+  const int initial_tab_count = tab_list()->GetTabCount();
+
+  ttc_service().StartSession();
+  auto* session_controller = ttc_service().session_controller();
+  ASSERT_TRUE(session_controller);
+
+  base::test::TestFuture<ToolResponse> future;
+  ToolRequest tool_request;
+  tool_request.name =
+      std::string(actor::CreateTabToolRequest::kModelFacingName);
+
+  session_controller->ProcessToolCall(std::move(tool_request),
+                                      future.GetCallback());
+
+  ToolResponse response = future.Take();
+  EXPECT_TRUE(response.Ok());
+  ASSERT_EQ(tab_list()->GetTabCount(), initial_tab_count + 1);
+  content::WebContents* active_contents = web_contents();
+  EXPECT_NE(active_contents, source_contents);
+  // The tool responds once the new tab is opened, which can be before its NTP
+  // navigation finishes loading, so wait for it. Depending on the platform and
+  // timing, the NTP shows up as chrome://newtab/ or as its rewritten URL (e.g.
+  // chrome://new-tab-page/ on desktop Android, chrome-native://newtab/ on
+  // Android).
+  ASSERT_TRUE(content::WaitForLoadStop(active_contents));
+  auto is_ntp = [](const GURL& url) {
+    return url == GURL(chrome::kChromeUINewTabURL) || search::IsNTPURL(url);
+  };
+  EXPECT_TRUE(is_ntp(active_contents->GetLastCommittedURL()))
+      << active_contents->GetLastCommittedURL();
   EXPECT_EQ(source_contents->GetLastCommittedURL(), start_url);
 }
 
@@ -1116,6 +1164,134 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, ClickElement) {
   EXPECT_EQ(true, content::EvalJs(web_contents(), "button_clicked"));
 }
 
+// The actor runs one action at a time, so tool calls received while another is
+// running must be queued rather than rejected.
+IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
+                       ConsecutiveToolCallsAreQueued) {
+  ttc_service().StartSession();
+  auto* session_controller = ttc_service().session_controller();
+  ASSERT_TRUE(session_controller);
+
+  ASSERT_TRUE(content::NavigateToURL(
+      web_contents(),
+      embedded_https_test_server().GetURL(
+          "example.com", "/actor/page_with_clickable_element.html")));
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"js(
+    window.click_count = 0;
+    document.getElementById('clickable').addEventListener(
+        'click', () => ++window.click_count);
+  )js"));
+
+  std::optional<int> button_id = content::GetDOMNodeId(
+      *web_contents()->GetPrimaryMainFrame(), "button#clickable");
+  ASSERT_TRUE(button_id);
+  std::string document_id =
+      optimization_guide::DocumentIdentifierUserData::
+          GetOrCreateForCurrentDocument(web_contents()->GetPrimaryMainFrame())
+              ->serialized_token();
+
+  auto make_click_request = [&]() {
+    ToolRequest tool_request;
+    tool_request.name = "click_element";
+    tool_request.arguments.Set("node_id", base::DictValue()
+                                              .Set("document_id", document_id)
+                                              .Set("dom_node_id", *button_id));
+    return tool_request;
+  };
+
+  // Issue all calls before any has finished, including one that fails
+  // validation, and check that they all run and finish in order.
+  std::vector<int> completion_order;
+  base::test::TestFuture<ToolResponse> first_future;
+  base::test::TestFuture<ToolResponse> second_future;
+  base::test::TestFuture<ToolResponse> third_future;
+  base::test::TestFuture<ToolResponse> fourth_future;
+  auto record = [&](int index, ToolResponseCallback callback) {
+    return base::BindOnce(
+        [](std::vector<int>* order, int index, ToolResponseCallback callback,
+           ToolResponse response) {
+          order->push_back(index);
+          std::move(callback).Run(std::move(response));
+        },
+        &completion_order, index, std::move(callback));
+  };
+
+  ToolRequest unsupported_request;
+  unsupported_request.name = "unsupported_tool";
+
+  session_controller->ProcessToolCall(make_click_request(),
+                                      record(1, first_future.GetCallback()));
+  session_controller->ProcessToolCall(std::move(unsupported_request),
+                                      record(2, second_future.GetCallback()));
+  session_controller->ProcessToolCall(make_click_request(),
+                                      record(3, third_future.GetCallback()));
+  session_controller->ProcessToolCall(make_click_request(),
+                                      record(4, fourth_future.GetCallback()));
+
+  EXPECT_TRUE(first_future.Take().Ok());
+  ToolResponse second_response = second_future.Take();
+  EXPECT_TOOL_ERROR(second_response,
+                    actor::mojom::ActionResultCode::kToolUnknown);
+  EXPECT_TRUE(third_future.Take().Ok());
+  EXPECT_TRUE(fourth_future.Take().Ok());
+  EXPECT_EQ(completion_order, (std::vector<int>{1, 2, 3, 4}));
+  // Every queued click actually ran.
+  EXPECT_EQ(3, content::EvalJs(web_contents(), "window.click_count"));
+}
+
+// A queued tool call runs in a new actor task if the session's task was stopped
+// while the call was waiting.
+IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
+                       QueuedToolCallReplacesStoppedTask) {
+  ttc_service().StartSession();
+  auto* session_controller = ttc_service().session_controller();
+  ASSERT_TRUE(session_controller);
+
+  auto* actor_service = actor::ActorKeyedService::Get(profile());
+  ASSERT_TRUE(actor_service);
+  const std::map<actor::TaskId, const actor::ActorTask*> tasks =
+      actor_service->GetActiveTasks();
+  ASSERT_EQ(tasks.size(), 1u);
+  const actor::TaskId first_task_id = tasks.begin()->first;
+
+  auto make_open_url_request = [](const GURL& url) {
+    ToolRequest tool_request;
+    tool_request.name =
+        std::string(actor::OpenUrlToolRequest::kModelFacingName);
+    tool_request.arguments.Set(actor::OpenUrlToolRequest::kUrlParam,
+                               url.spec());
+    tool_request.arguments.Set(actor::OpenUrlToolRequest::kNewTabParam, false);
+    return tool_request;
+  };
+  const GURL first_url =
+      embedded_https_test_server().GetURL("example.com", "/title1.html");
+  const GURL second_url =
+      embedded_https_test_server().GetURL("example.com", "/title2.html");
+
+  base::test::TestFuture<ToolResponse> first_future;
+  base::test::TestFuture<ToolResponse> second_future;
+  session_controller->ProcessToolCall(make_open_url_request(first_url),
+                                      first_future.GetCallback());
+  session_controller->ProcessToolCall(make_open_url_request(second_url),
+                                      second_future.GetCallback());
+
+  // Stop the task while the first call is running and the second is queued.
+  actor_service->StopTask(first_task_id,
+                          actor::ActorTask::StoppedReason::kStoppedByUser);
+
+  // The task is stopped while the first call is acting, which fails it.
+  ToolResponse first_response = first_future.Take();
+  EXPECT_TOOL_ERROR(first_response,
+                    actor::mojom::ActionResultCode::kTaskWentAway);
+  EXPECT_TRUE(second_future.Take().Ok());
+  EXPECT_EQ(web_contents()->GetLastCommittedURL(), second_url);
+
+  const std::map<actor::TaskId, const actor::ActorTask*> new_tasks =
+      actor_service->GetActiveTasks();
+  ASSERT_EQ(new_tasks.size(), 1u);
+  EXPECT_NE(new_tasks.begin()->first, first_task_id);
+}
+
 // Runs `ToolController` with the actor's page stability and observation delay
 // timeouts effectively disabled, so that a page which never settles would block
 // tool completion indefinitely unless TTC skips the observation delay.
@@ -1514,7 +1690,8 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOption) {
   tool_request.arguments.Set("node_id", base::DictValue()
                                             .Set("document_id", document_id)
                                             .Set("dom_node_id", *select_id));
-  tool_request.arguments.Set("value", "last");
+  // TTC matches <option> elements by text rather than value.
+  tool_request.arguments.Set("text", "omega");
   session_controller->ProcessToolCall(std::move(tool_request),
                                       future.GetCallback());
 
@@ -1522,6 +1699,9 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOption) {
   EXPECT_EQ("last", content::EvalJs(web_contents(),
                                     "document.getElementById('plainSelect')"
                                     ".value"));
+  EXPECT_EQ("omega", content::EvalJs(web_contents(),
+                                     "document.getElementById('plainSelect')"
+                                     ".selectedOptions[0].text"));
 }
 
 IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOptionMissingNodeId) {
@@ -1532,7 +1712,7 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOptionMissingNodeId) {
   base::test::TestFuture<ToolResponse> future;
   ToolRequest tool_request;
   tool_request.name = "select_option";
-  tool_request.arguments.Set("value", "last");
+  tool_request.arguments.Set("text", "omega");
   session_controller->ProcessToolCall(std::move(tool_request),
                                       future.GetCallback());
 
@@ -1542,7 +1722,7 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOptionMissingNodeId) {
             actor::mojom::ActionResultCode::kArgumentsInvalid);
 }
 
-IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOptionMissingValue) {
+IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, SelectOptionMissingText) {
   ttc_service().StartSession();
   auto* session_controller = ttc_service().session_controller();
   ASSERT_TRUE(session_controller);
@@ -1604,7 +1784,7 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
   tool_request.arguments.Set("node_id", base::DictValue()
                                             .Set("document_id", old_document_id)
                                             .Set("dom_node_id", *select_id));
-  tool_request.arguments.Set("value", "last");
+  tool_request.arguments.Set("text", "omega");
   session_controller->ProcessToolCall(std::move(tool_request),
                                       future.GetCallback());
 
@@ -1932,36 +2112,59 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
-                       GetScreenshotThrottledWhenConcurrent) {
+                       GetScreenshotBlockedByEnterprisePolicy) {
+  ttc_service().SetEnterprisePolicyCheckerForTesting(
+      std::make_unique<actor::MockPolicyChecker>(
+          actor::EnterprisePolicyChecker::UrlBlockReason::kExplicitlyBlocked));
+  const GURL blocked_url = embedded_https_test_server().GetURL(
+      "blocked.example.com", "/title1.html");
+
   ttc_service().StartSession();
   auto* session_controller = ttc_service().session_controller();
   ASSERT_TRUE(session_controller);
 
-  ASSERT_TRUE(content::NavigateToURL(
-      web_contents(),
-      embedded_https_test_server().GetURL("example.com", "/title1.html")));
-  content::WaitForCopyableViewInWebContents(web_contents());
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), blocked_url));
 
-  base::test::TestFuture<ToolResponse> first_future;
-  base::test::TestFuture<ToolResponse> second_future;
+  base::test::TestFuture<ToolResponse> future;
+  ToolRequest tool_request;
+  tool_request.name = "get_screenshot";
+  session_controller->ProcessToolCall(std::move(tool_request),
+                                      future.GetCallback());
 
-  ToolRequest first_request;
-  first_request.name = "get_screenshot";
-  session_controller->ProcessToolCall(std::move(first_request),
-                                      first_future.GetCallback());
+  ToolResponse response = future.Take();
+  EXPECT_TOOL_ERROR(response, actor::mojom::ActionResultCode::kUrlBlocked);
+}
 
-  ToolRequest second_request;
-  second_request.name = "get_screenshot";
-  session_controller->ProcessToolCall(std::move(second_request),
-                                      second_future.GetCallback());
+IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
+                       OpenUrlBlockedByEnterprisePolicy) {
+  const GURL start_url =
+      embedded_https_test_server().GetURL("example.com", "/title1.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), start_url));
 
-  ToolResponse second_response = second_future.Take();
+  ttc_service().SetEnterprisePolicyCheckerForTesting(
+      std::make_unique<actor::MockPolicyChecker>(
+          actor::EnterprisePolicyChecker::UrlBlockReason::kExplicitlyBlocked));
+  const GURL blocked_url = embedded_https_test_server().GetURL(
+      "blocked.example.com", "/title2.html");
+
+  ttc_service().StartSession();
+  auto* session_controller = ttc_service().session_controller();
+  ASSERT_TRUE(session_controller);
+
+  base::test::TestFuture<ToolResponse> future;
+  ToolRequest tool_request;
+  tool_request.name = std::string(actor::OpenUrlToolRequest::kModelFacingName);
+  tool_request.arguments.Set(actor::OpenUrlToolRequest::kUrlParam,
+                             blocked_url.spec());
+  tool_request.arguments.Set(actor::OpenUrlToolRequest::kNewTabParam, false);
+  session_controller->ProcessToolCall(std::move(tool_request),
+                                      future.GetCallback());
+
+  ToolResponse response = future.Take();
   EXPECT_TOOL_ERROR(
-      second_response,
-      actor::mojom::ActionResultCode::kScreenshotCaptureThrottled);
-
-  ToolResponse first_response = first_future.Take();
-  EXPECT_TRUE(first_response.Ok());
+      response,
+      actor::mojom::ActionResultCode::kActionsBlockedByEnterprisePolicy);
+  EXPECT_EQ(web_contents()->GetLastCommittedURL(), start_url);
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -2115,8 +2318,16 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
       response, actor::mojom::ActionResultCode::kScreenshotCapturePageChanged);
 }
 
+// TODO(crbug.com/581632118): Disabled on Windows ASan due to flakiness.
+#if BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_GetScreenshotTabClosedDuringCapture \
+  DISABLED_GetScreenshotTabClosedDuringCapture
+#else
+#define MAYBE_GetScreenshotTabClosedDuringCapture \
+  GetScreenshotTabClosedDuringCapture
+#endif
 IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
-                       GetScreenshotTabClosedDuringCapture) {
+                       MAYBE_GetScreenshotTabClosedDuringCapture) {
   ttc_service().StartSession();
   auto* session_controller = ttc_service().session_controller();
   ASSERT_TRUE(session_controller);
@@ -2142,6 +2353,11 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
   tool_request.name = "get_screenshot";
   session_controller->ProcessToolCall(std::move(tool_request),
                                       future.GetCallback());
+
+  // Wait for the asynchronous URL check to finish and screenshot capture to
+  // start before closing the tab.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return web_contents()->IsBeingCaptured(); }));
 
   // Close the active tab while screenshot capture is in flight.
   tab_list()->CloseTab(captured_tab);
@@ -2260,7 +2476,14 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, GetToolDefinitions) {
   auto* session_controller = ttc_service().session_controller();
   ASSERT_TRUE(session_controller);
 
-  const std::set<actor::ToolId> kExpectedToolIds = {
+  // Window tools are only offered in desktop windowing environments.
+#if BUILDFLAG(IS_ANDROID)
+  const bool window_tools_supported = base::android::device_info::is_desktop();
+#else
+  const bool window_tools_supported = true;
+#endif
+
+  static constexpr actor::ToolIdSet kExpectedToolIds = {
       actor::ToolId::kOpenUrl,
       actor::ToolId::kPerformSearch,
       actor::ToolId::kGoBack,
@@ -2272,6 +2495,7 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, GetToolDefinitions) {
       actor::ToolId::kSeekToTimestamp,
       actor::ToolId::kTranslatePage,
       actor::ToolId::kCloseTab,
+      actor::ToolId::kCreateTab,
       actor::ToolId::kSwitchTab,
       actor::ToolId::kEnterFullscreen,
       actor::ToolId::kExitFullscreen,
@@ -2279,14 +2503,20 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, GetToolDefinitions) {
       actor::ToolId::kPromptGeminiPanel,
       actor::ToolId::kCloseGeminiPanel,
   };
+  actor::ToolIdSet expected_tool_ids = kExpectedToolIds;
+  if (window_tools_supported) {
+    expected_tool_ids.Put(actor::ToolId::kCreateWindow);
+  }
 
   std::vector<const actor::ToolDefinition*> expected_tools =
-      actor_service->tool_registry().GetToolsByIds(kExpectedToolIds);
-  ASSERT_EQ(expected_tools.size(), kExpectedToolIds.size());
+      actor_service->tool_registry().GetToolsByIds(expected_tool_ids);
+  ASSERT_EQ(expected_tools.size(), expected_tool_ids.size());
 
-  constexpr size_t kNumLegacyTools = 5;
+  // click_element, set_text, select_option, scroll_page, get_screenshot, and
+  // close_window where window tools are supported.
+  const size_t num_legacy_tools = window_tools_supported ? 6 : 5;
   std::vector<ToolDefinition> tools = session_controller->GetToolDefinitions();
-  ASSERT_EQ(tools.size(), expected_tools.size() + kNumLegacyTools);
+  ASSERT_EQ(tools.size(), expected_tools.size() + num_legacy_tools);
 
   // Verify the tool definitions queried from `actor::ToolRegistry`.
   for (size_t i = 0; i < expected_tools.size(); ++i) {
@@ -2368,15 +2598,15 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, GetToolDefinitions) {
   ASSERT_TRUE(select_node_id_type);
   EXPECT_EQ(*select_node_id_type, "integer");
 
-  const std::string* select_value_type =
-      select_schema.FindStringByDottedPath("properties.value.type");
-  ASSERT_TRUE(select_value_type);
-  EXPECT_EQ(*select_value_type, "string");
+  const std::string* select_text_type =
+      select_schema.FindStringByDottedPath("properties.text.type");
+  ASSERT_TRUE(select_text_type);
+  EXPECT_EQ(*select_text_type, "string");
 
   const base::ListValue* select_required = select_schema.FindList("required");
   ASSERT_TRUE(select_required);
   EXPECT_EQ(*select_required,
-            base::ListValue().Append("node_id").Append("value"));
+            base::ListValue().Append("node_id").Append("text"));
 
   const ToolDefinition& scroll_page = tools[expected_tools.size() + 3];
   EXPECT_EQ(scroll_page.name, "scroll_page");
@@ -2430,6 +2660,19 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest, GetToolDefinitions) {
   EXPECT_EQ(get_screenshot.verbalization,
             ToolDefinition::Verbalization::kSilentAction);
   EXPECT_TRUE(get_screenshot.parameters_json_schema.empty());
+
+  if (window_tools_supported) {
+    const ToolDefinition& close_window = tools[expected_tools.size() + 5];
+    EXPECT_EQ(close_window.name,
+              actor::CloseWindowToolRequest::kModelFacingName);
+    EXPECT_FALSE(close_window.description.empty());
+    EXPECT_EQ(close_window.behavior, ToolDefinition::Behavior::kBlocking);
+    EXPECT_EQ(close_window.verbalization,
+              ToolDefinition::Verbalization::kSilentAction);
+    // TTC closes the window containing the tracked tab, so unlike the registry
+    // definition this one takes no window_id.
+    EXPECT_TRUE(close_window.parameters_json_schema.empty());
+  }
 }
 
 // The session's actor task is started with the session and stopped when it
@@ -2539,6 +2782,123 @@ IN_PROC_BROWSER_TEST_F(ToolControllerBrowserTest,
                           actor::ActorTask::StoppedReason::kTaskComplete);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Window management tools, which TTC offers only in desktop windowing
+// environments. On Android, that's desktop mode, which this fixture forces.
+class ToolControllerWindowToolsBrowserTest : public ToolControllerBrowserTest {
+ public:
+  void SetUp() override {
+#if BUILDFLAG(IS_ANDROID)
+    // Opening a second window needs Chrome's multi-instance support; without
+    // it, creating a window asserts in Java. MultiWindowUtils.
+    // isMultiInstanceApi31Enabled() is false below Android R, and on R the
+    // singleInstancePerTask launch mode it checks for isn't recognized by the
+    // platform (ActivityInfo.LAUNCH_SINGLE_INSTANCE_PER_TASK is API 31), so
+    // multi-instance is only available on S and later. Desktop mode only exists
+    // on much newer Android, so forcing it here on an older emulator isn't a
+    // real configuration.
+    if (base::android::android_info::sdk_int() <
+        base::android::android_info::SDK_VERSION_S) {
+      GTEST_SKIP() << "Multiple windows require Android S+";
+    }
+#endif
+    ToolControllerBrowserTest::SetUp();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ToolControllerBrowserTest::SetUpCommandLine(command_line);
+#if BUILDFLAG(IS_ANDROID)
+    // Opening a second window launches ChromeTabbedActivity, which would show
+    // the first-run experience instead of a browser window.
+    command_line->AppendSwitch("disable-fre");
+#endif
+  }
+
+  void SetUpOnMainThread() override {
+    ToolControllerBrowserTest::SetUpOnMainThread();
+#if BUILDFLAG(IS_ANDROID)
+    base::android::device_info::set_is_desktop_for_testing(true);
+#endif
+  }
+
+  void TearDownOnMainThread() override {
+#if BUILDFLAG(IS_ANDROID)
+    base::android::device_info::reset_is_desktop_for_testing();
+#endif
+    ToolControllerBrowserTest::TearDownOnMainThread();
+  }
+
+ protected:
+  // Waits until `window` is the most recently activated window. Activation is
+  // asynchronous in the OS on Android.
+  void WaitForLastActiveWindow(BrowserWindowInterface* window) {
+    ASSERT_TRUE(base::test::RunUntil([window]() {
+      return GetLastActiveBrowserWindowInterfaceWithAnyProfile() == window;
+    }));
+  }
+
+  // Waits until the session's tracked tab is in `window`.
+  void WaitForTrackedTabInWindow(BrowserWindowInterface* window) {
+    auto* session_controller =
+        static_cast<SessionControllerImpl*>(ttc_service().session_controller());
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      content::WebContents* contents =
+          session_controller->GetVoiceFocusedWebContents();
+      tabs::TabInterface* tab =
+          contents ? tabs::TabInterface::MaybeGetFromContents(contents)
+                   : nullptr;
+      return tab && tab->GetBrowserWindowInterface() == window;
+    }));
+  }
+
+  ToolResponse CallTool(std::string_view name) {
+    base::test::TestFuture<ToolResponse> future;
+    ToolRequest tool_request;
+    tool_request.name = std::string(name);
+    ttc_service().session_controller()->ProcessToolCall(std::move(tool_request),
+                                                        future.GetCallback());
+    return future.Take();
+  }
+};
+
+// create_window opens a window that becomes active, and close_window then
+// closes it, since the session's tracked tab follows the active window.
+IN_PROC_BROWSER_TEST_F(ToolControllerWindowToolsBrowserTest,
+                       CreateAndCloseWindow) {
+  ASSERT_TRUE(content::NavigateToURL(
+      web_contents(),
+      embedded_https_test_server().GetURL("example.com", "/title1.html")));
+  ttc_service().StartSession();
+  ASSERT_TRUE(ttc_service().session_controller());
+
+  BrowserWindowInterface* initial_window =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+  ASSERT_TRUE(initial_window);
+  const std::vector<BrowserWindowInterface*> initial_windows =
+      GetAllBrowserWindowInterfaces();
+
+  EXPECT_TRUE(CallTool(actor::CreateWindowToolRequest::kModelFacingName).Ok());
+  std::vector<BrowserWindowInterface*> windows =
+      GetAllBrowserWindowInterfaces();
+  ASSERT_EQ(windows.size(), initial_windows.size() + 1);
+  std::erase_if(windows, [&](BrowserWindowInterface* window) {
+    return std::ranges::contains(initial_windows, window);
+  });
+  ASSERT_EQ(windows.size(), 1u);
+  BrowserWindowInterface* new_window = windows[0];
+  // The tool finishes on the window's activation event; the last-active
+  // bookkeeping can trail it slightly on desktop.
+  WaitForLastActiveWindow(new_window);
+  // The session's tracked tab follows the active window, though on Android it
+  // may still be binding to the new window's tab model.
+  WaitForTrackedTabInWindow(new_window);
+
+  // close_window closes the window containing the tracked tab, i.e. the new
+  // window.
+  EXPECT_TRUE(CallTool(actor::CloseWindowToolRequest::kModelFacingName).Ok());
+  EXPECT_EQ(GetAllBrowserWindowInterfaces(), initial_windows);
+  WaitForLastActiveWindow(initial_window);
+}
 
 }  // namespace
 

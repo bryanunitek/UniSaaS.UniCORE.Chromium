@@ -23,16 +23,14 @@ namespace dictation {
 DictationInteractiveBrowserTestBase::DictationInteractiveBrowserTestBase() =
     default;
 
-DictationInteractiveBrowserTestBase::DictationInteractiveBrowserTestBase(
-    bool session_ends_on_stream_end)
-    : InteractiveBrowserTestMixin<DictationBrowserTestBase>(
-          session_ends_on_stream_end) {}
-
 DictationInteractiveBrowserTestBase::~DictationInteractiveBrowserTestBase() =
     default;
 
 void DictationInteractiveBrowserTestBase::TearDownOnMainThread() {
-  dictation_service().EndSession();
+  if (SessionController* const controller =
+          dictation_service().session_controller()) {
+    controller->EndSessionSynchronously();
+  }
   InteractiveBrowserTestMixin<DictationBrowserTestBase>::TearDownOnMainThread();
 }
 

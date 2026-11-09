@@ -6,16 +6,10 @@
 
 #import <objc/runtime.h>
 
-#include <atomic>
-#include <memory>
-
 #import "base/apple/foundation_util.h"
 #import "base/apple/scoped_objc_class_swizzler.h"
-#include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
-#include "base/feature.h"
 #include "base/feature_list.h"
 #include "base/mac/mac_util.h"
 #include "base/metrics/field_trial_params.h"
@@ -23,24 +17,20 @@
 #include "base/notreached.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 
+namespace remote_cocoa {
+
+NSString* const kWindowOcclusionCheckerNotificationUserInfoKey =
+    @"WindowOcclusionCheckerMac";
+
+}  // namespace remote_cocoa
+
 namespace {
 
-// Stored as `std::atomic` because `+setWindowPredicate:...` is called from
-// `+[WebContentsViewCocoa initialize]`, which can be triggered on a non-main
-// thread (see crbug.com/349984532), while occlusion updates read these
-// stateless function pointers on the main thread.
-std::atomic<BOOL (*)(NSWindow*)> g_window_predicate{nullptr};
-std::atomic<BOOL (*)()> g_can_perform_updates_predicate{nullptr};
-
-BOOL WindowHasTrackedContent(NSWindow* window) {
-  auto* predicate = g_window_predicate.load(std::memory_order_relaxed);
-  return predicate ? predicate(window) : NO;
-}
-
-BOOL CanPerformOcclusionUpdates() {
-  auto* predicate =
-      g_can_perform_updates_predicate.load(std::memory_order_relaxed);
-  return predicate ? predicate() : NO;
+base::apple::ScopedObjCClassSwizzler& GetOrderWindowSwizzler() {
+  static base::NoDestructor<base::apple::ScopedObjCClassSwizzler> swizzler(
+      [NSWindow class], [WindowOcclusionCheckerMac class],
+      @selector(orderWindow:relativeTo:));
+  return *swizzler;
 }
 
 // Returns YES if `ancestor` is `window`'s parent window, its parent's parent,
@@ -54,6 +44,15 @@ BOOL IsAncestorWindow(NSWindow* ancestor, NSWindow* window) {
     parent = [parent parentWindow];
   }
   return NO;
+}
+
+// Returns the top-level ancestor of `window`, or `window` itself if it has no
+// parent window.
+NSWindow* GetRootWindow(NSWindow* window) {
+  while (NSWindow* parent = [window parentWindow]) {
+    window = parent;
+  }
+  return window;
 }
 
 NSString* const kWindowDidChangePositionInWindowList =
@@ -128,22 +127,26 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 // Returns a pointer to the shared instance that can be cleared during tests.
 + (WindowOcclusionCheckerMac* __strong*)sharedOcclusionChecker;
 
-- (base::apple::ScopedObjCClassSwizzler*)windowClassSwizzler;
+- (void)shutdown;
 
 @end
 
 @implementation WindowOcclusionCheckerMac {
   NSWindow* __weak _windowResizingOrMoving;
   NSWindow* __weak _windowReceivingFullscreenTransitionNotifications;
+  NSMapTable<NSWindow*, NSNumber*>* __strong _trackedWindows;
   BOOL _displaysAreAsleep;
   BOOL _occlusionStateUpdatesAreScheduled;
   BOOL _updatingOcclusionStates;
-  std::unique_ptr<base::apple::ScopedObjCClassSwizzler> _windowClassSwizzler;
 }
 
 + (WindowOcclusionCheckerMac* __strong*)sharedOcclusionChecker {
   static WindowOcclusionCheckerMac* sharedOcclusionChecker;
   return &sharedOcclusionChecker;
+}
+
++ (instancetype)sharedInstanceIfCreated {
+  return *[self sharedOcclusionChecker];
 }
 
 + (instancetype)sharedInstance {
@@ -179,15 +182,11 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
                    base::mac::MacOSVersion()];
 }
 
-+ (void)setWindowPredicate:(BOOL (*)(NSWindow*))windowPredicate
-    canPerformUpdatesPredicate:(BOOL (*)())canPerformUpdatesPredicate {
-  g_window_predicate.store(windowPredicate, std::memory_order_relaxed);
-  g_can_perform_updates_predicate.store(canPerformUpdatesPredicate,
-                                        std::memory_order_relaxed);
-}
-
 + (void)resetSharedInstanceForTesting {
-  *[self sharedOcclusionChecker] = nil;
+  WindowOcclusionCheckerMac* __strong* sharedInstance =
+      [self sharedOcclusionChecker];
+  [*sharedInstance shutdown];
+  *sharedInstance = nil;
 }
 
 - (instancetype)init {
@@ -200,31 +199,69 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
     base::debug::SetCrashKeyString(crash_key, "initialized");
   }
 
+  _trackedWindows = [NSMapTable weakToStrongObjectsMapTable];
+
   [self setUpNotifications];
 
   // There's no notification for NSWindows changing their order in the window
   // list. Swizzle -orderWindow:relativeTo:, allowing the checker to initiate
-  // occlusion checks on window ordering changes.
-  _windowClassSwizzler = std::make_unique<base::apple::ScopedObjCClassSwizzler>(
-      [NSWindow class], [WindowOcclusionCheckerMac class],
-      @selector(orderWindow:relativeTo:));
+  // occlusion checks on window ordering changes. Use a process-lifetime
+  // swizzler so `+resetSharedInstanceForTesting` cannot unswizzle out of LIFO
+  // order relative to other NSWindow swizzlers (e.g. headless mode).
+  GetOrderWindowSwizzler();
 
   return self;
 }
 
-- (void)dealloc {
+- (void)shutdown {
   [NSObject
       cancelPreviousPerformRequestsWithTarget:self
                                      selector:@selector(
                                                   performOcclusionStateUpdates)
                                        object:nil];
+  _occlusionStateUpdatesAreScheduled = NO;
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
-  _windowClassSwizzler.reset();
 }
 
-- (base::apple::ScopedObjCClassSwizzler*)windowClassSwizzler {
-  return _windowClassSwizzler.get();
+- (void)dealloc {
+  [self shutdown];
+}
+
+- (void)addTrackedWindow:(NSWindow*)window {
+  if (!window) {
+    return;
+  }
+  NSInteger count = [[_trackedWindows objectForKey:window] integerValue];
+  [_trackedWindows setObject:@(count + 1) forKey:window];
+}
+
+- (void)removeTrackedWindow:(NSWindow*)window {
+  if (!window) {
+    return;
+  }
+  NSInteger count = [[_trackedWindows objectForKey:window] integerValue];
+  if (count <= 0) {
+    return;
+  }
+  if (count == 1) {
+    [_trackedWindows removeObjectForKey:window];
+    if ([window isOccluded]) {
+      // Defer clearing `[window setOccluded:NO]` to the next update pass so
+      // synchronous view reparenting / tab switches in the same run-loop turn
+      // do not transiently flip the window to unoccluded.
+      [self scheduleOcclusionStateUpdates];
+    }
+  } else {
+    [_trackedWindows setObject:@(count - 1) forKey:window];
+  }
+}
+
+- (BOOL)isTrackingWindow:(NSWindow*)window {
+  if (!window) {
+    return NO;
+  }
+  return [[_trackedWindows objectForKey:window] integerValue] > 0;
 }
 
 - (BOOL)isManualOcclusionDetectionEnabled {
@@ -238,12 +275,13 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 - (void)orderWindow:(NSWindowOrderingMode)orderingMode
          relativeTo:(NSInteger)otherWindowNumber {
   // Super.
-  [[WindowOcclusionCheckerMac sharedInstance] windowClassSwizzler]
-      ->InvokeOriginal<void, NSWindowOrderingMode, NSInteger>(
+  GetOrderWindowSwizzler()
+      .InvokeOriginal<void, NSWindowOrderingMode, NSInteger>(
           self, _cmd, orderingMode, otherWindowNumber);
 
-  if (![[WindowOcclusionCheckerMac sharedInstance]
-          isManualOcclusionDetectionEnabled]) {
+  WindowOcclusionCheckerMac* checker =
+      [WindowOcclusionCheckerMac sharedInstanceIfCreated];
+  if (!checker || ![checker isManualOcclusionDetectionEnabled]) {
     return;
   }
 
@@ -287,19 +325,31 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
     // orderWindow:relativeTo: was the override point that caught all window
     // list ordering changes up until Sonoma. With Sonoma, it appears that
     // window cycling (Cmd+`) goes directly to -[NSWindow makeKeyWindow]. Add
-    // these window main notifications to catch the changes. Unfortunately,
+    // these window main/key notifications to catch the changes. Unfortunately,
     // there doesn't appear to be a way to trigger any of the the window
     // cycling machinery, so automated testing is impossible.
     [notificationCenter
         addObserver:self
-           selector:@selector(windowDidChangePositionInWindowList:)
+           selector:@selector(windowDidChangeActiveState:)
                name:NSWindowDidBecomeMainNotification
              object:nil];
 
     [notificationCenter
         addObserver:self
-           selector:@selector(windowDidChangePositionInWindowList:)
+           selector:@selector(windowDidChangeActiveState:)
                name:NSWindowDidResignMainNotification
+             object:nil];
+
+    [notificationCenter
+        addObserver:self
+           selector:@selector(windowDidChangeActiveState:)
+               name:NSWindowDidBecomeKeyNotification
+             object:nil];
+
+    [notificationCenter
+        addObserver:self
+           selector:@selector(windowDidChangeActiveState:)
+               name:NSWindowDidResignKeyNotification
              object:nil];
 
     [[[NSWorkspace sharedWorkspace] notificationCenter]
@@ -338,15 +388,11 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 }
 
 - (BOOL)windowCanTriggerOcclusionUpdates:(NSWindow*)window {
-  // We only care about occlusion because we want to inform web contents
-  // so they can update their visibility state. Therefore, we ignore windows
-  // that don't have a web contents (they essentially don't exist for our manual
-  // occlusion calculations).
-  if (!WindowHasTrackedContent(window)) {
+  // Ignore windows that have not registered for occlusion tracking.
+  if (![self isTrackingWindow:window]) {
     // As with child windows below, `window` may have been marked occluded while
-    // it still contained a web contents. Clear that state before ignoring the
-    // notification so it cannot get stuck if no other window triggers an update
-    // pass.
+    // it was still tracked. Clear that state before ignoring the notification
+    // so it cannot get stuck if no other window triggers an update pass.
     [window setOccluded:NO];
     return NO;
   }
@@ -415,6 +461,13 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
   }
 }
 
+- (void)windowDidChangeActiveState:(NSNotification*)notification {
+  if ([self windowCanTriggerOcclusionUpdates:GetRootWindow(
+                                                 [notification object])]) {
+    [self scheduleOcclusionStateUpdates];
+  }
+}
+
 - (void)windowWillStartLiveResize:(NSNotification*)notification {
   NSWindow* theWindow = [notification object];
   if (![self windowCanTriggerOcclusionUpdates:theWindow]) {
@@ -438,8 +491,8 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 - (void)windowChangedOcclusionState:(NSNotification*)notification {
   // Ignore the occlusion notifications we generate.
   NSDictionary* userInfo = [notification userInfo];
-  NSString* occlusionCheckerKey = [self className];
-  if (userInfo[occlusionCheckerKey] != nil) {
+  if (userInfo[remote_cocoa::kWindowOcclusionCheckerNotificationUserInfoKey] !=
+      nil) {
     return;
   }
 
@@ -502,16 +555,20 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 - (void)performOcclusionStateUpdates {
   _occlusionStateUpdatesAreScheduled = NO;
 
-  if (!CanPerformOcclusionUpdates()) {
-    return;
-  }
-
   DCHECK(!_updatingOcclusionStates);
 
   _updatingOcclusionStates = YES;
 
   NSArray<NSWindow*>* windowsFromFrontToBack =
       [[[NSApplication sharedApplication] orderedWindows] copy];
+
+  NSWindow* activeRootWindow = nil;
+  for (NSWindow* window in windowsFromFrontToBack) {
+    if ([window isKeyWindow]) {
+      activeRootWindow = GetRootWindow(window);
+      break;
+    }
+  }
 
   for (NSWindow* window in windowsFromFrontToBack) {
     // The fullscreen transition causes spurious occlusion notifications.
@@ -520,13 +577,12 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
       continue;
     }
 
-    // Ignore windows that don't have web contentses. If such a window was
-    // marked occluded while it had one (e.g. a closing window whose
-    // webcontents was removed, https://crbug.com/1356622), clear the stale
-    // state so that observers (e.g. the browser compositor) are not left
-    // thinking it is occluded. The window has no webcontents to update; one
-    // added back later starts out visible until the next update pass.
-    if (!WindowHasTrackedContent(window)) {
+    // Ignore windows that are not registered for occlusion tracking. If such a
+    // window was marked occluded while it was tracked (e.g. a window whose last
+    // WebContentsViewCocoa was removed, https://crbug.com/1356622), clear the
+    // stale state so that observers (e.g. the browser compositor) are not left
+    // thinking it is occluded.
+    if (![self isTrackingWindow:window]) {
       [window setOccluded:NO];
       continue;
     }
@@ -540,7 +596,8 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
     }
 
     [window setOccluded:[self isWindowOccluded:window
-                                    windowList:windowsFromFrontToBack]];
+                                    windowList:windowsFromFrontToBack
+                              activeRootWindow:activeRootWindow]];
   }
 
   _updatingOcclusionStates = NO;
@@ -577,7 +634,8 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
 // Returns YES if `window` is occluded, either according to macOS or via
 // our manual occlusion calculation.
 - (BOOL)isWindowOccluded:(NSWindow*)window
-              windowList:(nonnull NSArray<NSWindow*>*)windowList {
+              windowList:(nonnull NSArray<NSWindow*>*)windowList
+        activeRootWindow:(nullable NSWindow*)activeRootWindow {
   if (_displaysAreAsleep) {
     return YES;
   }
@@ -594,10 +652,15 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
     return NO;
   }
 
+  // Treat a parent window and its child windows as a single unit that is active
+  // when any window in the tree is the key window. Do not check -isMainWindow:
+  // child dialogs return NO from -canBecomeMainWindow, so clicking a child
+  // dialog in one browser window leaves the previously active browser window as
+  // the main window (see https://crbug.com/40116493).
   NSRect windowFrame = [window frame];
-  BOOL windowIsActive = [window isKeyWindow] || [window isMainWindow];
-  BOOL windowCanBecomeActive =
-      [window canBecomeKeyWindow] || [window canBecomeMainWindow];
+  NSWindow* rootWindow = GetRootWindow(window);
+  BOOL windowIsActive = (rootWindow == activeRootWindow);
+  BOOL windowCanBecomeActive = [rootWindow canBecomeKeyWindow];
   BOOL seenWindow = NO;
 
   // Determine if there's a window occluding `window`.
@@ -636,8 +699,7 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
       continue;
     }
 
-    BOOL nextWindowIsActive =
-        [nextWindow isKeyWindow] || [nextWindow isMainWindow];
+    BOOL nextWindowIsActive = (GetRootWindow(nextWindow) == activeRootWindow);
 
     // If `nextWindow` appears after `window` in `windowList`, it is behind
     // `window` unless `window` is inactive and `nextWindow` is the active
@@ -701,11 +763,13 @@ bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
     objc_setAssociatedObject(self, kWindowIsOccludedKey, flag ? @YES : nil,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    NSString* occlusionCheckerKey = [WindowOcclusionCheckerMac className];
     [[NSNotificationCenter defaultCenter]
         postNotificationName:NSWindowDidChangeOcclusionStateNotification
                       object:self
-                    userInfo:@{occlusionCheckerKey : @YES}];
+                    userInfo:@{
+                      remote_cocoa::
+                      kWindowOcclusionCheckerNotificationUserInfoKey : @YES
+                    }];
   }
 
   // Let the views browser compositor know, after the synthetic notification

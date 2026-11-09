@@ -185,6 +185,7 @@
 <translation id="2799223571221894425">Käynnistä uudelleen</translation>
 <translation id="2803971713792056305">Oma Chromium</translation>
 <translation id="2816462166102338036">Hae tätä videota kuvahaulla</translation>
+<translation id="2819844767470613567">Varoitus: Chromium ei voi estää laajennuksia tallentamasta selaushistoriaa. Voit estää tämän laajennuksen käytön eristetyssä tilassa poistamalla tämän valinnan.</translation>
 <translation id="282591729717417030">Löydä tuotteita kameralla, seuraa hinnanlaskuja ja paljon muuta Chromiumin iOS-versiossa.</translation>
 <translation id="2841525013647267359">Käännä kielestä</translation>
 <translation id="2846251086934905009">Asennusvirhe: Asennusohjelmaa ei suoritettu loppuun. Asennus on keskeytetty.</translation>
@@ -481,6 +482,7 @@ Jos tämä sivu ei toimi odotetulla tavalla, kokeile sallia optimointi.</transla
 <translation id="5889361821821684993">Chromium tarkistaa säännöllisesti, että selaimen asetukset ovat mahdollisimman turvalliset. Ilmoitamme, jos jotain on tarkistettava.</translation>
 <translation id="5895138241574237353">Käynnistä uudelleen</translation>
 <translation id="5896077214220653386">Gemini Enterprise Chromiumissa</translation>
+<translation id="5900507321340749588">Chromium voi käyttää tekoälymalleja, jotka toimivat suoraan laitteellasi, tarjotakseen esimerkiksi huijausten tunnistuksen. Kun asetus on pois päältä, nämä ominaisuudet eivät välttämättä toimi. <ph name="BEGIN_LINK" />Lue lisää laitepohjaisesta tekoälystä<ph name="END_LINK" />.</translation>
 <translation id="5903106910045431592"><ph name="PAGE_TITLE" /> – Kirjautuminen verkkoon</translation>
 <translation id="5924017743176219022">Muodostetaan internetyhteyttä…</translation>
 <translation id="5941711191222866238">Pienennä</translation>

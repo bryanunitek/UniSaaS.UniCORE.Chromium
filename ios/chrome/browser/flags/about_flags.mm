@@ -60,6 +60,7 @@
 #import "components/optimization_guide/core/optimization_guide_logger.h"
 #import "components/password_manager/core/browser/features/password_features.h"
 #import "components/password_manager/core/common/password_manager_features.h"
+#import "components/password_manager/core/common/remote_actor/remote_actor_features.h"
 #import "components/password_manager/ios/features.h"
 #import "components/payments/core/features.h"
 #import "components/policy/core/common/policy_loader_ios_constants.h"
@@ -100,7 +101,6 @@
 #import "ios/chrome/app/background_mode_buildflags.h"
 #import "ios/chrome/app/background_task/features.h"
 #import "ios/chrome/browser/autofill/model/features.h"
-#import "ios/chrome/browser/badges/model/features.h"
 #import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/crash_report/model/features.h"
 #import "ios/chrome/browser/credential_provider/model/features.h"
@@ -1739,9 +1739,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kEnableLensViewFinderUnifiedExperienceDescription,
      flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kEnableLensViewFinderUnifiedExperience)},
-    {"price-insights", commerce::flag_descriptions::kPriceInsightsName,
-     commerce::flag_descriptions::kPriceInsightsDescription, flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(commerce::kPriceInsights)},
     {"optimization-guide-debug-logs",
      flag_descriptions::kOptimizationGuideDebugLogsName,
      flag_descriptions::kOptimizationGuideDebugLogsDescription,
@@ -2155,9 +2152,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      FEATURE_WITH_PARAMS_VALUE_TYPE(kDefaultBrowserPromoOverflowMenu,
                                     kDefaultBrowserPromoOverflowMenuVariations,
                                     "DefaultBrowserPromoOverflowMenu")},
-    {"taiyaki-all-surfaces", flag_descriptions::kTaiyakiAllSurfacesName,
-     flag_descriptions::kTaiyakiAllSurfacesDescription, flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(switches::kTaiyakiAllSurfaces)},
     {"lens-camera-no-still-output-required",
      flag_descriptions::kLensCameraNoStillOutputRequiredName,
      flag_descriptions::kLensCameraNoStillOutputRequiredDescription,
@@ -2525,6 +2519,10 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
     {"sync-contextual-task", flag_descriptions::kSyncContextualTaskName,
      flag_descriptions::kSyncContextualTaskDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(syncer::kSyncContextualTask)},
+    {"sync-encrypted-tab-context",
+     flag_descriptions::kSyncEncryptedTabContextName,
+     flag_descriptions::kSyncEncryptedTabContextDescription, flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(syncer::kSyncEncryptedTabContext)},
     {"sync-autofill-valuable", flag_descriptions::kSyncAutofillValuableName,
      flag_descriptions::kSyncAutofillValuableDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(syncer::kSyncAutofillValuable)},
@@ -2692,9 +2690,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(
          autofill::features::kAutofillUpstreamEnforceStrikeDelay)},
-    {"no-accounts-web-signin", flag_descriptions::kNoAccountWebSigninName,
-     flag_descriptions::kNoAccountWebSigninDescription, flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(switches::kNoAccountWebSignin)},
     {"assistant-aim-minimized-state",
      flag_descriptions::kAssistantAimMinimizedStateName,
      flag_descriptions::kAssistantAimMinimizedStateDescription,
@@ -3131,6 +3126,16 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
     {"suspicious-site-warnings", flag_descriptions::kSuspiciousSiteWarningsName,
      flag_descriptions::kSuspiciousSiteWarningsDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(safe_browsing::kSuspiciousSiteWarnings)},
+    {"remote-actor-credential-sharing",
+     flag_descriptions::kRemoteActorCredentialSharingName,
+     flag_descriptions::kRemoteActorCredentialSharingDescription,
+     flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(
+         password_manager::features::kRemoteActorCredentialSharing)},
+    {"lens-hide-loading-web-results-panel",
+     flag_descriptions::kLensHideLoadingWebResultsPanelName,
+     flag_descriptions::kLensHideLoadingWebResultsPanelDescription,
+     flags_ui::kOsIos, FEATURE_VALUE_TYPE(kLensHideLoadingWebResultsPanel)},
 });
 
 bool SkipConditionalFeatureEntry(const flags_ui::FeatureEntry& entry) {

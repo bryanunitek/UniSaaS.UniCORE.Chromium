@@ -3873,7 +3873,7 @@ void LocalFrame::SetVirtualKeyboardOverlayGeometry(const gfx::Rect& rect) {
 
 void LocalFrame::ShowInterestInElement(int nodeID) const {
   Element* element = DynamicTo<Element>(DOMNodeIds::NodeForId(nodeID));
-  if (!element) {
+  if (!element || element->GetDocument() != GetDocument()) {
     return;
   }
   element->ShowInterestNow();
@@ -4440,6 +4440,15 @@ void LocalFrame::CheckPositionAnchorsForCssVisibilityChanges() {
 void LocalFrame::CheckPositionAnchorsForChainedVisibilityChanges() {
   AnchorPositionVisibilityObserver::UpdateForChainedAnchorVisibility(
       post_layout_snapshot_clients_);
+}
+
+void LocalFrame::NotifyScrollEndForAnchorPositioning(
+    CompositorElementId scroll_element_id) {
+  for (auto& client : post_layout_snapshot_clients_) {
+    if (auto* scroll_data = DynamicTo<AnchorPositionScrollData>(client.Get())) {
+      scroll_data->NotifyScrollEnd(scroll_element_id);
+    }
+  }
 }
 
 bool LocalFrame::IsSameOrigin() {

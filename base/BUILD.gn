@@ -511,6 +511,8 @@ component("base") {
     "memory_coordinator/memory_coordinator_features.h",
     "memory_coordinator/memory_limit.cc",
     "memory_coordinator/memory_limit.h",
+    "memory_coordinator/memory_pressure_source.cc",
+    "memory_coordinator/memory_pressure_source.h",
     "memory_coordinator/multi_memory_consumer.cc",
     "memory_coordinator/multi_memory_consumer.h",
     "memory_coordinator/traits.cc",
@@ -810,6 +812,13 @@ component("base") {
     "task/post_job.cc",
     "task/post_job.h",
     "task/post_task_and_reply_with_result_internal.h",
+    "task/responsiveness/calculator.cc",
+    "task/responsiveness/calculator.h",
+    "task/responsiveness/message_loop_observer.cc",
+    "task/responsiveness/message_loop_observer.h",
+    "task/responsiveness/responsiveness_calculator_delegate.h",
+    "task/responsiveness/watcher.cc",
+    "task/responsiveness/watcher.h",
     "task/scoped_set_task_priority_for_current_thread.cc",
     "task/scoped_set_task_priority_for_current_thread.h",
     "task/sequence_manager/associated_thread_id.cc",
@@ -2665,7 +2674,8 @@ if (enable_rust_api_from_cpp) {
     # the "Caveats" section in `//docs/rust/crubit/README.md`.
     #
     # TODO(https://crbug.com/576651451): Make publicly visible after Cronet
-    # supports both Crubit directions.
+    # supports both Crubit directions.  Expand visibility as needed for
+    # Crubit adopters outside of Cronet (e.g. `//content`).
     visibility = [ "//build/rust/tests/test_rust_api_from_cpp:*" ]
   }
 }
@@ -3949,7 +3959,9 @@ test("base_unittests") {
     "memory_coordinator/async_memory_consumer_registration_unittest.cc",
     "memory_coordinator/memory_consumer_registry_unittest.cc",
     "memory_coordinator/memory_consumer_unittest.cc",
+    "memory_coordinator/memory_coordinator_features_unittest.cc",
     "memory_coordinator/memory_limit_unittest.cc",
+    "memory_coordinator/memory_pressure_source_unittest.cc",
     "memory_coordinator/multi_memory_consumer_unittest.cc",
     "message_loop/message_pump_glib_unittest.cc",
     "message_loop/message_pump_unittest.cc",
@@ -4074,6 +4086,8 @@ test("base_unittests") {
     "task/execution_fence_unittest.cc",
     "task/lazy_thread_pool_task_runner_unittest.cc",
     "task/post_job_unittest.cc",
+    "task/responsiveness/calculator_unittest.cc",
+    "task/responsiveness/watcher_unittest.cc",
     "task/scoped_set_task_priority_for_current_thread_unittest.cc",
     "task/sequence_manager/atomic_flag_set_unittest.cc",
     "task/sequence_manager/sequence_manager_impl_unittest.cc",
@@ -4494,6 +4508,9 @@ test("base_unittests") {
     ]
     if (!is_apple) {
       sources += [
+        "process/internal_linux_unittest.cc",
+        "process/process_handle_linux_unittest.cc",
+        "process/process_iterator_linux_unittest.cc",
         "profiler/stack_base_address_posix_unittest.cc",
         "profiler/stack_copier_signal_unittest.cc",
         "profiler/thread_delegate_posix_unittest.cc",
@@ -5523,10 +5540,7 @@ if (is_android) {
   }
 
   generate_jni("memory_coordinator_jni") {
-    sources = [
-      "android/java/src/org/chromium/base/memory_coordinator/MemoryConsumerRegistration.java",
-      "android/java/src/org/chromium/base/memory_coordinator/MemoryConsumerTraits.java",
-    ]
+    sources = [ "android/java/src/org/chromium/base/memory_coordinator/MemoryConsumerRegistration.java" ]
   }
 
   android_library("memory_coordinator_java") {
@@ -5836,6 +5850,7 @@ if (is_android) {
     ]
     deps = [
       ":base_java",
+      ":file_error_java",
       ":log_java",
       ":stream_util_java",
       ":tasks_java",

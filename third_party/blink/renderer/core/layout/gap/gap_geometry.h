@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/layout/gap/main_gap.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_offset.h"
 #include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
-#include "third_party/blink/renderer/core/layout/grid_lanes/track_opening.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/grid_enums.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -23,7 +22,6 @@ namespace blink {
 
 class ComputedStyle;
 class PhysicalBoxFragment;
-class GapGeometry;
 
 // This bitmask indicates whether an intersection is blocked due to the presence
 // of a spanning item in one or both directions. When considering column gaps,
@@ -59,101 +57,6 @@ class CORE_EXPORT BlockedStatus {
 
 using MainGaps = Vector<MainGap>;
 using CrossGaps = Vector<CrossGap>;
-
-// TODO(javiercon): clean up now that we have a lot of layout algorithm-specific
-// code, potentially look into subclassing gap geometry for each container type.
-//
-// Empty openings of each non-collapsed grid-lanes lane, indexed by lane, in
-// logical stacking-axis coordinates. An empty opening has no item and no item
-// that could align into it.
-using GridLanesEmptyOpenings = Vector<Vector<TrackOpeningCoordinates>>;
-
-// Walks the gap decoration segments for a `MainGap` in a grid-lanes container.
-// Segments are formed by the intersections of the `MainGap` with the
-// `CrossGaps` (or items) in the adjacent lanes.
-//
-// This is different from `GapSegmentStateCursor`, which does not generate
-// segment geometry. That cursor only walks stored `GapSegmentStateRange`s in
-// the segment order produced by this class and returns the state for each
-// index.
-class GridLanesMainGapSegmentWalker {
-  STACK_ALLOCATED();
-
- public:
-  struct Segment {
-    LayoutUnit end_offset;
-    wtf_size_t before_occupant_index;
-    wtf_size_t after_occupant_index;
-    // Whether the crossing gutter at `end_offset` overlaps the preceding
-    // crossing gutter. False for the first gutter, since there is no previous
-    // gutter to overlap. It is also false when the gutters' edges only touch,
-    // when there is space between them, or when `end_offset` marks the end of
-    // the container's content.
-    //
-    // For more about overlap windows see:
-    // https://www.w3.org/TR/css-gaps-1/#segment-endpoints
-    bool continues_overlap_window = false;
-  };
-
-  GridLanesMainGapSegmentWalker(const GapGeometry& gap_geometry,
-                                wtf_size_t main_gap_index);
-
-  std::optional<const Segment> Next();
-  wtf_size_t IntersectionCapacity() const { return intersection_capacity_; }
-
- private:
-  // Forward cursor over one side's contiguous `CrossGap` run.
-  class CrossGapRunCursor {
-   public:
-    CrossGapRunCursor() = default;
-    CrossGapRunCursor(wtf_size_t start,
-                      wtf_size_t inclusive_end,
-                      wtf_size_t cross_gap_count)
-        : start_(start), current_(start) {
-      CHECK_LE(start, inclusive_end);
-      CHECK_LT(inclusive_end, cross_gap_count);
-      end_ = inclusive_end + 1;
-    }
-
-    bool AtEnd() const { return current_ == end_; }
-    wtf_size_t Size() const { return end_ - start_; }
-    wtf_size_t CrossGapIndex() const {
-      CHECK(!AtEnd());
-      return current_;
-    }
-    wtf_size_t ConsumedCount() const { return current_ - start_; }
-    void Advance() {
-      CHECK(!AtEnd());
-      ++current_;
-    }
-
-   private:
-    wtf_size_t start_ = 0;
-    wtf_size_t current_ = 0;
-    wtf_size_t end_ = 0;
-  };
-
-  LayoutUnit CrossGapOffset(wtf_size_t index) const;
-  // Returns the next crossing offset from either lane, limited to content-end.
-  // Does not advance either cursor.
-  LayoutUnit NextCrossGapOffset() const;
-  void SkipGapsAtOrBeforeContentStart();
-  void SkipRunAtOrBeforeContentStart(CrossGapRunCursor& run);
-  void ConsumeRunAtOffset(CrossGapRunCursor& run, LayoutUnit offset);
-
-  const GapGeometry& gap_geometry_;
-  GridTrackSizingDirection cross_direction_;
-  LayoutUnit content_start_;
-  LayoutUnit content_end_;
-  LayoutUnit cross_gap_width_;
-  CrossGapRunCursor before_;
-  CrossGapRunCursor after_;
-  wtf_size_t intersection_capacity_ = 0;
-
-  // Whether the next crossing gutter overlaps the current one.
-  bool next_gutter_overlaps_current_ = false;
-  bool finished_ = false;
-};
 
 // Gap geometry is used to determine gap locations for the purpose of painting
 // gap decorations.
@@ -314,24 +217,6 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
   wtf_size_t MainGapCount() const { return main_gaps_.size(); }
   wtf_size_t CrossGapCount() const { return cross_gaps_.size(); }
 
-  // Stores finalized empty openings grouped by non-collapsed lane.
-  void SetGridLanesEmptyOpenings(GridLanesEmptyOpenings empty_openings);
-
-  // Returns the empty openings of a lane, as offsets along the stacking axis.
-  // `lane_index` counts only non-collapsed lanes.
-  const Vector<TrackOpeningCoordinates>& EmptyOpeningsForLane(
-      wtf_size_t lane_index) const;
-
-  // Marks each segment of a grid-lanes main gap, between two adjacent
-  // intersections, as empty before or after when the lane on that side is empty
-  // along the whole segment. The segment is bounded by the edges of the
-  // crossing gutters, and its state is stored on the intersection that starts
-  // it, as for grid. This way `rule-visibility-items` applies to each segment
-  // before `rule-break` joins them.
-  void MarkGridLanesEmptySegments(GridTrackSizingDirection track_direction,
-                                  wtf_size_t gap_index,
-                                  Vector<GapIntersection>& intersections) const;
-
   // Returns whether the gap at `gap_index` in `direction` can be painted.
   // `gap_index` is an index into this fragment's gaps. Spanner main gaps
   // cannot be painted. They are only used to generate the intersections of
@@ -350,16 +235,6 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
   // this count.
   std::optional<wtf_size_t> StoredGapSlotCount(
       GridTrackSizingDirection direction) const;
-
-  // A lane boundary separates adjacent non-collapsed tracks. Maps a lane
-  // boundary to its grid-axis offset:
-  //   lane boundary 0            -> grid-axis content start
-  //   lane boundary lane_count   -> grid-axis content end
-  //   lane boundary i (else)     -> main_gaps_[i - 1] center
-  // where `lane_count == MainGapCount() + 1`.
-  // Interior lane boundaries correspond to `MainGap`s; the outer lane
-  // boundaries are content edges.
-  LayoutUnit GridAxisOffsetForLaneBoundary(wtf_size_t lane_boundary) const;
 
   // Records how this container's placement order differs from geometric paint
   // order.
@@ -423,6 +298,12 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
     return main_direction_ == direction;
   }
 
+  // Returns whether each gap in `direction` belongs to an owner, such as a flex
+  // line or a grid lane. Only cross gaps can have owners.
+  bool AreGapsOwned(GridTrackSizingDirection direction) const {
+    return !IsMainDirection(direction) && CrossGapsHaveOwners();
+  }
+
   const Vector<MainGap>& GetMainGaps() const { return main_gaps_; }
 
   const Vector<CrossGap>& GetCrossGaps() const { return cross_gaps_; }
@@ -442,7 +323,9 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
   //
   // We reset `intersections` (Shrink(0)) before populating, so the buffer's
   // capacity is preserved through loop iterations. This makes reuse across a
-  // gap loop allocation-free after the first call.
+  // gap loop allocation-free after the first call. `intersections` stays empty
+  // for a main gap that cannot be painted (see `IsPaintableGap`), so callers
+  // that paint must skip those gaps first.
   //
   // `cross_gap_owner_index` is the forward-only cursor identifying the owner of
   // the cross gap being processed: the flex line (main gap) for flex, or the
@@ -450,8 +333,9 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
   void GenerateIntersectionListForGap(
       GridTrackSizingDirection direction,
       wtf_size_t gap_index,
-      Vector<GapIntersection>& intersections,
-      std::optional<wtf_size_t> cross_gap_owner_index) const;
+      std::optional<wtf_size_t> cross_gap_owner_index,
+      bool needs_empty_segment_states,
+      Vector<GapIntersection>& intersections) const;
 
   // Determines whether the intersection at `intersection_index` within
   // `gap_index` lies on the container boundary. Typically, the first and last
@@ -612,7 +496,94 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
         content_block_end_(new_content_block_end),
         main_direction_(other.main_direction_) {}
 
+  // Fills `intersections` for a grid or multicol main gap.
+  // Kept in the base class because both containers have identical behavior.
+  void GenerateMainIntersectionListForGridAndMulticol(
+      GridTrackSizingDirection direction,
+      GapSegmentStateCursor& cursor,
+      Vector<GapIntersection>& intersections) const;
+
+  // TODO(javiercon): The painter chooses between stored values, stitching
+  // across fragments, and the gap count of this fragment to assign decoration
+  // values. Give the painter one container-agnostic entry point for this, so
+  // that this struct and its hook become internal to the gap geometry.
+  //
+  // Each `column-rule-*` and `row-rule-*` property can hold a list of values.
+  // Layout assigns these values to the cross gaps of the whole container, one
+  // value per cross gap, in placement order. We call this order the assignment
+  // sequence, and each position in it a gap slot. This struct holds the
+  // assignment that layout stored for the cross gaps of one fragment.
+  struct StoredCrossGapDecorationValues {
+    bool operator==(const StoredCrossGapDecorationValues&) const = default;
+
+    // The gap slot of each cross gap in this fragment, in paint order. This is
+    // the index of the cross gap's value in each value list.
+    Vector<wtf_size_t> value_indices;
+
+    // The number of gap slots in the assignment sequence. This is the number of
+    // cross gaps in all fragments of the container, not only in this fragment.
+    // It is used to resolve repeaters in the value lists.
+    wtf_size_t gap_slot_count = 0;
+  };
+
  private:
+  // Compares the fields of the container-specific subclass. `other` has the
+  // same container type as this geometry.
+  virtual bool HasEqualSubclassFields(const GapGeometry& other) const = 0;
+
+  // Fills `intersections` for a main gap at `gap_index`, between the
+  // container content start and content end. The intersections with cross
+  // gaps are container-specific.
+  virtual void GenerateMainIntersectionList(
+      GridTrackSizingDirection direction,
+      wtf_size_t gap_index,
+      GapSegmentStateCursor& cursor,
+      Vector<GapIntersection>& intersections) const = 0;
+
+  // Fills `intersections` for a cross gap at `gap_index`.
+  // `cross_gap_owner_index` is the owner of the cross gap (flex line or grid
+  // lane), when there is one.
+  virtual void GenerateCrossIntersectionList(
+      GridTrackSizingDirection direction,
+      wtf_size_t gap_index,
+      std::optional<wtf_size_t> cross_gap_owner_index,
+      GapSegmentStateCursor& cursor,
+      Vector<GapIntersection>& intersections) const = 0;
+
+  // Returns the decoration value assignment that layout stored for the cross
+  // gaps of this fragment, or `nullptr` if layout did not store one.
+  virtual const StoredCrossGapDecorationValues*
+  GetStoredCrossGapDecorationValues() const {
+    return nullptr;
+  }
+
+  // Returns whether each cross gap belongs to an owner (such as a flex line or
+  // grid lane). Grid and multicol cross gaps cross the whole container, so they
+  // have no owner.
+  virtual bool CrossGapsHaveOwners() const { return false; }
+
+  // Marks which segments of the main gap at `gap_index` are next to empty
+  // space.
+  virtual void MarkEmptySegments(GridTrackSizingDirection direction,
+                                 wtf_size_t gap_index,
+                                 Vector<GapIntersection>& intersections) const {
+  }
+
+  // Returns the largest cross gap size, or `std::nullopt` if all cross gaps
+  // use the uniform gap size.
+  virtual std::optional<LayoutUnit> MaxCrossGapSize() const {
+    return std::nullopt;
+  }
+
+  // Returns the size of the cross gaps on the side of `intersection` along the
+  // main gap at `main_gap_index`, or `std::nullopt` if all cross gaps use the
+  // uniform gap size.
+  virtual std::optional<LayoutUnit> CrossGapSizeAtMainGapIntersection(
+      wtf_size_t main_gap_index,
+      const GapIntersection& intersection) const {
+    return std::nullopt;
+  }
+
   static wtf_size_t CountSpannerMainGaps(const MainGaps& main_gaps);
 
   // Returns whether a cross-gap intersection is adjacent to a synthetic main
@@ -643,43 +614,23 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
   // - container content start
   // - Intersections with cross gaps (container-specific)
   // - container content end.
-  // All offsets are in increasing order along `direction`.
-  void GenerateMainIntersectionList(
-      GridTrackSizingDirection direction,
-      wtf_size_t gap_index,
-      Vector<GapIntersection>& intersections) const;
-
-  // Fills `intersections` for a grid-lanes main gap at `gap_index`.
-  void GenerateMainIntersectionListForGridLanes(
-      GridTrackSizingDirection direction,
-      wtf_size_t gap_index,
-      Vector<GapIntersection>& intersections,
-      GapSegmentStateCursor& cursor) const;
-
-  // Fills `intersections` for a grid or multicol main gap.
-  void GenerateMainIntersectionListForGridAndMulticol(
-      GridTrackSizingDirection direction,
-      Vector<GapIntersection>& intersections,
-      GapSegmentStateCursor& cursor) const;
+  // All offsets are in increasing order along `direction`. Leaves
+  // `intersections` empty when the gap cannot be painted (see
+  // `IsPaintableGap`).
+  void BuildMainIntersectionList(GridTrackSizingDirection direction,
+                                 wtf_size_t gap_index,
+                                 bool needs_empty_segment_states,
+                                 Vector<GapIntersection>& intersections) const;
 
   // Fills `intersections` for a cross gap at `gap_index`. For grid containers,
   // this includes the container content edges and every main gap offset. For
   // flex containers, it includes the cross-gap start offset and its computed
   // end offset. `cross_gap_owner_index` is the owner of the cross gap being
   // processed (flex line or grid lane), when there is one.
-  void GenerateCrossIntersectionList(
+  void BuildCrossIntersectionList(
       GridTrackSizingDirection direction,
       wtf_size_t gap_index,
-      Vector<GapIntersection>& intersections,
-      std::optional<wtf_size_t> cross_gap_owner_index) const;
-
-  // Fills `intersections` for a grid-lanes `CrossGap` at `lane`, which
-  // includes:
-  // 1. The gap's start offset
-  // 2. Its computed end offset at the end of `lane` (which could be a
-  // `MainGap`)
-  void GenerateCrossIntersectionListForGridLanes(
-      wtf_size_t lane,
+      std::optional<wtf_size_t> cross_gap_owner_index,
       Vector<GapIntersection>& intersections) const;
 
   // For `overlap-join`, computes the inset so the main-direction decoration
@@ -704,10 +655,6 @@ class CORE_EXPORT GapGeometry : public GarbageCollected<GapGeometry> {
 
   MainGaps main_gaps_;
   CrossGaps cross_gaps_;
-
-  // Empty openings per lane, used to determine visibility. Note: this is only
-  // used for grid lanes containers.
-  GridLanesEmptyOpenings grid_lanes_empty_openings_;
 
   // Number of main gaps created for spanner boundaries. Only multicol creates
   // these gaps. They are not painted and do not consume decoration values.

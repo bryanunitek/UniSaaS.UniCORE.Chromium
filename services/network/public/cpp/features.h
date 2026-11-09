@@ -83,10 +83,6 @@ COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
 BASE_DECLARE_FEATURE(kReduceAcceptLanguageHTTP);
 COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kReduceAcceptLanguageCacheDuration);
-COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
-BASE_DECLARE_FEATURE(kReduceAcceptLanguageCount);
-COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
-BASE_DECLARE_FEATURE_PARAM(int, kMaxAcceptLanguage);
 
 COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
 BASE_DECLARE_FEATURE(kLocalNetworkAccessChecks);
@@ -418,6 +414,17 @@ BASE_DECLARE_FEATURE(kForwardProxyAuthWithoutPrompt);
 // synchronous delay-loading of `cryptbase.dll` (via `dpapi.dll`).
 COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
 BASE_DECLARE_FEATURE(kPrewarmCryptbase);
+
+// Rate-limits cross-process `ProxyConfigPollerClient::OnLazyProxyConfigPoll()`
+// IPCs sent from `ProxyConfigServiceMojo::OnLazyPoll()` during network activity
+// on polling platforms (Windows and iOS), avoiding redundant Browser IO and UI
+// thread wakeups during page-load request bursts that
+// `PollingProxyConfigService` would discard within its 10-second polling
+// interval.
+COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
+BASE_DECLARE_FEATURE(kRateLimitProxyConfigPolls);
+COMPONENT_EXPORT(NETWORK_CPP_FLAGS_AND_SWITCHES)
+BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kRateLimitProxyConfigPollsInterval);
 
 }  // namespace network::features
 

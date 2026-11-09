@@ -62,26 +62,19 @@ class NodeRemovalScope {
 Patch* Patch::Prepare(ContainerNode* scope,
                       const AtomicString& marker_name,
                       HTMLTemplateElement* template_element) {
-  if (!RuntimeEnabledFeatures::DocumentPatchingEnabled() ||
-      marker_name.IsNull()) {
+  if (marker_name.IsNull()) {
     return nullptr;
   }
 
   while (auto* parent_template = DynamicTo<HTMLTemplateElement>(scope)) {
     if (auto* parent_patch = parent_template->GetPatch()) {
-      if (!parent_patch->is_buffered()) {
+      if (!parent_patch->IsExternal()) {
         scope = parent_patch->parent_;
         continue;
       }
     }
     scope = parent_template->InsertionTarget();
   }
-
-  const bool is_buffered =
-      template_element &&
-      (RuntimeEnabledFeatures::DeclarativeFragmentEnabled() &&
-       (template_element->FastHasAttribute(html_names::kBufferAttr) ||
-        template_element->FastHasAttribute(html_names::kIntegrityAttr)));
 
   ContainerNode* parent = nullptr;
   Node* start_marker = nullptr;
@@ -163,7 +156,7 @@ Patch* Patch::Prepare(ContainerNode* scope,
   }
 
   return MakeGarbageCollected<Patch>(base::PassKey<Patch>(), parent,
-                                     start_marker, end_marker, is_buffered,
+                                     start_marker, end_marker,
                                      template_element);
 }
 
@@ -190,12 +183,8 @@ Patch::Patch(base::PassKey<Patch> key,
              ContainerNode* parent,
              Node* start_marker,
              Node* end_marker,
-             bool is_buffered,
              HTMLTemplateElement* template_element)
-    : parent_(parent),
-      start_marker_(start_marker),
-      end_marker_(end_marker),
-      is_buffered_(is_buffered) {
+    : parent_(parent), start_marker_(start_marker), end_marker_(end_marker) {
   const AtomicString& src_attr =
       (template_element && RuntimeEnabledFeatures::DeclarativeFragmentEnabled())
           ? template_element->FastGetAttribute(html_names::kSrcAttr)
@@ -207,21 +196,6 @@ Patch::Patch(base::PassKey<Patch> key,
 }
 
 void Patch::Finalize(HTMLTemplateElement* template_element) {
-  CHECK(RuntimeEnabledFeatures::DocumentPatchingEnabled());
-  if (is_buffered_) {
-    DocumentFragment* content = template_element->content();
-    CHECK(content);
-    CHECK(RuntimeEnabledFeatures::DeclarativeFragmentEnabled());
-    if (parent_) {
-      Node* next_child = end_marker_ && end_marker_->parentNode() == parent_
-                             ? end_marker_.Get()
-                             : nullptr;
-      // TODO(nrosenthal): add more tests to assert script execution behavior at
-      // this point.
-      parent_->InsertBefore(content, next_child);
-    }
-  }
-
   if (ContainerNode* start_parent = start_marker_->parentNode()) {
     start_parent->ParserRemoveChild(*start_marker_);
   }

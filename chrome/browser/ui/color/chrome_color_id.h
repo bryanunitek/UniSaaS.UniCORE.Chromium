@@ -198,9 +198,6 @@
   E_CPONLY(kColorExtensionsMenuSecondaryText) \
   /* Extension manager WebUI colors. */ \
   E_CPONLY(kColorExtensionManagerHighlightText) \
-  /* Feature first run dialog colors. */ \
-  E_CPONLY(kColorFeatureFirstRunInfoContainerBackground) \
-  E_CPONLY(kColorFeatureFirstRunIconColor) \
   /* Feature Promo bubble colors. */ \
   E_CPONLY(kColorFeaturePromoBubbleBackground) \
   E_CPONLY(kColorFeaturePromoBubbleButtonBorder) \
@@ -315,8 +312,6 @@
   E_CPONLY(kColorTabStripControlButtonInkDropFrameInactive) \
   E_CPONLY(kColorTabStripControlButtonInkDropRipple) \
   E_CPONLY(kColorTabStripControlButtonInkDropRippleFrameInactive) \
-  E_CPONLY(kColorTabStripScrollButtonBackground) \
-  E_CPONLY(kColorTabStripScrollButtonIcon) \
   /* New tab button colors for ChromeRefresh.*/ \
   /* TODO (crbug.com/40883407) remove when theming works */ \
   E_CPONLY(kColorNewTabButtonCRForegroundFrameActive) \
@@ -1076,6 +1071,10 @@
   E_CPONLY(kColorTabGroupTabStripFrameInactivePurple) \
   E_CPONLY(kColorTabGroupTabStripFrameInactiveCyan) \
   E_CPONLY(kColorTabGroupTabStripFrameInactiveOrange) \
+  E_CPONLY(kColorTabGroupEphemeralHeaderBackgroundFrameActive) \
+  E_CPONLY(kColorTabGroupEphemeralHeaderBackgroundFrameInactive) \
+  E_CPONLY(kColorTabGroupEphemeralHeaderForegroundFrameActive) \
+  E_CPONLY(kColorTabGroupEphemeralHeaderForegroundFrameInactive) \
   E_CPONLY(kColorTabStrokeFrameActive) \
   E_CPONLY(kColorTabStrokeFrameInactive) \
   E_CPONLY(kColorTabstripScrollContainerShadow) \

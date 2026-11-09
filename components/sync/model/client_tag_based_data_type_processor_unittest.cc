@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <limits>
 #include <map>
 #include <optional>
 #include <utility>
@@ -172,8 +173,17 @@ EntitySpecifics WriteUserEventItem(FakeDataTypeSyncBridge* bridge,
 }
 
 void CaptureCommitRequest(CommitRequestDataList* dst,
-                          CommitRequestDataList&& src) {
+                          CommitRequestDataList&& src,
+                          bool /*has_more_local_changes*/) {
   *dst = std::move(src);
+}
+
+void CaptureCommitRequestAndHasMore(CommitRequestDataList* dst,
+                                    bool* dst_has_more_local_changes,
+                                    CommitRequestDataList&& src,
+                                    bool has_more_local_changes) {
+  *dst = std::move(src);
+  *dst_has_more_local_changes = has_more_local_changes;
 }
 
 void CaptureTypeEntitiesCount(TypeEntitiesCount* dst,
@@ -1596,14 +1606,18 @@ TEST_F(ClientTagBasedDataTypeProcessorTest, ShouldRetryCommitAfterServerError) {
   // Entity is sent to server. Processor shouldn't include it in local changes.
   CommitRequestDataList commit_request;
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_TRUE(commit_request.empty());
 
   // Fail commit from worker side indicating this entity was not committed.
   // Processor should include it in consecutive GetLocalChanges responses.
   worker()->FailOneCommit();
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_EQ(1U, commit_request.size());
   EXPECT_EQ(GetPrefHash(kKey1), commit_request[0]->entity->client_tag_hash);
 }
@@ -1621,14 +1635,18 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   // Entity is sent to server. Processor shouldn't include it in local changes.
   CommitRequestDataList commit_request;
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_TRUE(commit_request.empty());
 
   // Fail commit from worker side indicating this entity was not committed.
   // Processor should include it in consecutive GetLocalChanges responses.
   worker()->FailFullCommitRequest();
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   ASSERT_EQ(1U, commit_request.size());
   EXPECT_EQ(GetPrefHash(kKey1), commit_request[0]->entity->client_tag_hash);
 }
@@ -1650,8 +1668,42 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   CommitRequestDataList commit_request;
   type_processor()->GetLocalChanges(
       /*max_entries=*/1,
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
       base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_EQ(1U, commit_request.size());
+}
+
+// Tests that GetLocalChanges honors max_target_specifics_bytes parameter.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldTruncateLocalChangesToMaxBytes) {
+  InitializeToReadyState();
+  worker()->DisableGetLocalChangesUponNudge();
+
+  WritePrefItem(bridge(), kKey1, kValue1);
+  WritePrefItem(bridge(), kKey2, kValue2);
+
+  // Request with `max_target_specifics_bytes=1` so the first entity already
+  // exceeds the soft byte threshold and stops gathering before the second
+  // entity.
+  CommitRequestDataList commit_request;
+  bool has_more_local_changes = false;
+  type_processor()->GetLocalChanges(
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/1,
+      base::BindOnce(&CaptureCommitRequestAndHasMore, &commit_request,
+                     &has_more_local_changes));
+  EXPECT_EQ(1U, commit_request.size());
+  EXPECT_TRUE(has_more_local_changes);
+
+  // The second entity should still be returned in a subsequent call.
+  commit_request.clear();
+  type_processor()->GetLocalChanges(
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/1,
+      base::BindOnce(&CaptureCommitRequestAndHasMore, &commit_request,
+                     &has_more_local_changes));
+  EXPECT_EQ(1U, commit_request.size());
+  EXPECT_FALSE(has_more_local_changes);
 }
 
 // Creates two different sync items.
@@ -2288,9 +2340,6 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
 TEST_F(ClientTagBasedDataTypeProcessorTest,
        ShouldApplyIncrementalUpdateOnGcDirective_ResolveConflict) {
   InitializeToReadyState();
-
-  const std::string kEncryptionKeyName =
-      db()->data_type_state().encryption_key_name();
 
   WriteItemAndAck(kKey1, kValue1);
   WriteItemAndAck(kKey2, kValue2);
@@ -2967,7 +3016,9 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   // shouldn't ask the bridge or return local changes.
   CommitRequestDataList commit_request;
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_EQ(0U, commit_request.size());
 
   // The processor should not report orphan again in UMA.
@@ -2996,7 +3047,9 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   // Now everything is committed and GetLocalChanges is empty again.
   CommitRequestDataList commit_request;
   type_processor()->GetLocalChanges(
-      INT_MAX, base::BindOnce(&CaptureCommitRequest, &commit_request));
+      /*max_entries=*/std::numeric_limits<size_t>::max(),
+      /*max_target_specifics_bytes=*/std::numeric_limits<size_t>::max(),
+      base::BindOnce(&CaptureCommitRequest, &commit_request));
   EXPECT_EQ(0U, commit_request.size());
 
   // The processor never reports any orphan.
@@ -3253,9 +3306,7 @@ TEST_F(CommitOnlyClientTagBasedDataTypeProcessorTest,
   InitializeToReadyState();
 
   const uint64_t key1 = 1234;
-  const uint64_t key2 = 2345;
   const std::string key1s = base::NumberToString(key1);
-  const std::string key2s = base::NumberToString(key2);
 
   WriteUserEventItem(bridge(), key1, 4321);
   worker()->VerifyPendingCommits({{GetHash(USER_EVENTS, key1s)}});
@@ -4184,6 +4235,36 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   worker()->VerifyPendingCommits({{GetPrefHash(kKey1)}});
 }
 
+// Verifies that disconnecting Sync pauses in-flight attachment uploads and
+// reconnecting resumes them.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldPauseInFlightAttachmentUploadOnDisconnectSync) {
+  InitializeToReadyState();
+  FakeAttachmentUploader* uploader =
+      InstallFakeAttachmentUploader(type_processor());
+
+  // Start an attachment upload and disconnect Sync while the upload is in
+  // flight, which pauses the upload by running its abort callback while
+  // retaining `pending_upload` metadata for resumption.
+  type_processor()->PutWithAttachment(
+      kKey1, GeneratePrefEntityData(kKey1, kValue1), CreateTemporaryFile(),
+      std::make_unique<EmptyMetadataChangeList>().get());
+  ASSERT_TRUE(uploader->HasPendingUpload());
+
+  DisconnectSync();
+  EXPECT_FALSE(uploader->HasPendingUpload());
+  EXPECT_EQ(uploader->cancelled_count(), 1);
+
+  // Connecting Sync resumes the paused upload, and disconnecting again pauses
+  // it a second time.
+  OnSyncStarting();
+  ASSERT_TRUE(uploader->HasPendingUpload());
+
+  DisconnectSync();
+  EXPECT_FALSE(uploader->HasPendingUpload());
+  EXPECT_EQ(uploader->cancelled_count(), 2);
+}
+
 // Verifies that a failed attachment upload cancels the pending upload, persists
 // the cleared metadata, deletes the staging file on disk, and unblocks the
 // entity to commit its specifics without the attachment.
@@ -4276,6 +4357,24 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
 
   EXPECT_TRUE(uploader->HasPendingUpload());
   EXPECT_EQ(worker()->GetNumPendingCommits(), 0U);
+}
+
+// Verifies that pending attachment uploads are not started when an attachment
+// uploader is installed after the processor has encountered a model error.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldNotStartPendingAttachmentUploadsAfterModelError) {
+  InitializeToReadyState();
+  type_processor()->PutWithAttachment(
+      kKey1, GeneratePrefEntityData(kKey1, kValue1), CreateTemporaryFile(),
+      std::make_unique<EmptyMetadataChangeList>().get());
+
+  ExpectError(ClientTagBasedDataTypeProcessor::ErrorSite::kReportedByBridge);
+  type_processor()->ReportError(
+      {FROM_HERE, ModelError::Type::kGenericTestError});
+
+  FakeAttachmentUploader* uploader =
+      InstallFakeAttachmentUploader(type_processor());
+  EXPECT_FALSE(uploader->HasPendingUpload());
 }
 
 }  // namespace syncer

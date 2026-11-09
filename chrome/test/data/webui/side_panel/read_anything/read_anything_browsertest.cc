@@ -135,6 +135,12 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, SelectionController) {
                    "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, TranslatedSelectionController) {
+  RunSidePanelTest(
+      "side_panel/read_anything/translated_selection_controller_test.js",
+      "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, SpeechController) {
   RunSidePanelTest("side_panel/read_anything/speech_controller_test.js",
                    "mocha.run()");
@@ -296,12 +302,6 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, RateMenu) {
   RunSidePanelTest("side_panel/read_anything/rate_menu_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, SpeechUsesMaxTextLength) {
-  RunSidePanelTest(
-      "side_panel/read_anything/speech_uses_max_text_length_test.js",
-      "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, LineFocusController) {
   RunSidePanelTest("side_panel/read_anything/line_focus_controller_test.js",
                    "mocha.run()");
@@ -327,8 +327,8 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, ReadAloudNodeStore) {
                    "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, DomReadAloudNode) {
-  RunSidePanelTest("side_panel/read_anything/dom_read_aloud_node_test.js",
+IN_PROC_BROWSER_TEST_F(ReadAnythingMochaTest, ReadAloudNode) {
+  RunSidePanelTest("side_panel/read_anything/read_aloud_node_test.js",
                    "mocha.run()");
 }
 

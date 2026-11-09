@@ -39,6 +39,7 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/media_start_stop_observer.h"
+#include "content/public/test/popup_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_switches.h"
 #include "net/dns/mock_host_resolver.h"
@@ -1521,11 +1522,22 @@ class PageContentProtoProviderBrowserTestMultiProcess
   base::test::ScopedFeatureList feature_list_;
 };
 
-// TODO(crbug.com/438250758): Test is flaky.
 IN_PROC_BROWSER_TEST_P(PageContentProtoProviderBrowserTestMultiProcess,
-                       DISABLED_AIPageContentMultipleCrossSiteFrames) {
-  LoadPage(https_server()->GetURL("a.com", "/iframe_cross_site.html"),
-           GetActionableAIPageContentOptions());
+                       AIPageContentMultipleCrossSiteFrames) {
+  LoadPage(https_server()->GetURL("a.com", "/iframe_cross_site.html"), nullptr);
+
+  for (size_t i = 0; i < 2; ++i) {
+    auto* sub_frame = ChildFrameAt(web_contents()->GetPrimaryMainFrame(), i);
+    ASSERT_TRUE(sub_frame);
+
+    base::test::TestFuture<bool> future;
+    sub_frame->GetRenderWidgetHost()->InsertVisualStateCallback(
+        future.GetCallback());
+    ASSERT_TRUE(future.Wait())
+        << "Timeout waiting for subframe syncing with renderer";
+  }
+
+  LoadData(GetActionableAIPageContentOptions());
 
   const auto& root_node = ActionableContentRootNode();
   EXPECT_EQ(root_node.children_nodes().size(), 2);
@@ -2105,6 +2117,7 @@ IN_PROC_BROWSER_TEST_F(PageContentProtoProviderBrowserTestScriptTools, Basic) {
   EXPECT_EQ(tool.input_schema(),
             "{\"type\":\"object\",\"properties\":{\"text\":{\"description\":"
             "\"Value to echo\",\"type\":\"string\"}},\"required\":[\"text\"]}");
+  EXPECT_FALSE(tool.has_output_schema());
   EXPECT_TRUE(tool.annotations().read_only());
 }
 
@@ -2136,6 +2149,24 @@ IN_PROC_BROWSER_TEST_F(PageContentProtoProviderBrowserTestScriptTools,
   EXPECT_EQ(tool.description(), "echo input");
   EXPECT_FALSE(tool.has_input_schema());
   EXPECT_FALSE(tool.annotations().read_only());
+}
+
+IN_PROC_BROWSER_TEST_F(PageContentProtoProviderBrowserTestScriptTools,
+                       OutputSchema) {
+  LoadPage(https_server()->GetURL("/script_tool_output_schema.html"));
+
+  const auto& frame_data = page_content().main_frame_data();
+  ASSERT_EQ(frame_data.script_tools().size(), 1u);
+
+  const auto& tool = frame_data.script_tools().at(0);
+  EXPECT_EQ(tool.name(), "echo");
+  EXPECT_EQ(tool.description(), "echo input");
+  EXPECT_EQ(tool.input_schema(),
+            "{\"type\":\"object\",\"properties\":{\"text\":{\"description\":"
+            "\"Value to echo\",\"type\":\"string\"}},\"required\":[\"text\"]}");
+  EXPECT_EQ(tool.output_schema(),
+            "{\"type\":\"object\",\"properties\":{\"text\":{\"description\":"
+            "\"Echoed value\",\"type\":\"string\"}},\"required\":[\"text\"]}");
 }
 
 class PageContentProtoProviderBrowserTestMediaData

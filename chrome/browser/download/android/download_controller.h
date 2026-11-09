@@ -105,7 +105,7 @@ class DownloadController : public DownloadControllerBase {
   bool OnSensitiveDownload(download::DownloadItem* item);
 
   // Shows the UI warnings from Safe Browsing malicious APK download check.
-  // Returns whether the dialog was shown.
+  // Returns whether a warning was shown (whether in dialog form or otherwise).
   bool ShowDangerousDownloadWarning(DownloadUIModel& model);
 
   // Helper methods to start android download on UI thread.
@@ -120,6 +120,10 @@ class DownloadController : public DownloadControllerBase {
 
   // Notify Java that download is complete, so the user can be informed.
   void OnDownloadComplete(download::DownloadItem* item);
+
+  // Notify Java that a transient inline PDF download failed, so the PDF
+  // page can inform the user.
+  void OnDownloadFailed(download::DownloadItem* item);
 
   // Whether or not we should show an app verification prompt for `item`
   bool ShouldShowAppVerificationPrompt(download::DownloadItem* item);

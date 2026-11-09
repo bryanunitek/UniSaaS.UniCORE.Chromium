@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
@@ -200,6 +201,28 @@ bool IsTransparentBox(const Node& node) {
          !object->IsLayoutReplaced() && !object->HasBoxDecorationBackground();
 }
 
+// Returns the element that a hit `node` belongs to: the node itself, or for a
+// text node or a pseudo-element, its parent element (like `InnerElement()`).
+const Element* HitElement(const Node& node) {
+  return node.IsElementNode() && !node.IsPseudoElement() ? To<Element>(&node)
+                                                         : node.parentElement();
+}
+
+// Stops the hit test at the first node deciding whether `element` is visible
+// (see CheckOverlayVisibility()), so that the content behind it, which can't
+// change the outcome, isn't hit-tested (e.g., the rest of the page under an
+// anchor ad).
+ListBasedHitTestBehavior StopAtDecidingNode(Element* element,
+                                            const Node& node,
+                                            const PhysicalRect*,
+                                            const gfx::QuadF*,
+                                            const cc::Region*) {
+  return IsRenderedByElement(HitElement(node), *element) ||
+                 !IsTransparentBox(node)
+             ? kStopHitTesting
+             : kContinueHitTesting;
+}
+
 }  // namespace
 
 DisplayAdElementMonitor::DisplayAdElementMonitor(Element* element,
@@ -214,6 +237,7 @@ DisplayAdElementMonitor::DisplayAdElementMonitor(Element* element,
 void DisplayAdElementMonitor::UpdateToVideoAd() {
   if (!is_video_ad_) {
     is_video_ad_ = true;
+    InvalidatePaintForAdLabel();
   }
   MaybeRecordVideoAdUseCounter();
 
@@ -231,10 +255,11 @@ void DisplayAdElementMonitor::SetIsOverlayPopupAd() {
     return;
   }
   is_overlay_popup_ad_ = true;
+  InvalidatePaintForAdLabel();
+}
 
-  // Repaint so the ad highlight picks up the "popup" label. This only affects
-  // painting when the highlight is currently shown and labels are enabled; if
-  // the highlight is turned on later, DidFinishLifecycleUpdate() invalidates
+void DisplayAdElementMonitor::InvalidatePaintForAdLabel() {
+  // If the highlight is turned on later, DidFinishLifecycleUpdate() invalidates
   // paint on that transition.
   if (should_highlight_ &&
       base::FeatureList::IsEnabled(features::kAdHighlightLabel)) {
@@ -448,26 +473,24 @@ DisplayAdElementMonitor::CheckOverlayVisibility(
       HitTestRequest::kIgnorePointerEventsNone |
       HitTestRequest::kIgnoreZeroOpacityObjects |
       HitTestRequest::kHitTestVisualOverflow | HitTestRequest::kListBased |
-      HitTestRequest::kPenetratingList;
+      HitTestRequest::kPenetratingList | HitTestRequest::kAvoidCache;
 
   // No stop node on purpose: it would skip the element's descendants, so a
   // container (e.g., a <body> whose background image is an ad) covered by
-  // non-ad content would still be hit. Instead, descend fully and decide
-  // afterwards whether the front-most content is rendered by the element.
-  HitTestRequest request(hit_type);
+  // non-ad content would still be hit. Instead, stop once a node deciding the
+  // outcome is hit: nodes are hit after their descendants, so the content
+  // covering such a container has been collected by then. Nodes hit in
+  // subframes skip the callback, but are still covered by the walk below.
+  HitTestRequest request(
+      hit_type, /*stop_node=*/nullptr,
+      BindRepeating(&StopAtDecidingNode, WrapPersistent(element_.Get())));
   HitTestResult result(request, location);
 
   main_frame.ContentLayoutObject()->HitTestNoLifecycleUpdate(location, result);
 
   // Walk the nodes from front to back, skipping transparent boxes.
   for (const auto& node : result.ListBasedTestResult()) {
-    // Like `InnerElement()`, map a text node or a pseudo-element to its parent
-    // element.
-    const Element* hit_element =
-        node->IsElementNode() && !node->IsPseudoElement()
-            ? To<Element>(node.Get())
-            : node->parentElement();
-    if (IsRenderedByElement(hit_element, *element_)) {
+    if (IsRenderedByElement(HitElement(*node), *element_)) {
       return OverlayVisibility::kVisible;
     }
     if (!IsTransparentBox(*node)) {
@@ -613,6 +636,7 @@ void DisplayAdElementMonitor::UpdateToStickyAd(
 
   Placement old_placement = std::exchange(placement_, Placement::kSticky);
   is_sticky_ad_ = true;
+  InvalidatePaintForAdLabel();
 
   // Determine if the newly sticky ad matches any sub-types (e.g., "large
   // sticky ad", "sticky video ad", "sticky pop-out ad") to record metrics and

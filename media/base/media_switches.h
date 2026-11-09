@@ -99,6 +99,10 @@ MEDIA_EXPORT extern const char kAlsaOutputDevice[];
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_FREEBSD) || BUILDFLAG(IS_SOLARIS)
 
+#if BUILDFLAG(IS_MAC)
+MEDIA_EXPORT extern const char kUseFakeNativeScreenCapturePicker[];
+#endif  // BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_WIN)
 MEDIA_EXPORT extern const char kEnableExclusiveAudio[];
 MEDIA_EXPORT extern const char kForceWaveAudio[];
@@ -242,6 +246,7 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kLiveCaptionUseGreedyTextStabilizer);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kLiveCaptionUseWaitK);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kLiveCaptionWebAudio);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kLogSodaLoadFailures);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kMP4ApplyEmptyEditList);
 // Flag to enable or disable parsing of MP4 timed metadata tracks.
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMP4TimedMetadataTrack);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMatchSourceAudioChannelLayout);
@@ -298,7 +303,6 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUnifiedAutoplay);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAndroidOverlayForSecureOnly);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseFakeDeviceForMediaStream);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseSequencedTaskRunnerForMediaService);
-MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseSharedImageUsageForVideoFrameCopy);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseTaskRunnerForMojoAudioDecoderService);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseWindowBoundsForPip);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiEarlyPPSParsingForCENCv1);
@@ -406,6 +410,7 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kAutoPictureInPictureAndroid);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kContextMenuPictureInPictureAndroid);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kFullscreenVideoPictureInPicture);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMediaCodecBlockModel);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kMediaCodecBlockModelEncrypted);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMediaCodecBlockModelOutput);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMediaCodecColorSpaceCleanup);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMediaCodecLowDelayMode);
@@ -443,7 +448,6 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kBackgroundListening);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSDspBasedAecDeactivatedGroups);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSDspBasedAgcDeactivatedGroups);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSDspBasedNsDeactivatedGroups);
-MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSEnforceMonoAudioCapture);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSEnforceSystemAec);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSEnforceSystemAecAgc);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kCrOSEnforceSystemAecNs);

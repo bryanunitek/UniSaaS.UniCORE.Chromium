@@ -21,7 +21,6 @@
 
 namespace base {
 class FilePath;
-class RetainingOneShotTimer;
 class SequencedTaskRunner;
 }  // namespace base
 
@@ -164,12 +163,6 @@ class GCMClient {
         const std::string& app_id,
         const SendErrorDetails& send_error_details) = 0;
 
-    // Called when a message was acknowledged by the GCM server.
-    // |app_id|: application ID.
-    // |message_id|: ID of the acknowledged message.
-    virtual void OnSendAcknowledged(const std::string& app_id,
-                                    const std::string& message_id) = 0;
-
     // Called when the GCM becomes ready. To get to this state, GCMClient
     // finished loading from the GCM store and retrieved the device check-in
     // from the server if it hadn't yet.
@@ -277,10 +270,6 @@ class GCMClient {
   // Gets internal states and statistics.
   virtual GCMStatistics GetStatistics() const = 0;
 
-  // Updates the timer used by the HeartbeatManager for sending heartbeats.
-  virtual void UpdateHeartbeatTimer(
-      std::unique_ptr<base::RetainingOneShotTimer> timer) = 0;
-
   // Adds the Instance ID data for a specific app to the persistent store.
   virtual void AddInstanceIDData(const std::string& app_id,
                                  const std::string& instance_id,
@@ -294,14 +283,6 @@ class GCMClient {
   virtual void GetInstanceIDData(const std::string& app_id,
                                  std::string* instance_id,
                                  std::string* extra_data) = 0;
-
-  // Gets and sets custom heartbeat interval for the MCS connection.
-  // |scope| is used to identify the component that requests a custom interval
-  // to be set, and allows that component to later revoke the setting. It should
-  // be unique.
-  virtual void AddHeartbeatInterval(const std::string& scope,
-                                    int interval_ms) = 0;
-  virtual void RemoveHeartbeatInterval(const std::string& scope) = 0;
 };
 
 }  // namespace gcm

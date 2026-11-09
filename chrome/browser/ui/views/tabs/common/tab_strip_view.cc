@@ -37,8 +37,12 @@
 #include "components/tabs/public/tab_collection_types.h"
 #include "components/tabs/public/tab_group.h"
 #include "content/public/browser/navigation_controller.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/platform/assistive_tech.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/layout_types.h"
@@ -179,6 +183,8 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
 
   SetLayoutManager(std::make_unique<TabStripViewLayout>(orientation_));
   SetProperty(views::kElementIdentifierKey, kTabStripElementId);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kTabList);
+  GetViewAccessibility().SetIsMultiselectable(true);
 
   pinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
       views::ScrollView::ScrollWithLayers::kEnabled));
@@ -242,6 +248,9 @@ TabStripView::~TabStripView() {
 void TabStripView::AddedToWidget() {
   views::Widget* const widget = GetWidget();
   widget_observation_.Observe(widget);
+  if (widget->IsVisible()) {
+    is_first_window_presentation_ = false;
+  }
 }
 
 void TabStripView::RemovedFromWidget() {
@@ -267,6 +276,30 @@ void TabStripView::OnMouseExited(const ui::MouseEvent& event) {
 
 void TabStripView::OnWidgetActivationChanged(views::Widget* widget,
                                              bool active) {
+  if (!collection_node_) {
+    return;
+  }
+
+  if (active &&
+      ui::AXPlatform::GetInstance().active_assistive_tech() ==
+          ui::AssistiveTech::kJaws &&
+      ui::AXPlatform::GetInstance().JawsNeedsTabSelectionEvent()) {
+    // When the browser window is activated, set the accessible selection and
+    // fire a selection event on the currently active tab to help older
+    // versions of JAWS restore per-tab settings when switching windows.
+    if (const tabs::TabInterface* active_tab =
+            collection_node_->GetController()->GetActiveTab()) {
+      if (TabCollectionNode* active_node =
+              collection_node_->GetNodeForHandle(active_tab->GetHandle())) {
+        if (views::View* active_view = active_node->view()) {
+          active_view->GetViewAccessibility().SetIsSelected(true);
+          active_view->GetViewAccessibility().NotifyEvent(
+              ax::mojom::Event::kSelection, true);
+        }
+      }
+    }
+  }
+
   if (TabHoverCardController* hover_card_controller =
           collection_node_->GetController()->GetHoverCardController();
       hover_card_controller) {
@@ -275,14 +308,57 @@ void TabStripView::OnWidgetActivationChanged(views::Widget* widget,
   }
 }
 
-void TabStripView::OnChildCountChanged() {
+void TabStripView::OnWidgetVisibilityChanged(views::Widget* widget,
+                                             bool visible) {
+  if (visible && is_first_window_presentation_) {
+    is_first_window_presentation_ = false;
+    // Only scroll-in the active tab for the first window presentation.
+    if (collection_node_) {
+      OnActiveTabChanged(collection_node_->GetController()->GetActiveTab());
+    }
+  }
+}
+
+void TabStripView::OnChildrenAdded(const tabs::TabCollectionNodes& handles) {
+  if (!collection_node_) {
+    return;
+  }
+
+  UpdateSeparatorVisibility();
+
+  const tabs::TabInterface* active_tab =
+      collection_node_->GetController()->GetActiveTab();
+  if (is_first_window_presentation_ || !active_tab) {
+    return;
+  }
+
+  const tabs::TabInterface* last_new_tab = nullptr;
+  for (const auto& handle : handles) {
+    if (const auto* tab_handle = std::get_if<tabs::TabHandle>(&handle)) {
+      tabs::TabInterface* new_tab = tab_handle->Get();
+      if (new_tab && new_tab != active_tab) {
+        last_new_tab = new_tab;
+      }
+    }
+  }
+
+  if (last_new_tab) {
+    ScrollToFitTabs(active_tab, last_new_tab);
+  }
+}
+
+void TabStripView::OnChildrenRemoved() {
+  if (!collection_node_) {
+    return;
+  }
+
   UpdateSeparatorVisibility();
 }
 
 void TabStripView::OnChildMoved(TabCollectionNode* moved_node) {
   CHECK(moved_node);
 
-  if (collection_node_ &&
+  if (!collection_node_ || is_first_window_presentation_ ||
       collection_node_->GetController()->GetDragHandler().IsDragging()) {
     return;
   }
@@ -314,7 +390,7 @@ void TabStripView::OnChildMoved(TabCollectionNode* moved_node) {
         const tabs::TabInterface* tab =
             std::get<tabs::ConstDanglingUntriagedTabInterface>(
                 moved_node->GetNodeData());
-        OnTabChanged(tab);
+        OnActiveTabChanged(tab);
         break;
       }
       case TabCollectionNode::Type::SPLIT:
@@ -329,8 +405,8 @@ void TabStripView::OnChildMoved(TabCollectionNode* moved_node) {
   }
 }
 
-void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
-  if (!collection_node_ || !active_tab) {
+void TabStripView::OnActiveTabChanged(const tabs::TabInterface* active_tab) {
+  if (!collection_node_ || !active_tab || is_first_window_presentation_) {
     return;
   }
 
@@ -431,9 +507,15 @@ void TabStripView::ScrollToFitViews(views::View* view1, views::View* view2) {
 void TabStripView::RecordMousePressedInTab() {
   if (mouse_entered_tabstrip_time_.has_value() &&
       !has_reported_time_mouse_entered_to_switch_) {
-    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
-        "TabStrip.Vertical.TimeToSwitch",
-        base::TimeTicks::Now() - mouse_entered_tabstrip_time_.value());
+    if (orientation_ == TabStripOrientation::kVertical) {
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+          "TabStrip.Vertical.TimeToSwitch",
+          base::TimeTicks::Now() - mouse_entered_tabstrip_time_.value());
+    } else {
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+          "TabStrip.TimeToSwitch",
+          base::TimeTicks::Now() - mouse_entered_tabstrip_time_.value());
+    }
     has_reported_time_mouse_entered_to_switch_ = true;
   }
 }

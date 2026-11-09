@@ -23,6 +23,7 @@ namespace actor {
 enum class ToolId {
   // Navigates the active tab to a specified URL.
   kNavigate = 0,
+  kMinValue = kNavigate,
   // Clicks an element on the active page by DOM node ID.
   kClick = 1,
   // Switches to an open tab in the active browser window matching a query.
@@ -102,13 +103,14 @@ enum class ToolId {
   kCloseGeminiPanel = 38,
   // Opens a URL in the given tab or in a new tab in that tab's window.
   kOpenUrl = 39,
-  kMaxValue = kOpenUrl,
+  // Searches within the currently active website using its search bar or
+  // OpenSearch Description Document (OSDD) template.
+  kSiteBasedSearch = 40,
+  kMaxValue = kSiteBasedSearch,
 };
-
 // In-memory metadata and parameter schema for a shared browser tool. Prefer
 // building instances with `ToolDefinitionBuilder`.
 struct ToolDefinition {
-  ToolDefinition(ToolId id, std::string name, std::string description);
   ToolDefinition(ToolId id,
                  std::string name,
                  std::string description,

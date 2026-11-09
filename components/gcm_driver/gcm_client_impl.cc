@@ -46,21 +46,6 @@
 
 namespace gcm {
 
-// It is okay to append to the enum if these states grow. DO NOT reorder,
-// renumber or otherwise reuse existing values.
-// Do not assign an explicit value to REGISTRATION_CACHE_STATUS_COUNT, as
-// this lets the compiler keep it up to date.
-enum class RegistrationCacheStatus {
-  REGISTRATION_NOT_FOUND = 0,
-  REGISTRATION_FOUND_AND_FRESH = 1,
-  REGISTRATION_FOUND_BUT_STALE = 2,
-  REGISTRATION_FOUND_BUT_SENDERS_DONT_MATCH = 3,
-  // NOTE: always keep this entry at the end. Add new value only immediately
-  // above this line. Make sure to update the corresponding histogram enum
-  // accordingly.
-  REGISTRATION_CACHE_STATUS_COUNT
-};
-
 namespace {
 
 // Indicates a message type of the received message.
@@ -160,12 +145,6 @@ bool InstanceIDUsesSubtypeForAppId(const std::string& app_id) {
 }
 
 }  // namespace
-
-void RecordRegistrationRequestToUMA(gcm::RegistrationCacheStatus status) {
-  UMA_HISTOGRAM_ENUMERATION(
-      "GCM.RegistrationCacheStatus", status,
-      RegistrationCacheStatus::REGISTRATION_CACHE_STATUS_COUNT);
-}
 
 GCMClientImpl::GCMClientImpl(
     std::unique_ptr<fcm::FcmInternalsBuilder> internals_builder)
@@ -371,8 +350,6 @@ void GCMClientImpl::InitializeMCSClient() {
       gcm_store_.get(), io_task_runner_, &recorder_);
 
   mcs_client_->Initialize(
-      base::BindRepeating(&GCMClientImpl::OnMCSError,
-                          weak_ptr_factory_.GetWeakPtr()),
       base::BindRepeating(&GCMClientImpl::OnMessageReceivedFromMCS,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindRepeating(&GCMClientImpl::OnMessageSentToMCS,
@@ -431,13 +408,6 @@ void GCMClientImpl::ResetStore() {
                                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-void GCMClientImpl::UpdateHeartbeatTimer(
-    std::unique_ptr<base::RetainingOneShotTimer> timer) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(mcs_client_);
-  mcs_client_->UpdateHeartbeatTimer(std::move(timer));
-}
-
 void GCMClientImpl::AddInstanceIDData(const std::string& app_id,
                                       const std::string& instance_id,
                                       const std::string& extra_data) {
@@ -474,19 +444,6 @@ void GCMClientImpl::GetInstanceIDData(const std::string& app_id,
   }
   *instance_id = iter->second.first;
   *extra_data = iter->second.second;
-}
-
-void GCMClientImpl::AddHeartbeatInterval(const std::string& scope,
-                                         int interval_ms) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(mcs_client_);
-  mcs_client_->AddHeartbeatInterval(scope, interval_ms);
-}
-
-void GCMClientImpl::RemoveHeartbeatInterval(const std::string& scope) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(mcs_client_);
-  mcs_client_->RemoveHeartbeatInterval(scope);
 }
 
 void GCMClientImpl::StartCheckin() {
@@ -702,8 +659,6 @@ void GCMClientImpl::Register(
           cached_gcm_registration_info->sender_ids) {
         matched = false;
         // Senders IDs don't match existing registration.
-        RecordRegistrationRequestToUMA(
-            RegistrationCacheStatus::REGISTRATION_FOUND_BUT_SENDERS_DONT_MATCH);
       }
     }
 
@@ -715,19 +670,9 @@ void GCMClientImpl::Register(
         // Token is fresh. Use cached registration.
         delegate_->OnRegisterFinished(registration_info,
                                       registrations_iter->second, SUCCESS);
-        RecordRegistrationRequestToUMA(
-            RegistrationCacheStatus::REGISTRATION_FOUND_AND_FRESH);
         return;
-      } else {
-        // Token is stale.
-        RecordRegistrationRequestToUMA(
-            RegistrationCacheStatus::REGISTRATION_FOUND_BUT_STALE);
       }
     }
-  } else {
-    // New Registration request (no existing registration)
-    RecordRegistrationRequestToUMA(
-        RegistrationCacheStatus::REGISTRATION_NOT_FOUND);
   }
 
   std::unique_ptr<RegistrationRequest::CustomRequestHandler> request_handler;
@@ -1122,12 +1067,15 @@ void GCMClientImpl::OnMessageReceivedFromMCS(const gcm::MCSMessage& message) {
   }
 }
 
-void GCMClientImpl::OnMessageSentToMCS(int64_t user_serial_number,
-                                       const std::string& app_id,
+void GCMClientImpl::OnMessageSentToMCS(const std::string& app_id,
                                        const std::string& message_id,
                                        MCSClient::MessageSendStatus status) {
-  DCHECK_EQ(user_serial_number, kDefaultUserSerialNumber);
   DCHECK(delegate_);
+
+  if (status == MCSClient::SENT) {
+    // Send acknowledgments are intentionally ignored.
+    return;
+  }
 
   // TTL_EXCEEDED is singled out here, because it can happen long time after the
   // message was sent. That is why it comes as |OnMessageSendError| event rather
@@ -1141,16 +1089,9 @@ void GCMClientImpl::OnMessageSentToMCS(int64_t user_serial_number,
     send_error_details.message_id = message_id;
     send_error_details.result = GCMClient::TTL_EXCEEDED;
     delegate_->OnMessageSendError(app_id, send_error_details);
-  } else if (status == MCSClient::SENT) {
-    delegate_->OnSendAcknowledged(app_id, message_id);
   } else {
     delegate_->OnSendFinished(app_id, message_id, ToGCMClientResult(status));
   }
-}
-
-void GCMClientImpl::OnMCSError() {
-  // TODO(fgorski): For now it replaces the initialization method. Long term it
-  // should have an error or status passed in.
 }
 
 void GCMClientImpl::HandleIncomingMessage(const gcm::MCSMessage& message) {

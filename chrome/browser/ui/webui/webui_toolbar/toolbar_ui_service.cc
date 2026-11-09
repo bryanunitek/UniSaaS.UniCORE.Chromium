@@ -322,6 +322,18 @@ void ToolbarUIService::OnHomeButtonDropText(const std::string& text) {
   }
 }
 
+void ToolbarUIService::OnToolbarDropUrl(const GURL& url) {
+  if (delegate_) {
+    delegate_->OnToolbarDropUrl(url);
+  }
+}
+
+void ToolbarUIService::OnToolbarDropText(const std::string& text) {
+  if (delegate_) {
+    delegate_->OnToolbarDropText(text);
+  }
+}
+
 void ToolbarUIService::OnToolbarDropFile(const gfx::PointF& drop_position) {
   if (delegate_) {
     delegate_->OnToolbarDropFile(drop_position);
@@ -385,17 +397,18 @@ void ToolbarUIService::OnAppMenuFocusChanged(bool focused) {
   }
 }
 
-void ToolbarUIService::ExecuteExtensionAction(const std::string& extension_id) {
+void ToolbarUIService::ExecuteExtensionAction(
+    extensions_bar::mojom::ExtensionActionIdPtr id) {
   if (delegate_) {
-    delegate_->ExecuteExtensionAction(extension_id);
+    delegate_->ExecuteExtensionAction(std::move(id));
   }
 }
 
 void ToolbarUIService::ShowExtensionContextMenu(
-    const std::string& extension_id,
+    extensions_bar::mojom::ExtensionActionIdPtr id,
     ui::mojom::MenuSourceType source) {
   if (delegate_) {
-    delegate_->ShowExtensionContextMenu(extension_id, source);
+    delegate_->ShowExtensionContextMenu(std::move(id), source);
   }
 }
 
@@ -428,6 +441,12 @@ void ToolbarUIService::OnMediaButtonClicked() {
 void ToolbarUIService::OnGlicButtonClicked() {
   if (delegate_) {
     delegate_->OnGlicButtonClicked();
+  }
+}
+
+void ToolbarUIService::OnGlicActorTaskIconClicked() {
+  if (delegate_) {
+    delegate_->OnGlicActorTaskIconClicked();
   }
 }
 }  // namespace toolbar_ui_api

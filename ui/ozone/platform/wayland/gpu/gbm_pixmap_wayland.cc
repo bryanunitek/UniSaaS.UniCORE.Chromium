@@ -46,9 +46,10 @@ bool GbmPixmapWayland::InitializeBuffer(
     viz::SharedImageFormat format,
     NativePixmapUsageSet usage,
     std::optional<gfx::Size> visible_area_size) {
-  DCHECK(!visible_area_size ||
-         ((visible_area_size.value().width() <= size.width()) &&
-          (visible_area_size.value().height() <= size.height())));
+  CHECK(!visible_area_size ||
+            ((visible_area_size.value().width() <= size.width()) &&
+             (visible_area_size.value().height() <= size.height())),
+        base::NotFatalUntil::M163);
   TRACE_EVENT0("wayland", "GbmPixmapWayland::InitializeBuffer");
 
   widget_ = widget;
@@ -197,7 +198,7 @@ bool GbmPixmapWayland::ScheduleOverlayPlane(
     gfx::AcceleratedWidget widget,
     const gfx::OverlayPlaneData& overlay_plane_data,
     gfx::GpuFenceHandle acquire_fence) {
-  DCHECK_NE(widget, gfx::kNullAcceleratedWidget);
+  CHECK_NE(widget, gfx::kNullAcceleratedWidget, base::NotFatalUntil::M163);
 
   if (!created_wl_buffer_) {
     CreateDmabufBasedWlBuffer(overlay_plane_data);
@@ -207,10 +208,10 @@ bool GbmPixmapWayland::ScheduleOverlayPlane(
 
   auto* surface = buffer_manager_->GetSurface(widget);
   // This must never be hit.
-  DCHECK(surface);
+  CHECK(surface, base::NotFatalUntil::M163);
   GbmSurfacelessWayland* surfaceless =
       static_cast<GbmSurfacelessWayland*>(surface);
-  DCHECK(surfaceless);
+  CHECK(surfaceless, base::NotFatalUntil::M163);
 
   surfaceless->QueueWaylandOverlayConfig({overlay_plane_data,
                                           std::move(acquire_fence), buffer_id_,
@@ -248,24 +249,29 @@ void GbmPixmapWayland::CreateDmabufBasedWlBuffer(
   std::vector<uint32_t> offsets;
   std::vector<uint64_t> modifiers;
 
+  // Each plane may be backed by a separate dmabuf object (e.g. buffers
+  // allocated with disjoint planes), so pass the fd of every plane.
+  std::vector<base::ScopedFD> fds;
+
   size_t plane_count = gbm_bo_->GetNumPlanes();
   for (size_t i = 0; i < plane_count; ++i) {
     strides.push_back(GetDmaBufPitch(i));
     offsets.push_back(GetDmaBufOffset(i));
     modifiers.push_back(modifier);
-  }
 
-  base::ScopedFD fd(HANDLE_EINTR(dup(GetDmaBufFd(0))));
-  if (!fd.is_valid()) {
-    PLOG(FATAL) << "dup";
+    base::ScopedFD fd(HANDLE_EINTR(dup(GetDmaBufFd(i))));
+    if (!fd.is_valid()) {
+      PLOG(FATAL) << "dup";
+    }
+    fds.push_back(std::move(fd));
   }
 
   // The wl_buffer must be destroyed once this pixmap is destroyed.
   created_wl_buffer_ = true;
 
-  // Asks Wayland to create a wl_buffer based on the |file| fd.
+  // Asks Wayland to create a wl_buffer based on the per-plane |fds|.
   buffer_manager_->CreateDmabufBasedBuffer(
-      std::move(fd), visible_area_size_, strides, offsets, modifiers,
+      std::move(fds), visible_area_size_, strides, offsets, modifiers,
       gbm_bo_->GetFormat(), plane_count, overlay_plane_data.color_space,
       overlay_plane_data.hdr_metadata, buffer_id_);
 }

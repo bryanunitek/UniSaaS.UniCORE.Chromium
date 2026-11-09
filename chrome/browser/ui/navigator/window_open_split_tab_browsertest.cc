@@ -7,7 +7,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -24,6 +23,7 @@
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "url/gurl.h"
 
 namespace {
@@ -44,10 +44,8 @@ class WindowOpenSplitTabBrowserTest : public InProcessBrowserTest {
  public:
   WindowOpenSplitTabBrowserTest() {
     // The base::Feature is enabled by default, but the Blink feature only
-    // follows it when it is overridden. kSplitViewHorizontal is enabled
-    // explicitly, since the top/bottom tests expect a stacked split.
-    feature_list_.InitWithFeatures(
-        {blink::features::kWindowOpenSplitTab, tabs::kSplitViewHorizontal}, {});
+    // follows it when it is overridden.
+    feature_list_.InitAndEnableFeature(blink::features::kWindowOpenSplitTab);
   }
 
   void SetUpOnMainThread() override {
@@ -318,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(WindowOpenSplitTabBrowserTest, OpenerNotActive) {
   content::WebContents* opener = opener_contents();
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("/title3.html"),
-      WindowOpenDisposition::kNewForegroundTab,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   ASSERT_EQ(2, tab_strip_model()->count());
   ASSERT_NE(opener, tab_strip_model()->GetActiveWebContents());
@@ -377,34 +375,6 @@ IN_PROC_BROWSER_TEST_F(WindowOpenSplitTabBrowserTest, SplitViewModifierClick) {
                         "split,splitposition=left,splitsize=30");
   ExpectSplit(opener, new_contents, /*new_tab_first=*/false,
               split_tabs::SplitTabLayout::kSideBySide, 0.5);
-}
-
-class WindowOpenSplitTabNoStackedBrowserTest
-    : public WindowOpenSplitTabBrowserTest {
- public:
-  WindowOpenSplitTabNoStackedBrowserTest() {
-    feature_list_.InitAndDisableFeature(tabs::kSplitViewHorizontal);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Without stacked split support, top/bottom fall back to left/right.
-IN_PROC_BROWSER_TEST_F(WindowOpenSplitTabNoStackedBrowserTest, PositionTop) {
-  content::WebContents* opener = opener_contents();
-  content::WebContents* new_contents =
-      OpenWindow(opener, "split,splitposition=top,splitsize=40");
-  ExpectSplit(opener, new_contents, /*new_tab_first=*/true,
-              split_tabs::SplitTabLayout::kSideBySide, 0.4);
-}
-
-IN_PROC_BROWSER_TEST_F(WindowOpenSplitTabNoStackedBrowserTest, PositionBottom) {
-  content::WebContents* opener = opener_contents();
-  content::WebContents* new_contents =
-      OpenWindow(opener, "split,splitposition=bottom,splitsize=40");
-  ExpectSplit(opener, new_contents, /*new_tab_first=*/false,
-              split_tabs::SplitTabLayout::kSideBySide, 0.6);
 }
 
 class WindowOpenSplitTabDisabledBrowserTest : public InProcessBrowserTest {

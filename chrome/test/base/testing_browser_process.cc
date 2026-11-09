@@ -402,6 +402,10 @@ void TestingBrowserProcess::SetVariationsService(
   variations_service_ = variations_service;
 }
 
+void TestingBrowserProcess::SetStartupData(StartupData* startup_data) {
+  startup_data_ = startup_data;
+}
+
 PrefService* TestingBrowserProcess::local_state() {
   return testing_local_state_.get();
 }
@@ -416,7 +420,7 @@ variations::VariationsService* TestingBrowserProcess::variations_service() {
 }
 
 StartupData* TestingBrowserProcess::startup_data() {
-  return nullptr;
+  return startup_data_;
 }
 
 policy::ChromeBrowserPolicyConnector*
@@ -772,6 +776,11 @@ void TestingBrowserProcess::MaybeStartTearDown() {
   }
   is_torn_down_ = true;
 
+  // Shut down GlobalFeatures while TaskEnvironment and ThreadPool are still
+  // active, without destroying `testing_profile_manager_` or
+  // `profile_manager_` (which tests may still reference until their own
+  // TearDown() / destructor completes).
+  features_->PostMainMessageLoopRun();
   os_crypt_async_.reset();
   network_time_tracker_.reset();
 #if BUILDFLAG(ENABLE_CHROME_NOTIFICATIONS)

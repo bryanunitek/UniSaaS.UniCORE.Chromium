@@ -37,6 +37,8 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
@@ -54,6 +56,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/test/test_sync_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -66,7 +69,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/image_replacement/image_replacement.mojom.h"
 #include "ui/actions/actions.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/display/display_switches.h"
 #include "ui/views/controls/webview/webview.h"
 
@@ -900,8 +903,9 @@ IN_PROC_BROWSER_TEST_P(IndigoBrowserTest, HideToolbarOnReload) {
                   // Reload the current tab. Using chrome::Reload avoids race
                   // conditions with ReloadButton's internal mode-switch timer.
                   Do(base::BindLambdaForTesting([&]() {
-                    chrome::Reload(browser(),
-                                   WindowOpenDisposition::kCurrentTab);
+                    chrome::Reload(
+                        browser(),
+                        ui::mojom::WindowOpenDisposition::kCurrentTab);
                   })),
                   // Verify the toolbar is hidden.
                   WaitForHide(IndigoToolbar::kToolbarElementId));
@@ -1055,10 +1059,8 @@ IN_PROC_BROWSER_TEST_F(IndigoContextualCueingV2BrowserTest,
   const GURL main_tab_url = embedded_test_server()->GetURL("/image.html");
 
   page_actions::PageActionController* page_action_controller =
-      browser()
-          ->GetActiveTabInterface()
-          ->GetTabFeatures()
-          ->page_action_controller();
+      page_actions::PageActionController::From(
+          browser()->GetActiveTabInterface());
   page_actions::PageActionObserver observer(kActionAnchoredContextualCue);
   observer.RegisterAsPageActionObserver(*page_action_controller);
 
@@ -1105,6 +1107,31 @@ IN_PROC_BROWSER_TEST_F(IndigoContextMenuToastPromoBrowserTest,
       }),
       CheckPromoActive(feature_engagement::kIPHIndigoContextMenuToastFeature,
                        false));
+}
+
+class IndigoContextMenuSnoozePromoBrowserTest
+    : public IndigoBrowserTestMixin<InteractiveFeaturePromoTest> {
+ public:
+  IndigoContextMenuSnoozePromoBrowserTest()
+      : IndigoBrowserTestMixin(UseDefaultTrackerAllowingPromos(
+            {feature_engagement::kIPHIndigoContextMenuSnoozeFeature})) {}
+
+ protected:
+  bool IsContextualCuesMode() const override { return false; }
+
+ private:
+  base::test::ScopedFeatureList context_menu_feature_list_{
+      features::kIndigoContextMenu};
+};
+
+IN_PROC_BROWSER_TEST_F(IndigoContextMenuSnoozePromoBrowserTest,
+                       ContextMenuSnoozePromoShownOnEligiblePage) {
+  const GURL main_tab_url = embedded_test_server()->GetURL("/image.html");
+  RunTestSequence(
+      InstrumentTab(kWebContentsId),
+      NavigateWebContents(kWebContentsId, main_tab_url),
+      WaitForWebContentsReady(kWebContentsId, main_tab_url),
+      WaitForPromo(feature_engagement::kIPHIndigoContextMenuSnoozeFeature));
 }
 
 }  // namespace

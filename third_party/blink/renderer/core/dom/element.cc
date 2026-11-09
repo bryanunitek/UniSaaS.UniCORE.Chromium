@@ -3588,11 +3588,18 @@ DOMRect* Element::GetBoundingClientRectForBinding() {
   return GetBoundingClientRect();
 }
 
-ContainerQueryList* Element::matchContainer(const String& query) {
+ContainerQueryList* Element::matchContainer(const String& query,
+                                            ExceptionState& exception_state) {
   CSSParserContext* context =
       MakeGarbageCollected<CSSParserContext>(GetDocument());
   auto* container_queries =
       ContainerQueryParser::ParseContainerQuerySet(query, *context);
+  if (!container_queries) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kSyntaxError,
+        StrCat({"Failed to parse the container query list '", query, "'."}));
+    return nullptr;
+  }
   auto* list = MakeGarbageCollected<ContainerQueryList>(
       GetDocument().GetExecutionContext(), container_queries, this);
   ContainerQueryListController::From(GetDocument())
@@ -5856,7 +5863,7 @@ StyleRecalcChange Element::RecalcOwnStyle(
   DCHECK(GetDocument().InStyleRecalc());
 
   StyleRecalcContext new_style_recalc_context = style_recalc_context;
-  if (change.RecalcChildren() || change.RecalcContainerQueryDependent(*this)) {
+  if (change.RecalcChildren() || change.RecalcFlagDependent(*this)) {
     if (NeedsStyleRecalc()) {
       if (NodeRareData* data = RareData()) {
         // This element needs recalc because its parent changed inherited
@@ -5956,13 +5963,25 @@ StyleRecalcChange Element::RecalcOwnStyle(
     old_style = nullptr;
   }
 
-  if (GetOverscrollAreaTracker() && old_style && new_style &&
-      old_style->IsInert() != new_style->IsInert()) {
-    // Toggle invokers inside closed overscroll areas depend on the container's
-    // inertness via OverscrollAreaTracker::ShouldRemoveInertness(), and closed
-    // areas block independent inherited property propagation.
-    child_change =
-        child_change.EnsureAtLeast(StyleRecalcChange::kRecalcDescendants);
+  if (old_style && new_style) {
+    if (GetOverscrollAreaTracker() &&
+        old_style->IsInert() != new_style->IsInert()) {
+      // Toggle invokers inside closed overscroll areas depend on the
+      // container's inertness via
+      // OverscrollAreaTracker::ShouldRemoveInertness(), and closed areas block
+      // independent inherited property propagation.
+      child_change =
+          child_change.EnsureAtLeast(StyleRecalcChange::kRecalcDescendants);
+    }
+    if (RuntimeEnabledFeatures::CompositeHoverStyleEnabled()) {
+      if (!style_recalc_context.has_hover_affected_ancestor &&
+          !old_style->AffectedByHover() &&
+          !old_style->AffectedByNonSubjectHoverSelector() &&
+          (new_style->AffectedByHover() ||
+           new_style->AffectedByNonSubjectHoverSelector())) {
+        child_change = child_change.ForceClearPrecomputedHover();
+      }
+    }
   }
 
   if (!new_style) {
@@ -8890,8 +8909,7 @@ void Element::SetFocused(bool now_focused,
   FocusStateChanged();
 
   if (GetLayoutObject() || now_focused ||
-      (IsA<HTMLAreaElement>(*this) && GetComputedStyle() &&
-       RuntimeEnabledFeatures::HTMLAreaElementDisplayNoneEnabled())) {
+      (IsA<HTMLAreaElement>(*this) && GetComputedStyle())) {
     return;
   }
 
@@ -9322,8 +9340,7 @@ void Element::FocusStateChanged() {
   // <area> is an exception, since its focus ring is painted by the <img> that
   // uses its <map>, so its focus style needs to stay current.
   if (!GetLayoutObject()) {
-    if (!IsA<HTMLAreaElement>(*this) ||
-        !RuntimeEnabledFeatures::HTMLAreaElementDisplayNoneEnabled()) {
+    if (!IsA<HTMLAreaElement>(*this)) {
       return;
     }
 
@@ -9561,6 +9578,15 @@ bool Element::IsVideoAd() const {
   if (const NodeRareData* data = RareData()) {
     if (auto* monitor = data->GetDisplayAdElementMonitor()) {
       return monitor->IsVideoAd();
+    }
+  }
+  return false;
+}
+
+bool Element::IsStickyAd() const {
+  if (const NodeRareData* data = RareData()) {
+    if (const auto* monitor = data->GetDisplayAdElementMonitor()) {
+      return monitor->IsStickyAd();
     }
   }
   return false;
@@ -10803,8 +10829,7 @@ bool Element::ShouldStoreComputedStyle(const ComputedStyle& style) const {
   }
 
   // An <area> has no box, but remains interactive through its image map.
-  if (IsA<HTMLAreaElement>(*this) &&
-      RuntimeEnabledFeatures::HTMLAreaElementDisplayNoneEnabled()) {
+  if (IsA<HTMLAreaElement>(*this)) {
     return true;
   }
 
@@ -11438,7 +11463,7 @@ PseudoElement* Element::GetPseudoElement(
 
 CSSPseudoElement* Element::pseudo(const AtomicString& type) {
   auto [pseudo_id, pseudo_argument] =
-      CSSPseudoElement::ConvertTypeToSupportedPseudoId(type, this);
+      CSSPseudoElement::ConvertTypeToSupportedPseudoId(type);
   return EnsureCSSPseudoElement(pseudo_id, pseudo_argument);
 }
 
@@ -14393,11 +14418,6 @@ Element* Element::ImplicitAnchorElement() const {
     }
   }
   return nullptr;
-}
-
-bool Element::HasContainerTimingIgnoreAttribute() const {
-  return FastHasAttribute(html_names::kContainertimingignoreAttr) ||
-         FastHasAttribute(html_names::kContainertimingIgnoreAttr);
 }
 
 void Element::SetHTMLUnsafeWithoutTrustedTypes(

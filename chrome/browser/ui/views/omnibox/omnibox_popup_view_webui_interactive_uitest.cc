@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
 #include "chrome/browser/ui/permission_bubble/permission_prompt.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/omnibox/full_webui_omnibox_frame.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_full_popup_webui_content.h"
@@ -207,8 +208,6 @@ void OmniboxPopupViewWebUITest::UseDefaultTheme() {
 void OmniboxPopupViewWebUITest::SetUp() {
   InProcessBrowserTest::SetUp();
 }
-
-
 
 // Check that the location bar background (and the background of the textfield
 // it contains) changes when it receives focus, and matches the popup background
@@ -416,8 +415,9 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test,
 
   // When the page paints the shadow, the height it reports always includes its
   // full vertical shadow padding.
-  const int reported_shadow_height =
-      presenter->ShouldDrawShadowInWebUI() ? full_shadow_insets.height() : 0;
+  const int reported_shadow_height = presenter->config().draw_shadow_in_webui
+                                         ? full_shadow_insets.height()
+                                         : 0;
 
   // Collapsed state: widget bounds exclude the bottom shadow margin.
   presenter->OnContentHeightChanged(collapsed_content_height +
@@ -769,5 +769,39 @@ IN_PROC_BROWSER_TEST_P(OmniboxPopupViewWebUIFrameCacheTest,
   web_contents->WasShown();
 }
 #endif
+
+#if BUILDFLAG(IS_WIN)
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest,
+                       CreatesNonDesktopWidgetWhenFlagDisabled) {
+  CreatePopupForTestQuery();
+  auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+      location_bar()->GetOmniboxPopupView());
+  ASSERT_TRUE(popup_view);
+  ASSERT_TRUE(popup_view->presenter());
+  ASSERT_TRUE(popup_view->presenter()->GetWidget());
+  EXPECT_FALSE(popup_view->presenter()->GetWidget()->GetIsDesktopWidget());
+}
+
+class OmniboxPopupViewWebUIDesktopWidgetTest
+    : public OmniboxPopupViewWebUITest {
+ public:
+  OmniboxPopupViewWebUIDesktopWidgetTest() = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kOmniboxPopupDesktopWidget};
+};
+
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIDesktopWidgetTest,
+                       CreatesDesktopWidgetWhenFlagEnabled) {
+  CreatePopupForTestQuery();
+  auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+      location_bar()->GetOmniboxPopupView());
+  ASSERT_TRUE(popup_view);
+  ASSERT_TRUE(popup_view->presenter());
+  ASSERT_TRUE(popup_view->presenter()->GetWidget());
+  EXPECT_TRUE(popup_view->presenter()->GetWidget()->GetIsDesktopWidget());
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)

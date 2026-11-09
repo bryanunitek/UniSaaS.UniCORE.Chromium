@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://omnibox-popup.top-chrome/omnibox_popup.js';
+import 'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.js';
 
-import {AimButtonMode, SearchboxBrowserProxy} from 'chrome://omnibox-popup.top-chrome/omnibox_popup.js';
-import type {OmniboxComposeboxElement} from 'chrome://omnibox-popup.top-chrome/omnibox_popup.js';
-import {ComposeboxProxyImpl} from 'chrome://omnibox-popup.top-chrome/omnibox_popup.js';
+import {AimButtonMode, ComposeboxProxyImpl, SearchboxBrowserProxy} from 'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.js';
+import type {OmniboxComposeboxElement} from 'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.js';
 import {ComposeboxFile, SingleTabType} from 'chrome://resources/cr_components/composebox/common.js';
 import {PageHandlerRemote} from 'chrome://resources/cr_components/composebox/composebox.mojom-webui.js';
 import type {ComposeboxAimButtonElement} from 'chrome://resources/cr_components/composebox/composebox_aim_button.js';
@@ -62,6 +61,8 @@ suite('OmniboxComposeboxTest', () => {
       contextButtonShapeIsOblong: true,
       webuiOmniboxSimplificationEnabled: true,
       voiceSearchCoherenceComposeboxesEnabled: false,
+      composeboxPersistentAimButton: false,
+      composeboxPersistentAimButtonWithX: false,
     });
 
     testProxy = new TestSearchboxBrowserProxy();
@@ -3254,6 +3255,54 @@ suite('OmniboxComposeboxTest', () => {
 
       assertEquals('Ask AI Mode', omniboxComposebox.inputPlaceholder);
     });
+
+    test(
+        'uses Ask Google placeholder when willFulfillInAim is false',
+        async () => {
+          loadTimeData.overrideValues({
+            dynamicAimFulfillmentEnabled: true,
+          });
+          try {
+            testProxy.handler.setPromiseResolveFor('getInputState', {
+              state: {
+                ...createDefaultInputState(),
+                hintText: 'Ask anything',
+                willFulfillInAim: false,
+              },
+            });
+            document.body.innerHTML = window.trustedTypes!.emptyHTML;
+            omniboxComposebox = document.createElement('cr-omnibox-composebox');
+            document.body.appendChild(omniboxComposebox);
+            await microtasksFinished();
+
+            const srpHint =
+                loadTimeData.getString('searchboxSrpComposePlaceholder');
+            assertTrue(srpHint.length > 0);
+            assertNotEquals(srpHint, 'Ask anything');
+
+            assertEquals(srpHint, omniboxComposebox.inputPlaceholder);
+
+            const aimInputState = createDefaultInputState();
+            aimInputState.hintText = 'Ask anything';
+            aimInputState.willFulfillInAim = true;
+            omniboxComposebox.inputState = aimInputState;
+            await microtasksFinished();
+
+            assertEquals('Ask anything', omniboxComposebox.inputPlaceholder);
+
+            const srpInputState = createDefaultInputState();
+            srpInputState.hintText = 'Ask anything';
+            srpInputState.willFulfillInAim = false;
+            omniboxComposebox.inputState = srpInputState;
+            await microtasksFinished();
+
+            assertEquals(srpHint, omniboxComposebox.inputPlaceholder);
+          } finally {
+            loadTimeData.overrideValues({
+              dynamicAimFulfillmentEnabled: false,
+            });
+          }
+        });
 
     test('passes richImageSuggestionsEnabled to matches dropdown', async () => {
       loadTimeData.overrideValues({

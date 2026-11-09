@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Не прапаноўваць перакладаць гэтыя сайты</translation>
 <translation id="1143193470214071120">Закрыйце адно з вокнаў або ўпарадкуйце іх</translation>
 <translation id="1143486892058798649">Захаваць спасылку як…</translation>
+<translation id="1149644372535087155">Захоўвайце паролі ў Chrome</translation>
 <translation id="1149725087019908252">Ідзе праверка файла "<ph name="FILE_NAME" />"</translation>
 <translation id="1150263420752757504">Праграма "<ph name="APP_NAME" />" адкрыецца ў Chrome. Працягваючы, вы згаджаецеся з <ph name="BEGIN_LINK1" />Умовамі выкарыстання Google<ph name="END_LINK1" /> і <ph name="BEGIN_LINK2" />Дадатковымі ўмовамі выкарыстання Google Chrome і Chrome OS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">У Менеджары пароляў Google няма захаваных пароляў.</translation>
@@ -188,6 +189,7 @@
 <translation id="1749561566933687563">Сінхранізуйце закладкі</translation>
 <translation id="1750238553597293878">Працягвайце выкарыстоўваць паролі ва Уліковым запісе Google</translation>
 <translation id="1753744496844366747">Аа</translation>
+<translation id="1760139219747062315">Аднавіць акно "<ph name="TITLE_OF_WINDOW" />".</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Старонкі, 1 старонка ў спісе}one{Старонкі, # старонка ў спісе}few{Старонкі, # старонкі ў спісе}many{Старонкі, # старонак у спісе}other{Старонкі, # старонкі ў спісе}}</translation>
 <translation id="1771929606532798550">Інфармацыя пра выкарыстанне вамі Chrome адпраўляецца ў Google, але не прывязваецца да вашай асобы.\n\nУ выпадку збою браўзера Chrome звесткі пра збой могуць уключаць у сябе пэўную асабістую інфармацыю.\n\nКалі вы ўключыце сінхранізацыю гісторыі з Уліковым запісам Google, перададзеныя паказчыкі могуць таксама ўключаць у сябе інфармацыю пра URL-адрасы наведаных сайтаў.</translation>
 <translation id="1778457539567749232">Пазначыць як непрачытанае</translation>
@@ -299,6 +301,7 @@
 <translation id="2190355936436201913">(пуста)</translation>
 <translation id="219283042927675668">Укладкі ў групе</translation>
 <translation id="2194856509914051091">Інфармацыя для разгляду</translation>
+<translation id="2195339740518523951">Засцеражыце браўзер Chrome ад небяспек</translation>
 <translation id="2196695604589508993">Адкрыць гісторыю</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, замацаваная ўкладка, змесціва якой абагульваецца</translation>
 <translation id="22091350895006575">Дадаць імя карыстальніка</translation>
@@ -1256,6 +1259,7 @@
 <translation id="6022659036123304283">Наладзьце Chrome пад сябе</translation>
 <translation id="6023820583797130428">Адкрыйце меню, каб вярнуцца назад</translation>
 <translation id="6026538407078977628">Разгарнуць на поўны экран</translation>
+<translation id="6027619584715411062">Каб атрымаць доступ да закладак, пароляў і іншых даных на ўсіх сваіх прыладах, увайдзіце ў Chrome.</translation>
 <translation id="6039379616847168523">Перайсці на наступную ўкладку</translation>
 <translation id="6040143037577758943">Закрыць</translation>
 <translation id="604124094241169006">Аўтаматычна</translation>
@@ -1600,6 +1604,7 @@
 <translation id="7190921792980745354">Заблакіраваць карыстальніка <ph name="MEMBER_FULL_NAME" />?</translation>
 <translation id="7191430249889272776">Укладка адкрыта ў фоне.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Неадкладна змяніце гэты пароль}one{Неадкладна змяніце гэтыя паролі}few{Неадкладна змяніце гэтыя паролі}many{Неадкладна змяніце гэтыя паролі}other{Неадкладна змяніце гэтыя паролі}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{Аднавіць акно з <ph name="TAB_COUNT_ONE" /> укладкай.}one{Аднавіць акно з <ph name="TAB_COUNT_MANY" /> укладкай.}few{Аднавіць акно з <ph name="TAB_COUNT_MANY" /> укладкамі.}many{Аднавіць акно з <ph name="TAB_COUNT_MANY" /> укладкамі.}other{Аднавіць акно з <ph name="TAB_COUNT_MANY" /> укладкі.}}</translation>
 <translation id="7196215469483532480">Тлумачэнні адносна дапаможніка па прыватнасці разгорнуты на ўвесь экран</translation>
 <translation id="7196455519852483601">Гісторыю, файлы cookie, даныя сайтаў і іншыя даныя можна часткова або поўнасцю выдаліць</translation>
 <translation id="7197682514647286393">Хутка выдаляйце даныя пра работу ў браўзеры</translation>
@@ -1853,6 +1858,7 @@
 <translation id="8135406045838672858">Спампаваныя PDF аўтаматычна адкрываюцца ў праграме "<ph name="APP_NAME" />"</translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Спасылка атрымана}one{Атрымана # спасылка}few{Атрыманы # спасылкі}many{Атрыманы # спасылак}other{Атрыманы # спасылкі}}</translation>
 <translation id="8137562778192957619">Вам не трэба запамінаць гэты пароль. Ён будзе захаваны ў Менеджары пароляў Google.</translation>
+<translation id="8149825829235553327">Абараніце ўкладкі ў рэжыме інкогніта</translation>
 <translation id="8151185429379586178">Інструменты распрацоўшчыкаў</translation>
 <translation id="8152331954420209374">Адкрыць Аб’ектыў</translation>
 <translation id="8153206878708357851">Уключыць або выключыць навігацыю клавішамі</translation>

@@ -214,8 +214,6 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
 
   SetProperty(views::kElementIdentifierKey, kTabStripRegionElementId);
 
-  GetViewAccessibility().SetRole(ax::mojom::Role::kTabList);
-
   SetBackground(std::make_unique<CustomCornersBackground>(
       *this, *browser_view,
       /*primary_color=*/CustomCornersBackground::FrameTheme(),
@@ -404,14 +402,16 @@ void VerticalTabStripRegionView::AddedToWidget() {
   BaseTabStripRegionView::AddedToWidget();
   paint_as_active_subscription_ =
       GetWidget()->RegisterPaintAsActiveChangedCallback(base::BindRepeating(
-          &VerticalTabStripRegionView::UpdateExpandOnHoverState,
-          base::Unretained(this), /*hovered=*/std::nullopt));
+          &VerticalTabStripRegionView::HandlePaintAsActiveChanged,
+          base::Unretained(this)));
   if (GetFocusManager()) {
     GetFocusManager()->AddFocusChangeListener(&focus_listener_);
   }
 }
 
 void VerticalTabStripRegionView::RemovedFromWidget() {
+  paint_as_active_timer_.Stop();
+  paint_as_active_subscription_ = {};
   if (GetFocusManager()) {
     GetFocusManager()->RemoveFocusChangeListener(&focus_listener_);
   }
@@ -520,15 +520,6 @@ void VerticalTabStripRegionView::Layout(PassKey) {
   if (drop_arrow()) {
     drop_arrow()->SetIndex(drop_arrow()->index());
   }
-}
-
-views::View* VerticalTabStripRegionView::GetDefaultFocusableChild() {
-  tabs::TabInterface* active_tab = tab_strip_model()->GetActiveTab();
-  if (active_tab) {
-    return GetTabAnchorView(active_tab->GetHandle());
-  }
-
-  return top_button_container_;
 }
 
 gfx::Size VerticalTabStripRegionView::GetMinimumSize() const {
@@ -995,6 +986,21 @@ void VerticalTabStripRegionView::OnExpandOnHoverEnabledChanged(bool enabled) {
   UpdateExpandOnHoverState();
 }
 
+void VerticalTabStripRegionView::HandlePaintAsActiveChanged() {
+  constexpr base::TimeDelta kPaintAsActiveDebounceDelay =
+      base::Milliseconds(50);
+  if (GetWidget() && !GetWidget()->ShouldPaintAsActive()) {
+    paint_as_active_timer_.Start(
+        FROM_HERE, kPaintAsActiveDebounceDelay,
+        base::BindOnce(&VerticalTabStripRegionView::UpdateExpandOnHoverState,
+                       base::Unretained(this), /*hovered=*/std::nullopt));
+    return;
+  }
+
+  paint_as_active_timer_.Stop();
+  UpdateExpandOnHoverState(/*hovered=*/std::nullopt);
+}
+
 void VerticalTabStripRegionView::UpdateExpandOnHoverState(
     std::optional<bool> hovered) {
   // If not collapsed, then we shouldn't be in or entering the expand on hover
@@ -1037,8 +1043,10 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
   // locks because IsFrameActive can also return false when a WebUI bubble is
   // open.
   if (GetWidget() && !GetWidget()->ShouldPaintAsActive()) {
-    if (is_expanded_on_hover_) {
+    if (is_expanded_on_hover_ && !paint_as_active_timer_.IsRunning()) {
       AnimateExpandOnHover(/*expand=*/false);
+    } else {
+      ResetExpandOnHoverTimers();
     }
     return;
   }
@@ -1242,6 +1250,7 @@ void VerticalTabStripRegionView::OnActiveTabChanged(
     const tabs::TabInterface* active_tab) {
   BaseTabStripRegionView::OnActiveTabChanged(active_tab);
   omnibox_tab_helper_observation_.Reset();
+  OnOmniboxPopupVisibilityChanged(false);
 
   if (active_tab) {
     OmniboxTabHelper* const tab_helper =

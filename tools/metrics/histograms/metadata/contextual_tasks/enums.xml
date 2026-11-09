@@ -26,6 +26,17 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
+<!-- LINT.IfChange(AimPromoQueryHint) -->
+
+<enum name="AimPromoQueryHint">
+  <int value="0" label="None"/>
+  <int value="1" label="EduHomework"/>
+  <int value="2" label="EduConceptual"/>
+  <int value="3" label="HowToWebApp"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/contextual_tasks/search_journey_tracker.h:AimPromoQueryHint) -->
+
 <enum name="ContextualTasksContextDeterminationStatus">
   <int value="0" label="Success"/>
   <int value="1" label="Embedder not available"/>
@@ -92,6 +103,16 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_utils.h:ContextualTasksLinkOpenDisposition) -->
 
+<!-- LINT.IfChange(ContextualTasksPageState) -->
+
+<enum name="ContextualTasksPageState">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Zero state"/>
+  <int value="2" label="Active thread"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_web_contents_user_data.h:ContextualTasksPageState) -->
+
 <!-- LINT.IfChange(ContextualTasksPermanentToolbarButtonThreadAction) -->
 
 <enum name="ContextualTasksPermanentToolbarButtonThreadAction">
@@ -100,6 +121,18 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h:ContextualTasksPermanentToolbarButtonThreadAction) -->
+
+<!-- LINT.IfChange(ContextualTasksPermissionChipType) -->
+
+<enum name="ContextualTasksPermissionChipType">
+  <int value="0" label="Permission request"/>
+  <int value="1" label="Quiet permission request"/>
+  <int value="2" label="In-use activity indicator"/>
+  <int value="3" label="Blocked activity indicator"/>
+  <int value="4" label="System-blocked activity indicator"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_permission_controller.h:ContextualTasksPermissionChipType) -->
 
 <!-- LINT.IfChange(ContextualTasksRemovedContextReason) -->
 

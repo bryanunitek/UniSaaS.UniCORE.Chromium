@@ -112,6 +112,7 @@ source_set("impl") {
     "session_inactivity_detector.h",
     "session_journal_impl.cc",
     "session_journal_impl.h",
+    "session_view.cc",
     "tool_controller.cc",
     "tool_controller.h",
     "transcript_tracker.cc",
@@ -144,6 +145,7 @@ source_set("impl") {
     "//chrome/browser/glic",
     "//chrome/browser/page_content_annotations:extraction_service",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/search",
     "//chrome/browser/ttc/app:impl",
     "//chrome/browser/ttc/app:public",
     "//chrome/browser/ui/actions:actions_headers",
@@ -172,14 +174,16 @@ source_set("impl") {
     ]
   } else {
     sources += [
+      "overlay_controller.cc",
+      "overlay_controller.h",
       "session_view_impl.cc",
       "session_view_impl.h",
       "voice_focused_contents_tracker_desktop.cc",
       "voice_focused_contents_tracker_desktop.h",
-      "voice_plate_controller.cc",
-      "voice_plate_controller.h",
     ]
+    public_deps += [ "//chrome/browser/ui/views/ttc" ]
     deps += [
+      "//chrome/browser/lifetime",
       "//chrome/browser/ui:browser_element_identifiers",
       "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui/tabs:tab_strip",
@@ -188,7 +192,6 @@ source_set("impl") {
       "//chrome/browser/ui/toolbar/pinned_toolbar",
       "//chrome/browser/ui/views/interaction",
       "//chrome/browser/ui/views/toolbar",
-      "//chrome/browser/ui/views/ttc",
       "//ui/views",
     ]
   }
@@ -218,6 +221,7 @@ source_set("unit_tests") {
     "page_context_util_unittest.cc",
     "session_controller_impl_unittest.cc",
     "session_journal_impl_unittest.cc",
+    "session_view_unittest.cc",
     "transcript_tracker_unittest.cc",
     "ttc_actor_task_delegate_unittest.cc",
     "ttc_keyed_service_unittest.cc",
@@ -311,6 +315,7 @@ source_set("browser_tests") {
     "//chrome/browser/actor/tools/registry",
     "//chrome/browser/actor/ui",
     "//chrome/browser/bookmarks",
+    "//chrome/browser/glic",
     "//chrome/browser/page_content_annotations:extraction_service",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/search_engines",
@@ -354,7 +359,6 @@ source_set("browser_tests") {
   if (!is_android) {
     sources += [ "voice_focused_contents_tracker_browsertest.cc" ]
     deps += [
-      "//chrome/browser/glic",
       "//chrome/browser/glic/test_support",
       "//chrome/browser/profiles/keep_alive",
       "//chrome/browser/ttc/app:browser_tests",

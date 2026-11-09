@@ -45,7 +45,9 @@ export interface AppTestSetupResult extends TestSetupResult {
 
 export interface AppTestFlags {
   readAnythingImprovedUiEnabled?: boolean;
-  lineFocusEnabled?: boolean;
+  // Uses the real ReadAloud model instead of TestReadAloudModelBrowserProxy.
+  // Only for integration tests that need text segmented from the DOM.
+  useRealReadAloudModel?: boolean;
 }
 
 // Initializes all singletons, mocks, and controllers in their strict
@@ -63,9 +65,6 @@ export function setupTestEnvironment(flags?: AppTestFlags): TestSetupResult {
     visualBrowserProxy.readAnythingImprovedUiEnabled =
         flags.readAnythingImprovedUiEnabled;
   }
-  if (flags?.lineFocusEnabled !== undefined) {
-    visualBrowserProxy.lineFocusEnabled = flags.lineFocusEnabled;
-  }
   VisualBrowserProxyImpl.setInstance(visualBrowserProxy);
   const contentBrowserProxy = new TestContentBrowserProxy();
   ContentBrowserProxyImpl.setInstance(contentBrowserProxy);
@@ -78,7 +77,8 @@ export function setupTestEnvironment(flags?: AppTestFlags): TestSetupResult {
   const metrics = mockMetrics();
   const logger = ReadAnythingLogger.getInstance();
   const readAloudModel = new TestReadAloudModelBrowserProxy();
-  setInstance(readAloudModel);
+  // A null instance makes getReadAloudModel() lazily create the real model.
+  setInstance(flags?.useRealReadAloudModel ? null : readAloudModel);
   const nodeStore = new NodeStore();
   NodeStore.setInstance(nodeStore);
   const readAloudNodeStore = new ReadAloudNodeStore();
@@ -249,7 +249,7 @@ export function setContent(
   const node = document.createTextNode(text);
   NodeStore.getInstance().setDomNode(node, id);
   const segments: Segment[] =
-      [{node: ReadAloudNode.create(node)!, start: 0, length: text.length}];
+      [{node: ReadAloudNode.create(node), start: 0, length: text.length}];
   if (model) {
     model.setCurrentTextSegments(segments);
     model.setCurrentTextContent(text);

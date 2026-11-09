@@ -7,13 +7,22 @@
 
 #import <Foundation/Foundation.h>
 
+#import "ios/chrome/browser/passwords/bottom_sheet/ui/remote_actor_credential_bottom_sheet_mutator.h"
+
 class FaviconLoader;
 @class RemoteActorCredentialBottomSheetMediator;
+@protocol RemoteActorCredentialBottomSheetConsumer;
 
 namespace password_manager {
 class PasswordManagerClient;
 class PasswordStoreInterface;
+enum class RemoteActorCredentialSharingResult;
+class RemoteActorCredentialSharingService;
 }  // namespace password_manager
+
+namespace remote_actor::proto {
+class RemoteActorPasswordUploadRequest;
+}  // namespace remote_actor::proto
 
 namespace signin {
 class IdentityManager;
@@ -27,10 +36,10 @@ class SyncService;
 // communicate the progress of the sharing flow back to the coordinator.
 @protocol RemoteActorCredentialBottomSheetMediatorDelegate <NSObject>
 
-// Called when the sharing flow finished, with `success` set to `YES` if a
-// credential was successfully shared.
+// Called when the sharing flow finished with `result`.
 - (void)mediator:(RemoteActorCredentialBottomSheetMediator*)mediator
-    didFinishWithSuccess:(BOOL)success;
+    didFinishWithResult:
+        (password_manager::RemoteActorCredentialSharingResult)result;
 
 @end
 
@@ -39,20 +48,25 @@ class SyncService;
 // credentials, lets the user pick one and shares the chosen credential. Device
 // reauthentication is handled by the controller through
 // `passwordManagerClient`.
-@interface RemoteActorCredentialBottomSheetMediator : NSObject
+@interface RemoteActorCredentialBottomSheetMediator
+    : NSObject <RemoteActorCredentialBottomSheetMutator>
+
+// Consumer of the mediator.
+@property(nonatomic, weak) id<RemoteActorCredentialBottomSheetConsumer>
+    consumer;
 
 // Delegate handling the flow progress.
 @property(nonatomic, weak) id<RemoteActorCredentialBottomSheetMediatorDelegate>
     delegate;
 
-// Initializes the mediator for the remote actor request identified by
-// `domain`, `gaiaID` and `taskID`. `identityManager`, `syncService`,
-// `profilePasswordStore`, `accountPasswordStore` and `passwordManagerClient`
-// are passed to `RemoteActorCredentialSharingController` to retrieve the
-// credentials and reauthenticate the user; `identityManager`, `syncService` and
-// `passwordManagerClient` may be null when unavailable, and the store matching
-// the user's sync state must be non-null. `faviconLoader` is used to load the
-// favicon of `domain`.
+// Initializes the mediator for the remote actor `request`. `identityManager`,
+// `syncService`, `profilePasswordStore`, `accountPasswordStore`,
+// `sharingService` and `passwordManagerClient` are passed to
+// `RemoteActorCredentialSharingController` to retrieve the credentials,
+// reauthenticate the user and share the chosen credential; `identityManager`,
+// `syncService`, `sharingService` and `passwordManagerClient` may be null when
+// unavailable, and the store matching the user's sync state must be non-null.
+// `faviconLoader` is used to load the favicon of the requested domain.
 - (instancetype)
     initWithIdentityManager:(signin::IdentityManager*)identityManager
                 syncService:(syncer::SyncService*)syncService
@@ -60,18 +74,20 @@ class SyncService;
            (password_manager::PasswordStoreInterface*)profilePasswordStore
        accountPasswordStore:
            (password_manager::PasswordStoreInterface*)accountPasswordStore
+             sharingService:
+                 (password_manager::RemoteActorCredentialSharingService*)
+                     sharingService
       passwordManagerClient:
           (password_manager::PasswordManagerClient*)passwordManagerClient
               faviconLoader:(FaviconLoader*)faviconLoader
-                     domain:(NSString*)domain
-                     gaiaID:(NSString*)gaiaID
-                     taskID:(NSString*)taskID NS_DESIGNATED_INITIALIZER;
+                    request:
+                        (remote_actor::proto::RemoteActorPasswordUploadRequest)
+                            request NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;
 
-// Starts the sharing flow by retrieving the credentials for the domain.
-// Notifies the delegate that the flow finished unsuccessfully if there are no
-// credentials to suggest.
+// Starts the sharing flow by retrieving the credentials for the domain. The
+// delegate is notified when the flow finished.
 - (void)start;
 
 // Disconnects the mediator and cleans up dependencies. Must be called before

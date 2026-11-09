@@ -37,6 +37,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
 import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
@@ -91,6 +92,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams.VariantLayoutType;
 import org.chromium.chrome.browser.util.WindowFeatures;
+import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.device.mojom.ScreenOrientationLockType;
 
 import java.util.ArrayList;
@@ -2557,13 +2559,40 @@ public class CustomTabIntentDataProviderTest {
 
     @Test
     public void testReconstructFromSavedDataHolder() {
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        CustomTabColorSchemeParams light =
+                new CustomTabColorSchemeParams.Builder()
+                        .setToolbarColor(0xFF112233)
+                        .setSecondaryToolbarColor(0xFF445566)
+                        .setNavigationBarColor(0xFF778899)
+                        .setNavigationBarDividerColor(0xFFAABBCC)
+                        .build();
+        CustomTabColorSchemeParams dark =
+                new CustomTabColorSchemeParams.Builder().setToolbarColor(0xFF000001).build();
+        int iconHeight = mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_icon_height);
+        Bitmap iconFittingToolbar =
+                Bitmap.createBitmap(iconHeight, iconHeight, Bitmap.Config.ARGB_8888);
+        PendingIntent actionPi =
+                PendingIntent.getBroadcast(
+                        mContext,
+                        1,
+                        new Intent("action"),
+                        IntentUtils.getPendingIntentMutabilityFlag(true));
+
+        Intent intent =
+                new CustomTabsIntent.Builder()
+                        .setDefaultColorSchemeParams(light)
+                        .setColorSchemeParams(COLOR_SCHEME_DARK, dark)
+                        .setActionButton(
+                                iconFittingToolbar, "action", actionPi, /* shouldTint= */ true)
+                        .build()
+                        .intent;
         setIsTrustedCustomTab(intent);
         intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_EPHEMERAL_BROWSING, true);
         intent.putExtra(
                 CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.SHOW_PAGE_TITLE);
         intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
         intent.putExtra(CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_HEIGHT_PX, 300);
+        intent.putExtra(CustomTabIntentDataProvider.EXTRA_INITIAL_BACKGROUND_COLOR, 0xFF123456);
 
         CustomTabIntentDataProvider originalProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -2584,6 +2613,10 @@ public class CustomTabIntentDataProviderTest {
         CustomTabIntentDataProvider restoredProvider =
                 new CustomTabIntentDataProvider(
                         new Intent(), mContext, COLOR_SCHEME_LIGHT, restoredHolder);
+        CustomTabIntentDataProvider restoredLight = restoredProvider;
+        CustomTabIntentDataProvider restoredDark =
+                new CustomTabIntentDataProvider(
+                        new Intent(), mContext, COLOR_SCHEME_DARK, restoredHolder);
         assertEquals(originalProvider.getSession(), restoredProvider.getSession());
         assertEquals(
                 originalProvider.getClientPackageName(), restoredProvider.getClientPackageName());
@@ -2598,6 +2631,115 @@ public class CustomTabIntentDataProviderTest {
         assertEquals(
                 originalProvider.getInitialActivityHeight(),
                 restoredProvider.getInitialActivityHeight());
+
+        // Colors (LIGHT + DARK + initial background).
+        assertEquals(0xFF112233, restoredLight.getColorProvider().getToolbarColor());
+        assertEquals(0xFF445566, restoredLight.getColorProvider().getBottomBarColor());
+        assertEquals(
+                Integer.valueOf(0xFF778899),
+                restoredLight.getColorProvider().getNavigationBarColor());
+        assertEquals(
+                Integer.valueOf(0xFFAABBCC),
+                restoredLight.getColorProvider().getNavigationBarDividerColor());
+        assertTrue(restoredLight.getColorProvider().hasCustomToolbarColor());
+        assertEquals(0xFF123456, restoredLight.getColorProvider().getInitialBackgroundColor());
+        assertEquals(0xFF000001, restoredDark.getColorProvider().getToolbarColor());
+        assertEquals(0xFF123456, restoredDark.getColorProvider().getInitialBackgroundColor());
+        assertEquals(
+                originalProvider.getColorProvider().getToolbarColor(),
+                restoredLight.getColorProvider().getToolbarColor());
+        assertEquals(
+                originalProvider.getColorProvider().getBottomBarColor(),
+                restoredLight.getColorProvider().getBottomBarColor());
+        assertEquals(
+                originalProvider.getColorProvider().getInitialBackgroundColor(),
+                restoredLight.getColorProvider().getInitialBackgroundColor());
+
+        // Custom buttons.
+        assertEquals(1, originalProvider.getAllCustomButtons().size());
+        assertEquals(
+                originalProvider.getAllCustomButtons().size(),
+                restoredLight.getAllCustomButtons().size());
+        CustomButtonParams restoredButton = restoredLight.getAllCustomButtons().get(0);
+        assertEquals(CustomTabsIntent.TOOLBAR_ACTION_BUTTON_ID, restoredButton.getId());
+        assertEquals("action", restoredButton.getDescription());
+        assertEquals(actionPi, restoredButton.getPendingIntent());
+        assertTrue(restoredButton.showOnToolbar());
+        assertEquals(ButtonType.OTHER, restoredButton.getType());
+        assertTrue(restoredButton.getIcon(mContext) instanceof TintedDrawable);
+        Bitmap originalIconBitmap =
+                ((BitmapDrawable) originalProvider.getAllCustomButtons().get(0).getIcon(mContext))
+                        .getBitmap();
+        Bitmap restoredIconBitmap = ((BitmapDrawable) restoredButton.getIcon(mContext)).getBitmap();
+        assertEquals(originalIconBitmap.getWidth(), restoredIconBitmap.getWidth());
+        assertEquals(originalIconBitmap.getHeight(), restoredIconBitmap.getHeight());
+        assertEquals(
+                originalProvider.getCustomButtonsOnToolbar().size(),
+                restoredLight.getCustomButtonsOnToolbar().size());
+        assertTrue(restoredHolder.mCustomButtonParams.get(0) instanceof CustomButtonParamsImpl);
+    }
+
+    @Test
+    public void testReconstructFromSavedDataHolder_customButtonUpdateSurvives() {
+        int iconHeight = mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_icon_height);
+        Bitmap initialIcon = Bitmap.createBitmap(iconHeight, iconHeight, Bitmap.Config.ARGB_8888);
+        Bitmap updatedIcon =
+                Bitmap.createBitmap(iconHeight * 2, iconHeight, Bitmap.Config.ARGB_8888);
+        PendingIntent actionPi =
+                PendingIntent.getBroadcast(
+                        mContext,
+                        1,
+                        new Intent("action"),
+                        IntentUtils.getPendingIntentMutabilityFlag(true));
+        Intent intent =
+                new CustomTabsIntent.Builder()
+                        .setActionButton(initialIcon, "initial", actionPi, /* shouldTint= */ false)
+                        .build()
+                        .intent;
+
+        CustomTabIntentDataProvider originalProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        originalProvider.getAllCustomButtons().get(0).update(updatedIcon, "updated");
+
+        CustomTabIntentDataHolder holder = originalProvider.getCustomTabIntentDataHolder();
+        Parcel parcel = Parcel.obtain();
+        CustomTabIntentDataHolder restoredHolder;
+        try {
+            holder.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            restoredHolder = CustomTabIntentDataHolder.CREATOR.createFromParcel(parcel);
+        } finally {
+            parcel.recycle();
+        }
+
+        CustomTabIntentDataProvider restoredProvider =
+                new CustomTabIntentDataProvider(
+                        new Intent(), mContext, COLOR_SCHEME_LIGHT, restoredHolder);
+        CustomButtonParams restoredButton = restoredProvider.getAllCustomButtons().get(0);
+        assertEquals("updated", restoredButton.getDescription());
+        assertTrue(restoredButton.showOnToolbar());
+        assertEquals(1, restoredProvider.getCustomButtonsOnToolbar().size());
+        assertFalse(restoredButton.getIcon(mContext) instanceof TintedDrawable);
+        Bitmap restoredBitmap = ((BitmapDrawable) restoredButton.getIcon(mContext)).getBitmap();
+        assertEquals(iconHeight * 2, restoredBitmap.getWidth());
+        assertEquals(iconHeight, restoredBitmap.getHeight());
+
+        // An oversized/undersized icon rejected by the toolbar is demoted on restore.
+        restoredButton.update(Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888), "too_small");
+        CustomTabIntentDataProvider restoredAfterSmallIcon =
+                new CustomTabIntentDataProvider(
+                        new Intent(),
+                        mContext,
+                        COLOR_SCHEME_LIGHT,
+                        restoredProvider.getCustomTabIntentDataHolder());
+        assertFalse(restoredAfterSmallIcon.getAllCustomButtons().get(0).showOnToolbar());
+        assertEquals(1, restoredAfterSmallIcon.getCustomButtonsOnBottombar().size());
+        assertEquals(
+                "too_small",
+                restoredAfterSmallIcon.getCustomButtonsOnBottombar().get(0).getDescription());
+        assertEquals(
+                ButtonType.CCT_SHARE_BUTTON,
+                restoredAfterSmallIcon.getCustomButtonsOnToolbar().get(0).getType());
     }
 
     @Test

@@ -90,7 +90,6 @@ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
-import org.chromium.chrome.browser.dom_distiller.DomDistillerTabUtils;
 import org.chromium.chrome.browser.download.DownloadFeatures;
 import org.chromium.chrome.browser.download.DownloadStateModel;
 import org.chromium.chrome.browser.download.DownloadToolbarButtonController;
@@ -119,6 +118,7 @@ import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponent;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponentSupplier;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.media.PictureInPictureWindowManagerBridge;
@@ -155,6 +155,7 @@ import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomiza
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
+import org.chromium.chrome.browser.reader_mode.ReaderModeTabUtils;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridge;
@@ -164,6 +165,7 @@ import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherIm
 import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
+import org.chromium.chrome.browser.tab.Tab.TabLoadStatus;
 import org.chromium.chrome.browser.tab.TabArchiveSettings;
 import org.chromium.chrome.browser.tab.TabBrowserControlsConstraintsHelper;
 import org.chromium.chrome.browser.tab.TabFavicon;
@@ -175,6 +177,7 @@ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.tabmodel.OverridableTabCount;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
@@ -190,6 +193,7 @@ import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.theme.ThemeColorProvider.ThemeColorObserver;
 import org.chromium.chrome.browser.theme.ThemeColorProvider.TintObserver;
 import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
+import org.chromium.chrome.browser.toolbar.LocationBarModel.OfflineStatus;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.toolbar.back_button.BackButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.bottom.BottomBarConstraintsSupplier;
@@ -251,7 +255,6 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 import org.chromium.chrome.browser.ui.side_ui.ViewMarginAdjusterForSideUi;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.chrome.browser.util.BrowserUiUtils.ModuleTypeOnStartAndNtp;
@@ -385,7 +388,7 @@ public class ToolbarManager
     private @MonotonicNonNull TabModelSelector mTabModelSelector;
     private final Callback<TabModel> mCurrentTabModelObserver;
     private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
-    private ActivityTabProvider.ActivityTabTabObserver mActivityTabTabObserver;
+    private ActivityTabTabObserver mActivityTabTabObserver;
     private final ActivityTabProvider mActivityTabProvider;
     private final ActivityResultTracker mActivityResultTracker;
     private final SnackbarManager mSnackbarManager;
@@ -411,7 +414,7 @@ public class ToolbarManager
     private final FindToolbarObserver mFindToolbarObserver;
 
     private @MonotonicNonNull LayoutStateProvider mLayoutStateProvider;
-    private final LayoutStateProvider.LayoutStateObserver mLayoutStateObserver;
+    private final LayoutStateObserver mLayoutStateObserver;
     private OneshotSupplier<LayoutStateProvider> mLayoutStateProviderSupplier;
     private CallbackController mCallbackController = new CallbackController();
 
@@ -928,8 +931,8 @@ public class ToolbarManager
                 new LocationBarModel(
                         activity,
                         ntpDelegate,
-                        DomDistillerTabUtils::getFormattedUrlFromOriginalDistillerUrl,
-                        new LocationBarModel.OfflineStatus() {
+                        ReaderModeTabUtils::getFormattedUrlFromOriginalDistillerUrl,
+                        new OfflineStatus() {
                             @Override
                             public boolean isShowingTrustedOfflinePage(Tab tab) {
                                 return OfflinePageTabData.isShowingTrustedOfflinePage(tab);
@@ -1396,6 +1399,7 @@ public class ToolbarManager
                             scrollListener,
                             tabModelSelectorSupplier,
                             topInsetProvider,
+                            edgeToEdgeControllerSupplier,
                             mToolbarLayout,
                             mLocationBarEmbedderUiOverrides,
                             mActivity.findViewById(R.id.coordinator),
@@ -1444,7 +1448,7 @@ public class ToolbarManager
         mToolbar.setToolbarColorObserver(statusBarColorController);
 
         mActivityTabTabObserver =
-                new ActivityTabProvider.ActivityTabTabObserver(mActivityTabProvider) {
+                new ActivityTabTabObserver(mActivityTabProvider) {
                     private @Nullable NavigationHandle mLastNavigation;
                     private @Nullable String mLastUrl;
                     private @Nullable String mCurrentUrl;
@@ -1582,8 +1586,7 @@ public class ToolbarManager
                         NewTabPage ntp = getNewTabPageForCurrentTab();
                         if (ntp == null) return;
                         if (!UrlUtilities.isNtpUrl(params.getUrl())
-                                && loadUrlResult.tabLoadStatus
-                                        != Tab.TabLoadStatus.PAGE_LOAD_FAILED) {
+                                && loadUrlResult.tabLoadStatus != TabLoadStatus.PAGE_LOAD_FAILED) {
                             ntp.setUrlFocusAnimationsDisabled(true);
                             onTabOrModelChanged();
                         }
@@ -1822,7 +1825,7 @@ public class ToolbarManager
                 };
 
         mLayoutStateObserver =
-                new LayoutStateProvider.LayoutStateObserver() {
+                new LayoutStateObserver() {
                     @Override
                     public void onStartedShowing(@LayoutType int layoutType) {
                         if (layoutType == LayoutType.HUB) {
@@ -2566,7 +2569,8 @@ public class ToolbarManager
     public void enableBottomControls() {
         enableTabGroupUiControls();
         BottomBarMetrics.maybeRecordEnabledState(mActivity);
-        if (BottomBarConfigUtils.isBottomBarEnabled(mActivity)) {
+        // Use the state from activity creation; the activity recreates if it changes later.
+        if (mBottomBarHostManager != null) {
             enableBottomBar();
         } else if (BottomBarConfigUtils.isEligibleForEducationDialog(mActivity)) {
             mBottomBarEducationDialogCoordinator =
@@ -3112,6 +3116,10 @@ public class ToolbarManager
         if (mHubExitNavigationHelper != null) {
             mHubExitNavigationHelper.destroy();
             mHubExitNavigationHelper = null;
+        }
+        if (mOverscrollGlowCoordinator != null) {
+            mOverscrollGlowCoordinator.destroy();
+            mOverscrollGlowCoordinator = null;
         }
         if (mLayoutStateProvider != null) {
             mLayoutStateProvider.removeObserver(mLayoutStateObserver);

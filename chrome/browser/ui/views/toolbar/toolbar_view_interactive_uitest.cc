@@ -22,9 +22,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
-#include "chrome/browser/ui/tabs/organizer/organizer_panel_utils.h"
-#include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -134,23 +131,6 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
                features::kWebUIBackForwardButton,
                features::kWebUISplitTabsButton, features::kWebUIHomeButton});
     }
-    webui_omnibox_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/
-        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
-        // is enabled and then remove these two Features.
-        // TODO(crbug.com/579030694): Investigate lazy loading OrganizerPanel.
-        {omnibox::internal::kWebUIOmniboxPopup,
-         omnibox::internal::kWebUIOmniboxAimPopup,
-         organizer_panel::kOrganizerPanel});
-
-    // TODO(crbug.com/557287887): Make SplitViewLayoutMenuModel work with
-    // OpenSideBySideTab.
-    spit_view_horizontal_feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/{{tabs::kSplitViewHorizontal,
-                               {{"split_view_horizontal_direct_tab_access",
-                                 "false"}}}},
-        /*disabled_features=*/{});
   }
   ToolbarViewTest(const ToolbarViewTest&) = delete;
   ToolbarViewTest& operator=(const ToolbarViewTest&) = delete;
@@ -200,8 +180,6 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
 
  private:
   base::test::ScopedFeatureList feature_list_;
-  base::test::ScopedFeatureList webui_omnibox_feature_list_;
-  base::test::ScopedFeatureList spit_view_horizontal_feature_list_;
 };
 
 void ToolbarViewTest::RunToolbarCycleFocusTest(

@@ -143,6 +143,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/skills/features.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/subscription_eligibility/ai_subscription_tier_names.h"
 #include "components/sync/base/features.h"
 #include "components/sync/service/sync_service.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
@@ -539,10 +540,10 @@ ProfileSubMenuModel::ProfileSubMenuModel(
               ui::ImageModel::FromImageSkia(profiles::GetAvatarWithDottedRing(
                   avatar_model, avatar_icon_size, /*has_padding=*/false,
                   /*has_background=*/false, *color_provider));
-        } else if (ShouldShowAvatarGradientRing(profile)) {
-          // TODO(crbug.com/530147081): Clarify if the ring may show up for
-          // users with a placeholder icon. Signed in users should have always
-          // an account_info and thus they will never have a placeholder icon.
+        } else if (GetAvatarAiDecoration(profile).show_decoration) {
+          // The ring is only drawn around a fetched avatar image. Placeholder
+          // avatars keep the default vector icon (see above), and signed-out
+          // profiles have no AI subscription tier.
           avatar_image_model_ =
               ui::ImageModel::FromImageSkia(AddLinearGradientRingToAvatar(
                   avatar_model, *color_provider, avatar_icon_size));
@@ -583,9 +584,8 @@ ProfileSubMenuModel::ProfileSubMenuModel(
               avatar_icon_size, avatar_icon_size, profiles::SHAPE_CIRCLE));
 
       bool has_ai_ring = false;
-      if (base::FeatureList::IsEnabled(
-              switches::kEnableAiSubscriptionAvatarRing) &&
-          profile_entry->GetAiSubscriptionTier() > 0) {
+      if (GetAvatarAiDecorationForTier(profile_entry->GetAiSubscriptionTier())
+              .show_decoration) {
         has_ai_ring = true;
         avatar_model =
             ui::ImageModel::FromImageSkia(AddLinearGradientRingToAvatar(
@@ -1500,6 +1500,13 @@ void AppMenuModel::LogMenuMetrics(int command_id) {
       }
       LogMenuAction(MENU_ACTION_RECENT_TABS_SEE_DEVICE_TABS);
       break;
+    case IDC_OPEN_OTHER_DEVICE_TAB:
+      if (!uma_action_recorded_) {
+        base::UmaHistogramMediumTimes(
+            "WrenchMenu.TimeToAction.OpenOtherDeviceTab", delta);
+      }
+      LogMenuAction(MENU_ACTION_OTHER_DEVICE_TAB);
+      break;
     case IDC_FIND:
       if (!uma_action_recorded_) {
         base::UmaHistogramMediumTimes("WrenchMenu.TimeToAction.Find", delta);
@@ -2240,8 +2247,9 @@ void AppMenuModel::Build() {
         kHistoryMenuItem);
 
     if (base::FeatureList::IsEnabled(syncer::kCrossDeviceTabsInAppMenu)) {
-      sub_menus_.push_back(
-          std::make_unique<OtherDeviceTabsSubMenuModel>(browser_));
+      sub_menus_.push_back(std::make_unique<OtherDeviceTabsSubMenuModel>(
+          browser_, base::BindRepeating(&AppMenuModel::LogMenuMetrics,
+                                        base::Unretained(this))));
       AddSubMenuWithStringIdAndVectorIcon(
           this, kOtherDeviceTabsMenuPlaceholder, IDS_OTHER_DEVICE_TABS_MENU,
           sub_menus_.back().get(),

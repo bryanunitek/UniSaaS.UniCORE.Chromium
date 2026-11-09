@@ -19,7 +19,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/traits.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -396,6 +397,25 @@ base::TimeDelta GetAdditionalDelayForMainJob() {
   return features::kAdditionalDelay.Get();
 }
 
+constexpr base::MemoryConsumerTraits kQuicMemoryConsumerTraits(
+    // Bounded capacity of sessions; well under 10MB.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    // Iterates QuicLRUCache and triggers session frees.
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kReads,
+    // Full handshake can be done if not cached.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Asynchronous because this class sometimes doesn't live on the main thread
+    // (in-process mode puts the Network Service main thread as a background
+    // sequence).
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // An evicted ticket costs a full handshake (extra round trip, no 0-RTT) the
+    // next time that origin is connected to.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kExpensive,
+    // Does not maintain a lasting limit. Instead, it performs a one-time
+    // eviction on each OnReleaseMemory() call, so it relies on the memory
+    // coordinator to repeat the signal while under pressure.
+    base::MemoryConsumerTraits::IsStateful::kNo);
+
 std::optional<int> GetQuicSocketSendBufferSize() {
   if (base::FeatureList::IsEnabled(features::kQuicSocketSendBufferSize)) {
     int size = features::kQuicSocketSendBufferSizeParam.Get();
@@ -531,8 +551,22 @@ void QuicSessionRequest::OnQuicSessionCreationComplete(int rv) {
   }
 }
 
+void QuicSessionRequest::WaitForAttemptFailure(
+    CompletionOnceCallback callback) {
+  CHECK(pool_);
+  CHECK(attempt_failure_callback_.is_null());
+  attempt_failure_callback_ = std::move(callback);
+}
+
+void QuicSessionRequest::OnAttemptFailure(int rv) {
+  if (!attempt_failure_callback_.is_null()) {
+    std::move(attempt_failure_callback_).Run(rv);
+  }
+}
+
 void QuicSessionRequest::OnRequestComplete(int rv) {
   pool_ = nullptr;
+  attempt_failure_callback_.Reset();
   std::move(callback_).Run(rv);
 }
 
@@ -577,19 +611,19 @@ QuicSessionPool::QuicCryptoClientConfigOwner::QuicCryptoClientConfigOwner(
     NetworkAnonymizationKey network_anonymization_key,
     std::unique_ptr<quic::ProofVerifier> proof_verifier,
     std::unique_ptr<quic::QuicClientSessionCache> session_cache,
-    size_t max_cache_entries,
     QuicSessionPool* quic_session_pool)
     : network_anonymization_key_(std::move(network_anonymization_key)),
       config_(std::move(proof_verifier), std::move(session_cache)),
       clock_(quic_session_pool->clock_for_testing_
                  ? quic_session_pool->clock_for_testing_.get()
                  : base::DefaultClock::GetInstance()),
-      max_cache_entries_(max_cache_entries),
-      quic_session_pool_(quic_session_pool) {
+      quic_session_pool_(quic_session_pool),
+      memory_consumer_registration_(
+          "QuicSessionPool",
+          kQuicMemoryConsumerTraits,
+          this,
+          base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled) {
   DCHECK(quic_session_pool_);
-  memory_pressure_listener_registration_ =
-      std::make_unique<base::AsyncMemoryPressureListenerRegistration>(
-          FROM_HERE, base::MemoryPressureListenerTag::kQuicSessionPool, this);
   config_.set_preferred_groups(
       quic_session_pool_->ssl_config_service_->GetSSLContextConfig()
           .GetSupportedGroups());
@@ -609,12 +643,17 @@ QuicSessionPool::QuicCryptoClientConfigOwner::~QuicCryptoClientConfigOwner() {
   DCHECK_EQ(num_refs_, 0);
 }
 
-void QuicSessionPool::QuicCryptoClientConfigOwner::OnMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
+void QuicSessionPool::QuicCryptoClientConfigOwner::OnUpdateMemoryLimit() {
+  // Not a stateful consumer. All the work is done in OnReleaseMemory().
+}
+
+void QuicSessionPool::QuicCryptoClientConfigOwner::OnReleaseMemory() {
   quic::SessionCache* session_cache = config_.session_cache();
   if (!session_cache) {
     return;
   }
+
+  base::MemoryLimit limit = memory_limit();
 
   uint64_t now_u64 = std::max<int64_t>(0, clock_->Now().ToTimeT());
 
@@ -622,8 +661,7 @@ void QuicSessionPool::QuicCryptoClientConfigOwner::OnMemoryPressure(
   // entries instead of ignoring memory pressure completely.
   if (base::FeatureList::IsEnabled(
           features::kIgnoreQuicCryptoConfigMemoryPressure)) {
-    if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_MODERATE ||
-        memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
+    if (limit <= base::MemoryLimit::ModeratePressureThreshold()) {
       session_cache->RemoveExpiredEntries(
           quic::QuicWallTime::FromUNIXSeconds(now_u64));
     }
@@ -643,23 +681,11 @@ void QuicSessionPool::QuicCryptoClientConfigOwner::OnMemoryPressure(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
-    // The memory pressure level might have changed, which potentially changed
-    // the memory limit. Enforce the new limit.
-    session_cache->UpdateMaxSize(GetMemoryLimit().Scale(max_cache_entries_));
-    return;
-  }
-
-  switch (memory_pressure_level) {
-    case base::MEMORY_PRESSURE_LEVEL_NONE:
-      break;
-    case base::MEMORY_PRESSURE_LEVEL_MODERATE:
-      session_cache->RemoveExpiredEntries(
-          quic::QuicWallTime::FromUNIXSeconds(now_u64));
-      break;
-    case base::MEMORY_PRESSURE_LEVEL_CRITICAL:
-      session_cache->Clear();
-      break;
+  if (limit <= base::MemoryLimit::CriticalPressureThreshold()) {
+    session_cache->Clear();
+  } else if (limit <= base::MemoryLimit::ModeratePressureThreshold()) {
+    session_cache->RemoveExpiredEntries(
+        quic::QuicWallTime::FromUNIXSeconds(now_u64));
   }
 }
 
@@ -2510,18 +2536,31 @@ QuicSessionPool::CreateSessionHelper(
   bool enabled_connection_keep_alive = false;
   if (connection_management_config.has_value() &&
       connection_management_config->keep_alive_config.has_value()) {
-    config.SetIdleNetworkTimeout(quic::QuicTime::Delta::FromSeconds(
-        connection_management_config->keep_alive_config
-            ->idle_timeout_in_seconds));
-    config.AddConnectionOptionsToSend(
-        quic::ParseQuicTagVector(connection_management_config->keep_alive_config
-                                     ->quic_connection_options));
-    keep_alive_timeout = quic::QuicTime::Delta::FromSeconds(
-        connection_management_config->keep_alive_config
-            ->ping_interval_in_seconds);
+    const auto& keep_alive_config =
+        connection_management_config->keep_alive_config.value();
+    if (keep_alive_config.idle_timeout.is_positive()) {
+      config.SetIdleNetworkTimeout(quic::QuicTime::Delta::FromMicroseconds(
+          keep_alive_config.idle_timeout.InMicroseconds()));
+    }
+    if (!keep_alive_config.quic_connection_options.empty()) {
+      config.AddConnectionOptionsToSend(
+          quic::ParseQuicTagVector(keep_alive_config.quic_connection_options));
+    }
+    if (keep_alive_config.ping_interval.is_positive()) {
+      keep_alive_timeout = quic::QuicTime::Delta::FromMicroseconds(
+          keep_alive_config.ping_interval.InMicroseconds());
+    }
     enabled_connection_keep_alive =
-        connection_management_config->keep_alive_config
-            ->enable_connection_keep_alive;
+        keep_alive_config.enable_connection_keep_alive;
+    // Set the initial RTT locally on the client connection to avoid advertising
+    // a synthetic `IRTT` transport parameter to the server.
+    if (keep_alive_config.initial_rtt.is_positive() &&
+        !config.HasInitialRoundTripTimeUsToSend()) {
+      connection->sent_packet_manager().SetInitialRtt(
+          quic::QuicTime::Delta::FromMicroseconds(
+              keep_alive_config.initial_rtt.InMicroseconds()),
+          /*trusted=*/false);
+    }
   }
   connection->set_keep_alive_ping_timeout(keep_alive_timeout);
 
@@ -2954,7 +2993,7 @@ QuicSessionPool::CreateCryptoConfigHandle(QuicCryptoClientConfigKey key) {
               key.network_anonymization_key),
           std::make_unique<quic::QuicClientSessionCache>(
               kDefaultQuicSessionCacheSize),
-          kDefaultQuicSessionCacheSize, this);
+          this);
 
   quic::QuicCryptoClientConfig* crypto_config = crypto_config_owner->config();
   crypto_config->AddCanonicalSuffix(".c.youtube.com");

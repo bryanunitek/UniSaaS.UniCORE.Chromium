@@ -2,7 +2,7 @@ Name: mac_alias
 Short Name: mac_alias
 URL: https://github.com/dmgbuild/mac_alias
 Version: N/A
-Revision: 205e13a7656ca57ad9bd53300baa2bca374e328e
+Revision: 79736a993160af8f1375fd4a55944231d87d46e9
 Update Mechanism: Autoroll
 License: MIT
 License File: src/LICENSE

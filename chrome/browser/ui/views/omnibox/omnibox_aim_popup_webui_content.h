@@ -18,7 +18,8 @@ class WebContents;
 class LocationBar;
 class OmniboxController;
 class OmniboxPopupAimHandler;
-class OmniboxPopupPresenterBase;
+class OmniboxPopupContentDelegate;
+class OmniboxPopupContentSizer;
 
 // The content WebView for the popup of a WebUI Omnibox.
 class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
@@ -26,12 +27,16 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
 
  public:
   OmniboxAimPopupWebUIContent() = delete;
-  OmniboxAimPopupWebUIContent(OmniboxPopupPresenterBase* presenter,
+  OmniboxAimPopupWebUIContent(OmniboxPopupContentDelegate* content_delegate,
+                              OmniboxPopupContentSizer* sizer,
+                              OmniboxPopupContentConfig config,
                               LocationBar* location_bar,
                               OmniboxController* controller);
   // `contents` is a WebContents to adopt, or null; see
   // `OmniboxPopupWebUIBaseContent`.
-  OmniboxAimPopupWebUIContent(OmniboxPopupPresenterBase* presenter,
+  OmniboxAimPopupWebUIContent(OmniboxPopupContentDelegate* content_delegate,
+                              OmniboxPopupContentSizer* sizer,
+                              OmniboxPopupContentConfig config,
                               LocationBar* location_bar,
                               OmniboxController* controller,
                               std::unique_ptr<ContentsWrapper> contents);
@@ -62,6 +67,7 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   // flow via the popup state change; `draft_applied_on_close_` skips 5c.
   void Clear() override;
   void OnContextMenuClosed() override;
+  bool CanReleaseContentsWrapper() override;
 
   // Hands `input` to the omnibox, replacing its text. Under Full WebUI this
   // also restores focus by reopening the full popup, unless `query_submitted`
@@ -116,6 +122,10 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   // Prevents `OnClearCallback()` from re-applying a draft that `CloseUI()`
   // already transferred.
   bool draft_applied_on_close_ = false;
+
+  // Whether a `ClearPopup()` reply is pending. The reply applies the draft to
+  // this window's omnibox.
+  bool clear_in_flight_ = false;
 
   base::WeakPtrFactory<OmniboxAimPopupWebUIContent> weak_factory_{this};
 };

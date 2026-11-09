@@ -381,16 +381,19 @@ void DesktopWindowTreeHostWin::Close() {
   // Do not generate synthesized events during shutdown.
   dispatcher()->Shutdown();
 
-  // Calling Hide() can detach the content window's layer, so store it
-  // beforehand so we can access it below.
-  auto* window_layer = content_window()->layer();
+  // Calling Hide() can detach (and, when animations have zero duration,
+  // synchronously destroy) the content window's layer, so hold a WeakPtr
+  // beforehand so we can safely check it below.
+  base::WeakPtr<ui::Layer> window_layer =
+      content_window()->layer()->AsWeakPtr();
 
   content_window()->Hide();
   // TODO(beng): Move this entire branch to DNWA so it can be shared with X11.
   if (should_animate_window_close_) {
     pending_close_ = true;
-    // Animation may not start for a number of reasons.
-    if (!window_layer->GetAnimator()->is_animating()) {
+    // Animation may not start for a number of reasons, or may have already
+    // completed synchronously during Hide().
+    if (!window_layer || !window_layer->GetAnimator()->is_animating()) {
       message_handler_->Close();
     }
     // else case, OnWindowHidingAnimationCompleted does the actual Close.
@@ -765,7 +768,7 @@ void DesktopWindowTreeHostWin::SetOpacity(float opacity) {
 void DesktopWindowTreeHostWin::SetAspectRatio(
     const gfx::SizeF& aspect_ratio,
     const gfx::Size& excluded_margin) {
-  DCHECK(!aspect_ratio.IsEmpty());
+  CHECK(!aspect_ratio.IsEmpty(), base::NotFatalUntil::M163);
   message_handler_->SetAspectRatio(aspect_ratio.width() / aspect_ratio.height(),
                                    excluded_margin);
 }
@@ -873,8 +876,8 @@ DesktopWindowTreeHostWin::GetBoundsInAcceleratedWidgetPixelCoordinates() {
     return gfx::Rect(window_bounds.size());
   }
   const gfx::Vector2d offset = client_bounds.origin() - window_bounds.origin();
-  DCHECK_GE(offset.x(), 0);
-  DCHECK_GE(offset.y(), 0);
+  CHECK_GE(offset.x(), 0, base::NotFatalUntil::M163);
+  CHECK_GE(offset.y(), 0, base::NotFatalUntil::M163);
   return gfx::Rect(gfx::Point() + offset, client_bounds.size());
 }
 
@@ -895,7 +898,7 @@ bool DesktopWindowTreeHostWin::CaptureSystemKeyEventsImpl(
   // Only one KeyboardHook should be active at a time, otherwise there will be
   // problems with event routing (i.e. which Hook takes precedence) and
   // destruction ordering.
-  DCHECK(!keyboard_hook_);
+  CHECK(!keyboard_hook_, base::NotFatalUntil::M163);
   keyboard_hook_ = ui::KeyboardHook::CreateModifierKeyboardHook(
       std::move(dom_codes), GetAcceleratedWidget(),
       base::BindRepeating(&DesktopWindowTreeHostWin::HandleKeyEvent,

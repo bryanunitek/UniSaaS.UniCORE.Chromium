@@ -81,6 +81,8 @@ suite('TabGroupsDelegateTest', () => {
   test('returns id and header', () => {
     assertEquals('tab-groups', delegate.getId());
     assertEquals('Tab groups', delegate.getHeader());
+    assertEquals('TabGroups', delegate.getHistogramSectionName());
+    assertEquals('OpenTabGroup', delegate.getItemClickAction());
   });
 
   test('returns tab groups', async () => {

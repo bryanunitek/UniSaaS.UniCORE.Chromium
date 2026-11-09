@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Niet aanbieden om deze sites te vertalen</translation>
 <translation id="1143193470214071120">Sluit een venster sluiten of beheer vensters</translation>
 <translation id="1143486892058798649">Link opslaan als…</translation>
+<translation id="1149644372535087155">Wachtwoorden opslaan in Chrome</translation>
 <translation id="1149725087019908252"><ph name="FILE_NAME" /> scannen</translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> wordt geopend in Chrome. Als je doorgaat, ga je akkoord met de <ph name="BEGIN_LINK1" />Servicevoorwaarden van Google<ph name="END_LINK1" /> en met de <ph name="BEGIN_LINK2" />Aanvullende servicevoorwaarden van Google Chrome en Chrome OS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Je hebt geen wachtwoorden opgeslagen in Google Wachtwoordmanager.</translation>
@@ -188,6 +189,7 @@ Alleen iemand met je wachtwoordzin kan je versleutelde gegevens lezen. De wachtw
 <translation id="1749561566933687563">Synchroniseer je bookmarks</translation>
 <translation id="1750238553597293878">Blijf de wachtwoorden in je Google-account gebruiken</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">Venster <ph name="TITLE_OF_WINDOW" /> herstellen.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Pagina's, 1 pagina in lijst}other{Pagina's, # pagina's in lijst}}</translation>
 <translation id="1771929606532798550">Er wordt informatie naar Google gestuurd over je Chrome-gebruik, maar de informatie wordt niet aan jou gekoppeld.\n\nAls Chrome crasht, kunnen de gegevens over de crash wat persoonlijke informatie bevatten.\n\nAls je je geschiedenis synchroniseert met je Google-account, kunnen de statistieken ook informatie bevatten over de URL's die je bezoekt.</translation>
 <translation id="1778457539567749232">Markeren als ongelezen</translation>
@@ -299,6 +301,7 @@ Alleen iemand met je wachtwoordzin kan je versleutelde gegevens lezen. De wachtw
 <translation id="2190355936436201913">(leeg)</translation>
 <translation id="219283042927675668">Tabbladen in groep</translation>
 <translation id="2194856509914051091">Overwegingen</translation>
+<translation id="2195339740518523951">Gebruik het hoogste beveiligingsniveau van Chrome</translation>
 <translation id="2196695604589508993">Geschiedenis openen</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, vastgezet tabblad voor content delen</translation>
 <translation id="22091350895006575">Gebruikersnaam toevoegen</translation>
@@ -1256,6 +1259,7 @@ Voor je Google-account kunnen andere vormen van browsegeschiedenis (zoals zoekop
 <translation id="6022659036123304283">Personaliseer Chrome voor jou</translation>
 <translation id="6023820583797130428">Open het menu om terug te gaan</translation>
 <translation id="6026538407078977628">Uitvouwen naar volledig scherm</translation>
+<translation id="6027619584715411062">Log in om onder andere je bookmarks en wachtwoorden op al je apparaten te gebruiken.</translation>
 <translation id="6039379616847168523">Naar het volgende tabblad gaan</translation>
 <translation id="6040143037577758943">Sluiten</translation>
 <translation id="604124094241169006">Automatisch</translation>
@@ -1600,6 +1604,7 @@ Als je deze instelling wilt wijzigen, <ph name="BEGIN_LINK" />verwijder je de Ch
 <translation id="7190921792980745354"><ph name="MEMBER_FULL_NAME" /> blokkeren?</translation>
 <translation id="7191430249889272776">Tabblad op de achtergrond geopend.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Wijzig het nu}other{Wijzig deze nu}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{Venster van <ph name="TAB_COUNT_ONE" /> tabblad herstellen.}other{Venster met <ph name="TAB_COUNT_MANY" /> tabbladen herstellen.}}</translation>
 <translation id="7196215469483532480">Uitleg over privacygids is op volledige hoogte geopend</translation>
 <translation id="7196455519852483601">Je kunt onder meer je geschiedenis, cookies en sitegegevens geheel of gedeeltelijk verwijderen</translation>
 <translation id="7197682514647286393">Snel je browsegegevens verwijderen</translation>
@@ -1853,6 +1858,7 @@ Als je deze instelling wilt wijzigen, <ph name="BEGIN_LINK" />verwijder je de Ch
 <translation id="8135406045838672858">Gedownloade pdf's worden automatisch geopend met <ph name="APP_NAME" /></translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Link ontvangen}other{# links ontvangen}}</translation>
 <translation id="8137562778192957619">Je hoeft dit wachtwoord niet te onthouden. Het wordt opgeslagen in Google Wachtwoordmanager.</translation>
+<translation id="8149825829235553327">Je incognitotabbladen beveiligen</translation>
 <translation id="8151185429379586178">Ontwikkelaarstools</translation>
 <translation id="8152331954420209374">Naar Lens</translation>
 <translation id="8153206878708357851">Browsen met navigatietoetsen aan-/uitzetten</translation>

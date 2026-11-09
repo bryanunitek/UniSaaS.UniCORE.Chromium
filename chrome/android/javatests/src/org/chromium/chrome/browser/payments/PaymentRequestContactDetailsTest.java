@@ -10,23 +10,24 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.payments.Event2;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -36,15 +37,21 @@ import java.util.concurrent.TimeoutException;
 
 /** A payment integration test for a merchant that requests contact details. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288873
 public class PaymentRequestContactDetailsTest {
+    public final FreshCtaTransitTestRule mCtaTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+
+    public final PaymentRequestTestRule mPaymentRequestTestRule =
+            new PaymentRequestTestRule(mCtaTestRule, "payment_request_contact_details_test.html");
+
     @Rule
-    public PaymentRequestTestRule mPaymentRequestTestRule =
-            new PaymentRequestTestRule("payment_request_contact_details_test.html");
+    public final RuleChain mRuleChain =
+            RuleChain.outerRule(mCtaTestRule).around(mPaymentRequestTestRule);
 
     @Before
-    public void setUp() throws TimeoutException {
+    public void setUp() throws TimeoutException, InterruptedException {
+        mPaymentRequestTestRule.startOnTestPage();
         AutofillTestHelper helper = new AutofillTestHelper();
         // The user has valid payer name, phone number and email address on disk.
         helper.setProfile(
@@ -413,17 +420,17 @@ public class PaymentRequestContactDetailsTest {
         ChromeTabbedActivity chromeTabbedActivity;
         Tab incognitoTab;
         if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
-            chromeTabbedActivity = mPaymentRequestTestRule.newIncognitoWindowFromMenu();
+            chromeTabbedActivity = mCtaTestRule.getActivityTestRule().newIncognitoWindowFromMenu();
             incognitoTab = chromeTabbedActivity.getActivityTabProvider().get();
         } else {
-            incognitoTab = mPaymentRequestTestRule.newIncognitoTabFromMenu();
-            chromeTabbedActivity = mPaymentRequestTestRule.getActivity();
+            incognitoTab = mCtaTestRule.newIncognitoTabFromMenu();
+            chromeTabbedActivity = mCtaTestRule.getActivity();
         }
 
         String relativeTestUrl =
                 "/components/test/data/payments/payment_request_contact_details_test.html";
-        mPaymentRequestTestRule.loadUrlInTab(
-                mPaymentRequestTestRule.getTestServer().getURL(relativeTestUrl),
+        mCtaTestRule.loadUrlInTab(
+                mCtaTestRule.getTestServer().getURL(relativeTestUrl),
                 PageTransition.TYPED | PageTransition.FROM_ADDRESS_BAR,
                 incognitoTab);
         mPaymentRequestTestRule.setObserversAndWaitForInitialPageLoad(chromeTabbedActivity);
@@ -437,11 +444,5 @@ public class PaymentRequestContactDetailsTest {
         // Close the dialog.
         mPaymentRequestTestRule.clickAndWait(
                 R.id.button_primary, mPaymentRequestTestRule.getDismissed());
-
-        // Cleanup: if the test opens a new incognito window instead of an incognito tab, destroy
-        // the new ChromeTabbedActivity.
-        if (chromeTabbedActivity.isIncognitoWindow()) {
-            chromeTabbedActivity.finish();
-        }
     }
 }

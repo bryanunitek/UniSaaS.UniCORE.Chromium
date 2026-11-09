@@ -86,14 +86,14 @@ enum class ProfileSignout {
   // User clicked on sign-out from the clear browsing data page.
   kUserClickedSignoutFromClearBrowsingDataPage = 21,
   // Profile Signout during reconciliation triggered by a Gaia cookie update.
-  kGaiaCookieUpdated = 22,
+  // Deprecated: kGaiaCookieUpdated = 22,
   // Profile Signout during reconciliation.
-  kAccountReconcilorReconcile = 23,
+  // Deprecated: kAccountReconcilorReconcile = 23,
   // Signin manager updates the unconsented primary account.
   kSigninManagerUpdateUPA = 24,
   // User cleared account cookies when there's no sync consent, which has caused
   // sign out.
-  kUserDeletedAccountCookies = 25,
+  // Deprecated: kUserDeletedAccountCookies = 25,
   // User tapped 'Undo' in a snackbar that is shown right after sign-in through
   // promo in bookmarks and reading list page. iOS only.
   kUserTappedUndoRightAfterSignIn = 26,
@@ -384,10 +384,12 @@ enum class AccessPoint : int {
   kGeminiExternalAppStoreEvent = 113,
   // Sign-in promo card shown on the Password Manager page. Desktop only.
   kPasswordManagerCard = 114,
+  // Triggered by an enterprise proxy authentication challenge. iOS only.
+  kEnterpriseProxy = 115,
   // Add values above this line with a corresponding label to the
   // "SigninAccessPoint" enum in
   // tools/metrics/histograms/metadata/signin/enums.xml.
-  kMaxValue = kPasswordManagerCard,  // This must be last.
+  kMaxValue = kEnterpriseProxy,  // This must be last.
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/signin/enums.xml)
 
@@ -743,7 +745,9 @@ enum class ReauthAccessPoint : int {
   kAccountSettings = 1,
   kRecentTabs = 2,
   kReauthInfoBar = 3,
-  kMaxValue = kReauthInfoBar,
+  // Reauth triggered by an enterprise proxy challenge.
+  kEnterpriseProxy = 4,
+  kMaxValue = kEnterpriseProxy,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:ReauthAccessPoint)
 #endif  // BUILDFLAG(IS_IOS)

@@ -8,6 +8,7 @@
 
 #import "base/check.h"
 #import "base/memory/raw_ptr.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/time/time.h"
 #import "components/bookmarks/browser/bookmark_model.h"
 #import "components/bookmarks/browser/bookmark_node.h"
@@ -24,6 +25,7 @@
 #import "components/segmentation_platform/public/features.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/tips/coordinator/tips_magic_stack_mediator_delegate.h"
+#import "ios/chrome/browser/content_suggestions/tips/model/tips_metrics.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/ntp_theme_actionable_tip_config.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_audience.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_config.h"
@@ -102,6 +104,10 @@ using segmentation_platform::TipIdentifier;
   // YES when the user has selected an inline NTP theme swatch on the current
   // tab that has not yet been committed to storage.
   BOOL _hasUncommittedInlineTheme;
+
+  // YES when Magic Stack engagement has already been logged for the current
+  // card impression.
+  BOOL _hasLoggedEngagement;
 }
 
 - (instancetype)initWithIdentifier:(TipIdentifier)identifier
@@ -165,6 +171,7 @@ using segmentation_platform::TipIdentifier;
   _prefObserverBridge.reset();
   _profilePrefService = nil;
   _localStatePrefService = nullptr;
+  _hasLoggedEngagement = NO;
 
   if (_hasUncommittedInlineTheme && _backgroundCustomizationService) {
     _hasUncommittedInlineTheme = NO;
@@ -192,6 +199,7 @@ using segmentation_platform::TipIdentifier;
   // reconfigured with an informational tip.
   _actionableConfig = nil;
   _hasUncommittedInlineTheme = NO;
+  _hasLoggedEngagement = NO;
 
   if (identifier == TipIdentifier::kNTPTheme &&
       segmentation_platform::features::
@@ -238,6 +246,14 @@ using segmentation_platform::TipIdentifier;
   return _actionableConfig ? _actionableConfig : _config;
 }
 
+- (void)logEngagementIfNeededForType:(ContentSuggestionsModuleType)type {
+  if (_hasLoggedEngagement) {
+    return;
+  }
+  _hasLoggedEngagement = YES;
+  [self.delegate logMagicStackEngagementForType:type];
+}
+
 #pragma mark - PrefObserverDelegate
 
 - (void)onPreferenceChanged:(const std::string&)preferenceName {
@@ -271,14 +287,14 @@ using segmentation_platform::TipIdentifier;
 - (void)didSelectTip:(TipIdentifier)tip {
   // Log engagement before forwarding the selection, as handling the tip
   // selection removes the module from the Magic Stack.
-  [self.delegate logMagicStackEngagementForType:self.activeConfig.type];
+  [self logEngagementIfNeededForType:self.activeConfig.type];
   [self.presentationAudience didSelectTip:tip];
 }
 
 - (void)didSelectNTPThemePhotoPicker {
   // Log engagement before forwarding the selection to the presentation
   // audience.
-  [self.delegate logMagicStackEngagementForType:self.activeConfig.type];
+  [self logEngagementIfNeededForType:self.activeConfig.type];
   [self.presentationAudience didSelectNTPThemePhotoPicker];
 }
 
@@ -291,10 +307,16 @@ using segmentation_platform::TipIdentifier;
 
   if (index == 0) {
     _backgroundCustomizationService->ClearCurrentBackground();
+    base::UmaHistogramEnumeration(
+        kTipsNTPThemeActionHistogram,
+        IOSTipsNTPThemeActionableAction::kDefaultSelected);
   } else if (index == 1) {
     const SeedColor& seedColor = kSeedColors[kVioletSeedColorIndex];
     _backgroundCustomizationService->SetBackgroundColor(
         seedColor.color, SchemeVariantToProtoEnum(seedColor.variant));
+    base::UmaHistogramEnumeration(
+        kTipsNTPThemeActionHistogram,
+        IOSTipsNTPThemeActionableAction::kColorSelected);
   } else if (index >= 2 &&
              static_cast<size_t>(index - 2) < _presetBackgrounds.size()) {
     const sync_pb::NtpCustomBackground& background =
@@ -306,8 +328,11 @@ using segmentation_platform::TipIdentifier;
         GURL(background.url()), thumbnailURL, background.attribution_line_1(),
         background.attribution_line_2(),
         GURL(background.attribution_action_url()), background.collection_id());
+    base::UmaHistogramEnumeration(
+        kTipsNTPThemeActionHistogram,
+        IOSTipsNTPThemeActionableAction::kPresetImageSelected);
   }
-  [self.delegate logMagicStackEngagementForType:self.activeConfig.type];
+  [self logEngagementIfNeededForType:self.activeConfig.type];
   [self.presentationAudience didSelectNTPThemeOption];
 }
 
@@ -315,7 +340,7 @@ using segmentation_platform::TipIdentifier;
   // Record the new UI state without reconfiguring so the active `UISwitch`
   // completes its native animation uninterrupted.
   _config.switchOn = enabled;
-  [self.delegate logMagicStackEngagementForType:self.activeConfig.type];
+  [self logEngagementIfNeededForType:self.activeConfig.type];
   [self.presentationAudience didToggleTipsNotificationsSwitch:enabled];
 }
 

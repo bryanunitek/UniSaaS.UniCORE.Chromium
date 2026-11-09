@@ -217,10 +217,10 @@ class TabAndroid : public tabs::TabInterface,
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jweb_contents_delegate,
       const base::android::JavaRef<jobject>& jcontext_menu_populator_factory);
-  void SendDidActivateUpdate(JNIEnv* env);
-  void SendWillDeactivateUpdate(JNIEnv* env);
-  void SendWillDetachUpdate(JNIEnv* env, int32_t detach_reason);
-  void SendDidInsertUpdate(JNIEnv* env);
+  void SendDidActivateUpdate();
+  void SendWillDeactivateUpdate();
+  void SendWillDetachUpdate(int32_t detach_reason);
+  void SendDidInsertUpdate();
   tabs::TabDestroyStatus DestroyWebContents();
   void ReleaseWebContents();
   std::unique_ptr<content::WebContents> ReleaseWebContentsForTesting();
@@ -237,7 +237,6 @@ class TabAndroid : public tabs::TabInterface,
                                     int32_t height);
   void SetActiveNavigationEntryTitleForUrl(const std::string& jurl,
                                            std::u16string jtitle);
-  void LoadOriginalImage();
   void OnShow();
   void NotifyPinnedStateChanged(bool is_pinned);
   void NotifyTabGroupChanged(std::optional<base::Token> tab_group_id);
@@ -322,9 +321,7 @@ class TabAndroid : public tabs::TabInterface,
   TabAndroid(Profile* profile, int tab_id);
 
   void UpdateProperties();
-  void SetIsPinned(bool pinned);
   void SetIsDragging(bool dragging);
-  void SetTabGroupId(std::optional<tab_groups::TabGroupId> tab_group_id);
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env) const;
 

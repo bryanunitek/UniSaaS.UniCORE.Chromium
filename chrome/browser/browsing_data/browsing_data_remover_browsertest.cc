@@ -991,18 +991,17 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverStorageBucketsBrowserTest,
   auto* quota_manager_proxy = quota_manager->proxy();
 
   quota_manager_proxy->CreateBucketForTesting(
-      storage_key, "drafts", base::SequencedTaskRunner::GetCurrentDefault(),
+      storage_key, "drafts",
       base::BindOnce(
           [](storage::QuotaErrorOr<storage::BucketInfo> error_or_bucket_info) {
           }));
   quota_manager_proxy->CreateBucketForTesting(
-      storage_key, "inbox", base::SequencedTaskRunner::GetCurrentDefault(),
+      storage_key, "inbox",
       base::BindOnce(
           [](storage::QuotaErrorOr<storage::BucketInfo> error_or_bucket_info) {
           }));
   quota_manager_proxy->CreateBucketForTesting(
       storage_key, "attachments",
-      base::SequencedTaskRunner::GetCurrentDefault(),
       base::BindOnce(
           [](storage::QuotaErrorOr<storage::BucketInfo> error_or_bucket_info) {
           }));
@@ -1011,7 +1010,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverStorageBucketsBrowserTest,
 
   quota_manager_proxy->GetBucketsForStorageKey(
       storage_key,
-      /*delete_expired*/ false, base::SequencedTaskRunner::GetCurrentDefault(),
+      /*delete_expired*/ false,
       base::BindOnce([](storage::QuotaErrorOr<std::set<storage::BucketInfo>>
                             error_or_buckets) {
         EXPECT_EQ(1u, error_or_buckets.value().size());
@@ -1685,9 +1684,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest,
   ASSERT_THAT(
       settings_map->GetSettingsForOneType(ContentSettingsType::STORAGE_ACCESS),
       UnorderedElementsAre(kExpectedSettingDefault));
-  ASSERT_THAT(settings_map->GetSettingsForOneType(
-                  ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS),
-              UnorderedElementsAre(kExpectedSettingDefault));
 
   // Set RWS grants.
   content_settings::ContentSettingConstraints constraints;
@@ -1695,9 +1691,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest,
   constraints.set_decided_by_related_website_sets(true);
   settings_map->SetContentSettingDefaultScope(
       kPrimaryUrl, kSecondaryUrl, ContentSettingsType::STORAGE_ACCESS,
-      CONTENT_SETTING_ALLOW, constraints);
-  settings_map->SetContentSettingDefaultScope(
-      kPrimaryUrl, kSecondaryUrl, ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS,
       CONTENT_SETTING_ALLOW, constraints);
 
   // Check that the grants were set.
@@ -1716,19 +1709,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest,
               content_settings::ContentSettingToValue(CONTENT_SETTING_ALLOW),
               content_settings::ProviderType::kPrefProvider,
               /*incognito=*/false, expected_metadata.Clone())));
-  EXPECT_THAT(
-      settings_map->GetSettingsForOneType(
-          ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS),
-      UnorderedElementsAre(
-          kExpectedSettingDefault,
-          ContentSettingPatternSource(
-              ContentSettingsPattern::FromURLNoWildcard(
-                  GURL(kPrimaryUrl)),  // https://subdomain.example.com:112
-              ContentSettingsPattern::FromURLToSchemefulSitePattern(
-                  GURL(kSecondaryUrl)),
-              content_settings::ContentSettingToValue(CONTENT_SETTING_ALLOW),
-              content_settings::ProviderType::kPrefProvider,
-              /*incognito=*/false, expected_metadata.Clone())));
 
   // Remove Related Website Sets storage grants.
   std::unique_ptr<BrowsingDataFilterBuilder> filter_builder =
@@ -1743,9 +1723,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest,
   EXPECT_THAT(
       settings_map->GetSettingsForOneType(ContentSettingsType::STORAGE_ACCESS),
       UnorderedElementsAre(kExpectedSettingDefault));
-  EXPECT_THAT(settings_map->GetSettingsForOneType(
-                  ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS),
-              UnorderedElementsAre(kExpectedSettingDefault));
 }
 
 // Some storage backend use a different code path for full deletions and

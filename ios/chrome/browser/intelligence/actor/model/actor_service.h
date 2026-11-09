@@ -9,7 +9,6 @@
 #import <memory>
 #import <optional>
 #import <string>
-#import <string_view>
 #import <vector>
 
 #import "base/callback_list.h"
@@ -22,6 +21,8 @@
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
 #import "ios/web/public/web_state_id.h"
+#import "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#import "url/origin.h"
 
 @class PageContextWrapper;
 @class PostedObserverList<ObserverType>;
@@ -53,10 +54,9 @@ struct TaskSourceInfo;
 // Ordering model. Callers observe a single timeline, and may call any method
 // from anywhere on the service's sequence, including from observer and
 // delegate callbacks:
-// - Commands (`PerformActions`, `RequestTabObservation`, `InterruptTask`,
-//   `StopTask`, `StopAllTasks`) are enqueued and return immediately. They run
-//   in call order, each as its own task, so task logic never runs on the
-//   caller's stack.
+// - Commands (`PerformActions`, `InterruptTask`, `StopTask`, `StopAllTasks`)
+//   are enqueued and return immediately. They run in call order, each as its
+//   own task, so task logic never runs on the caller's stack.
 // - Task setup (`CreateTask`, `AddControlledWebState`) applies immediately, so
 //   that the task is usable as soon as the call returns.
 // - Replies and notifications are posted, in the order of the effects that
@@ -85,37 +85,32 @@ class ActorService : public KeyedService {
                          const TaskSourceInfo& source_info,
                          bool allow_incognito_web_states);
 
-  // Enqueues actions for an active task with a task update string (a short
-  // blurb which tells the user what the Actor is currently doing in plain
-  // language).
+  // Enqueues `actions` for the active task identified by `task_id` with
+  // `task_update` (a short blurb telling the user what the Actor is currently
+  // doing in plain language). Grants `added_writable_mainframe_origins` as
+  // non-user-confirmed allowed mainframe navigation origins for the task before
+  // executing `actions`.
   //
-  // Actions are validated and executed sequentially. If any action fails
+  // `actions` are validated and executed sequentially. If any action fails
   // validation or execution, the sequence is aborted immediately, and
   // subsequent actions will not be run.
   //
   // `callback` runs exactly once, asynchronously, unless the service is shut
   // down first. If the task is not active or stops before the reply runs, it
-  // runs with a single `kTaskWentAway` result. If the task is still executing a
-  // previous request, it runs with a single `kExecutionEngineExistingAction`
-  // result and the request's target WebStates are not added to the task.
-  void PerformActions(ActorTaskId task_id,
-                      std::vector<optimization_guide::proto::Action> actions,
-                      std::string task_update,
-                      PerformActionsCallback callback);
-
-  // Enqueues a "tab observation" request (nomenclature aligned with
-  // `chrome/browser/actor`). Tab is equivalent to WebState and "observation" is
-  // equivalent to a PageContext extraction. Not an "observing" pattern. In
-  // practice, this is equivalent to requesting a rich actionable mode
-  // extraction on `PageContextWrapper`, with a completion callback. `callback`
-  // runs at most once, always asynchronously, and never after `Shutdown()`. If
-  // the task is not active or `web_state` is gone when the command runs, the
-  // callback runs with `PageContextWrapperError::kGenericError`.
-  // TODO(crbug.com/568338837): Do not add new callers; move tab observation
-  // internal to `ActorTask`.
-  void RequestTabObservation(ActorTaskId task_id,
-                             web::WebState* web_state,
-                             TabObservationCallback callback);
+  // runs with a single `mojom::ActionResultCode::kTaskWentAway` result. If the
+  // task is still executing a previous request, it runs with a single
+  // `mojom::ActionResultCode::kExecutionEngineExistingAction` result and
+  // neither the request's target WebStates nor
+  // `added_writable_mainframe_origins` are added to the task.
+  // Unless the request is rejected or the task stops, `page_contexts` holds an
+  // observation of the task's first live controlled WebState, if any, even if
+  // an action failed.
+  void PerformActions(
+      ActorTaskId task_id,
+      std::vector<optimization_guide::proto::Action> actions,
+      std::string task_update,
+      absl::flat_hash_set<url::Origin> added_writable_mainframe_origins,
+      PerformActionsCallback callback);
 
   // Pauses a task, cancelling in-progress actions and returning control of the
   // WebState to the user.
@@ -125,12 +120,14 @@ class ActorService : public KeyedService {
   void SetTaskInterventionDelegate(ActorTaskId task_id,
                                    id<ActorTaskInterventionDelegate> delegate);
 
-  // Enqueues an interrupt of a task to wait for user input, suspending ongoing
-  // actions without cancelling them. Accepts an optional message to display to
-  // the user.
+  // Enqueues the interrupt described by `request`. `callback` runs at most
+  // once, asynchronously and never after `Shutdown()`: with the user's answer
+  // and an observation of the task's tab, `kRejected` if the task cannot take
+  // the interrupt, or `kTaskWentAway` if the task does not exist or stops
+  // first. When `callback` runs with an answer, the task has resumed.
   void InterruptTask(ActorTaskId task_id,
-                     ActorTaskInterruptReason reason,
-                     std::string_view message = "");
+                     InterruptRequest request,
+                     ActorTaskResultCallback<InterruptTaskResult> callback);
 
   // Enqueues a stop of a task. The task remains active, e.g. for getters,
   // until the command runs. A stop still queued at `Shutdown()` never runs: the
@@ -234,7 +231,7 @@ class ActorService : public KeyedService {
 
   // Map of pending PageContext extractions ("observations"). Used to keep the
   // wrapper alive while the extraction is in progress.
-  // TODO(crbug.com/568338837): Move tab observation into `ActorTask` so it is
+  // TODO(crbug.com/568339898): Move tab observation into `ActorTask` so it is
   // covered by `pending_act_`.
   std::map<web::WebStateID, PageContextWrapper*> pending_observations_;
 
@@ -254,16 +251,15 @@ class ActorService : public KeyedService {
   void RunReply(base::OnceClosure reply);
 
   // Command implementations of the public methods of the same name.
-  void DoPerformActions(ActorTaskId task_id,
-                        std::vector<optimization_guide::proto::Action> actions,
-                        std::string task_update,
-                        PerformActionsCallback callback);
-  void DoRequestTabObservation(ActorTaskId task_id,
-                               base::WeakPtr<web::WebState> weak_web_state,
-                               TabObservationCallback callback);
+  void DoPerformActions(
+      ActorTaskId task_id,
+      std::vector<optimization_guide::proto::Action> actions,
+      std::string task_update,
+      const absl::flat_hash_set<url::Origin>& added_writable_mainframe_origins,
+      PerformActionsCallback callback);
   void DoInterruptTask(ActorTaskId task_id,
-                       ActorTaskInterruptReason reason,
-                       std::string message);
+                       InterruptRequest request,
+                       ActorTaskResultCallback<InterruptTaskResult> callback);
   void DoStopTask(ActorTaskId task_id, ActorTaskStoppedReason reason);
 
   // Starts a PageContext extraction of `web_state` for the task `task_id`.
@@ -273,12 +269,25 @@ class ActorService : public KeyedService {
                            web::WebState* web_state,
                            TabObservationCallback callback);
 
-  // Posts `callback` with `response` as a reply.
-  void PostTabObservationReply(TabObservationCallback callback,
-                               PageContextWrapperCallbackResponse response);
-
   // Returns whether `Shutdown()` ran.
   bool IsShutDown() const { return !weak_this_; }
+
+  // Observes the tab of the task `task_id` once the user answered its
+  // interrupt, then runs `callback`.
+  void OnInterruptCompleted(
+      ActorTaskId task_id,
+      ActorTaskResultCallback<InterruptTaskResult> callback,
+      ActorTaskResult<InterruptResponse> result);
+
+  // Runs `callback` with `response` and the observation of the tab
+  // `web_state_id`, or with `kTaskWentAway` if the task stopped meanwhile.
+  // TODO(crbug.com/568338837): Move the interrupt observation into `ActorTask`.
+  void OnInterruptObservationComplete(
+      ActorTaskId task_id,
+      web::WebStateID web_state_id,
+      InterruptResponse response,
+      ActorTaskResultCallback<InterruptTaskResult> callback,
+      PageContextWrapperCallbackResponse page_context_response);
 
   // Returns the active task identified by `task_id`, or nullptr.
   ActorTask* FindActiveTask(ActorTaskId task_id);

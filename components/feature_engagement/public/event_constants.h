@@ -70,6 +70,9 @@ extern const char kExtensionsRequestAccessButtonClicked[];
 // The user has accepted the Glic onboarding.
 extern const char kGlicOnboardingCompleted[];
 
+// The user invoked Dictation on a field, starting a session.
+extern const char kDictationInvoked[];
+
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
 
@@ -294,15 +297,6 @@ extern const char kDefaultBrowserPromoTriggerCriteriaConditionsMet[];
 // The user has tapped the contextual panel entrypoint when it was showing the
 // sample model info.
 extern const char kIOSContextualPanelSampleModelEntrypointUsed[];
-
-// The user has tapped the contextual panel entrypoint when it was branded with
-// price insights infoblock.
-extern const char kIOSContextualPanelPriceInsightsEntrypointUsed[];
-
-// The user has explicitly dismissed the Price Insights branded Contextual Panel
-// entrypoint in-product help.
-extern const char
-    kIOSContextualPanelPriceInsightsEntrypointExplicitlyDismissed[];
 
 // The user has tapped the Home customization menu's entrypoint.
 extern const char kHomeCustomizationMenuUsed[];

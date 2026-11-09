@@ -250,15 +250,13 @@ class PasswordsPrivateDelegate
   virtual std::vector<api::passwords_private::PasswordUiEntryList>
   GetCredentialsWithReusedPassword() = 0;
 
-  // Attempts to mute |credential| from the password store. Returns whether
-  // the mute succeeded.
-  virtual bool MuteInsecureCredential(
-      const api::passwords_private::PasswordUiEntry& credential) = 0;
+  // Attempts to mute the credential with `id` from the password store. Returns
+  // whether the mute succeeded.
+  virtual bool MuteInsecureCredential(int id) = 0;
 
-  // Attempts to unmute |credential| from the password store. Returns whether
-  // the unmute succeeded.
-  virtual bool UnmuteInsecureCredential(
-      const api::passwords_private::PasswordUiEntry& credential) = 0;
+  // Attempts to unmute the credential with `id` from the password store.
+  // Returns whether the unmute succeeded.
+  virtual bool UnmuteInsecureCredential(int id) = 0;
 
   // Requests to start a check for insecure passwords. Invokes |callback|
   // once a check is running or the request was stopped via StopPasswordCheck().
@@ -306,7 +304,8 @@ class PasswordsPrivateDelegate
   virtual void DisconnectCloudAuthenticator(
       base::OnceCallback<void(bool)> success_callback) = 0;
 
-  virtual bool IsConnectedToCloudAuthenticator() = 0;
+  virtual void IsConnectedToCloudAuthenticator(
+      base::OnceCallback<void(bool)> is_connected_callback) = 0;
 
   // Returns the current actionable error.
   virtual password_manager::ActionableError GetActionableError() = 0;

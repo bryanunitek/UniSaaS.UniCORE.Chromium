@@ -47,8 +47,6 @@
 #import "components/sync/service/sync_service.h"
 #import "components/translate/core/browser/translate_manager.h"
 #import "components/trusted_vault/trusted_vault_server_constants.h"
-#import "components/webauthn/ios/ios_passkey_client.h"
-#import "components/webauthn/ios/ios_passkey_client_commands.h"
 #import "ios/chrome/browser/app_bar/ui/app_bar_constants.h"
 #import "ios/chrome/browser/app_launcher/model/app_launcher_tab_helper_browser_presentation_provider.h"
 #import "ios/chrome/browser/app_store_rating/model/features.h"
@@ -139,7 +137,6 @@
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overscroll_actions/model/overscroll_actions_tab_helper.h"
 #import "ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.h"
-#import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_coordinator.h"
 #import "ios/chrome/browser/passwords/model/password_controller_delegate.h"
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_coordinator.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/features.h"
@@ -182,7 +179,6 @@
 #import "ios/chrome/browser/shared/coordinator/scene/state/browser_layout_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -265,6 +261,7 @@
 #import "ios/chrome/browser/url_loading/model/url_loading_notifier_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/browser/view_source/model/view_source_browser_agent.h"
+#import "ios/chrome/browser/voice/model/voice_search_navigations_tab_helper.h"
 #import "ios/chrome/browser/voice/ui_bundled/text_to_speech_playback_controller.h"
 #import "ios/chrome/browser/voice/ui_bundled/text_to_speech_playback_controller_factory.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h"
@@ -1866,12 +1863,6 @@ constexpr CGFloat kSnackbarFloatingBottomMargin = 10.0;
   [_viewController startVoiceSearch];
 }
 
-- (void)dismissPasswordSuggestions {
-  // TODO(crbug.com/543354673): Remove this.
-  [HandlerForProtocol(self.dispatcher, IOSPasskeyClientCommands)
-      dismissPasskeySuggestions];
-}
-
 - (void)legacyDismissCardUnmaskAuthentication {
   // TODO(crbug.com/543382844): Remove this.
   [HandlerForProtocol(self.dispatcher, AutofillCommands)
@@ -3300,7 +3291,23 @@ constexpr CGFloat kSnackbarFloatingBottomMargin = 10.0;
 
 - (void)voiceSearchCoordinator:(ChromeCoordinator*)coordinator
              didRecognizeQuery:(NSString*)query {
-  // TODO(crbug.com/571184218): Load the recognized query.
+  CHECK_EQ(coordinator, _voiceSearchCoordinator);
+  [self stopVoiceSearchCoordinator];
+  if (web::WebState* activeWebState = self.activeWebState) {
+    VoiceSearchNavigationTabHelper::FromWebState(activeWebState)
+        ->WillLoadVoiceSearchResult();
+  }
+  _urlLoadingBrowserAgent->LoadURLForQuery(query);
+}
+
+- (void)voiceSearchCoordinator:(ChromeCoordinator*)coordinator
+        didRequestEditingQuery:(NSString*)query {
+  CHECK_EQ(coordinator, _voiceSearchCoordinator);
+  [self stopVoiceSearchCoordinator];
+  // TODO(crbug.com/571185104): Consider adding a Voice Search
+  // `ComposeboxEntrypoint` to measure the composebox sessions it starts.
+  [self showComposeboxFromEntrypoint:ComposeboxEntrypoint::kOther
+                           withQuery:query];
 }
 
 - (void)voiceSearchCoordinatorDidFinish:(ChromeCoordinator*)coordinator {

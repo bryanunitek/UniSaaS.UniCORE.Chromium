@@ -17,7 +17,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_view_util.h"
-#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
@@ -38,6 +37,7 @@
 #include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
 #include "content/browser/file_system_access/fixed_file_system_access_permission_grant.h"
 #include "content/browser/file_system_access/mock_file_system_access_permission_context.h"
+#include "content/browser/file_system_access/mock_file_system_access_permission_grant.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/visibility.h"
@@ -566,7 +566,6 @@ class FileSystemAccessManagerImplTest : public testing::Test {
         bucket_future;
     quota_manager_proxy_->CreateBucketForTesting(
         kTestStorageKey, "custom_bucket",
-        base::SequencedTaskRunner::GetCurrentDefault(),
         bucket_future.GetCallback());
     return bucket_future.Take().transform(
         &storage::BucketInfo::ToBucketLocator);
@@ -677,7 +676,6 @@ TEST_F(FileSystemAccessManagerImplTest, GetSandboxedFileSystem_CustomBucket) {
       bucket_future;
   quota_manager_proxy_->CreateBucketForTesting(
       kTestStorageKey, "custom_bucket",
-      base::SequencedTaskRunner::GetCurrentDefault(),
       bucket_future.GetCallback());
   ASSERT_OK_AND_ASSIGN(auto bucket, bucket_future.Take());
 
@@ -736,7 +734,6 @@ TEST_F(FileSystemAccessManagerImplTest,
       bucket_future;
   quota_manager_proxy_->CreateBucketForTesting(
       kTestStorageKey, "custom_bucket",
-      base::SequencedTaskRunner::GetCurrentDefault(),
       bucket_future.GetCallback());
   ASSERT_OK_AND_ASSIGN(auto bucket, bucket_future.Take());
 
@@ -1471,7 +1468,6 @@ TEST_F(FileSystemAccessManagerImplTest,
       bucket_future;
   quota_manager_proxy_->CreateBucketForTesting(
       kOtherStorageKey, "custom_bucket",
-      base::SequencedTaskRunner::GetCurrentDefault(),
       bucket_future.GetCallback());
   ASSERT_OK_AND_ASSIGN(auto other_bucket, bucket_future.Take());
 
@@ -3640,6 +3636,79 @@ TEST_F(FileSystemAccessManagerImplTest,
   manager_remote->ChooseEntries(std::move(picker_options),
                                 future.GetCallback());
   ASSERT_TRUE(future.Wait());
+}
+
+// The mount point of a directory picked with showDirectoryPicker() can be
+// revoked while the permission prompt is showing, e.g. because the volume is
+// unmounted on ChromeOS. The directory's URL can't be cracked after that, so no
+// handle should be created for it.
+TEST_F(FileSystemAccessManagerImplTest,
+       ChooseEntries_OpenDirectory_MountPointRevokedDuringPermissionPrompt) {
+  PathInfo test_dir_info(PathType::kExternal,
+                         base::FilePath::FromUTF8Unsafe(kTestMountPoint));
+
+  manager_->SetFilePickerResultForTesting(test_dir_info);
+
+  static_cast<TestRenderFrameHost*>(web_contents_->GetPrimaryMainFrame())
+      ->SimulateUserActivation();
+
+  mojo::Remote<blink::mojom::FileSystemAccessManager> manager_remote;
+  FileSystemAccessManagerImpl::BindingContext binding_context = {
+      kTestStorageKey, kTestURL,
+      web_contents_->GetPrimaryMainFrame()->GetGlobalId()};
+  manager_->BindReceiver(binding_context,
+                         manager_remote.BindNewPipeAndPassReceiver());
+
+  ExpectShowFilePicker(
+      /*read_permission=*/true, /*write_permission=*/false, test_dir_info);
+  ExpectConfirmSensitiveEntryAccess(
+      test_dir_info,
+      FileSystemAccessPermissionContext::SensitiveEntryResult::kAllowed,
+      FileSystemAccessPermissionContext::AccessTrigger::kOpen, {},
+      FileSystemAccessPermissionContext::HandleType::kDirectory);
+  ExpectGetWritePermissionGrant(
+      test_dir_info, FileSystemAccessPermissionContext::AccessTrigger::kOpen,
+      FileSystemAccessPermissionContext::HandleType::kDirectory);
+  ExpectCheckPathsAgainstEnterprisePolicy();
+
+  // Revoke the mount point while the read permission is being requested, and
+  // then grant the permission.
+  auto read_grant =
+      base::MakeRefCounted<MockFileSystemAccessPermissionGrant>(allow_grant_);
+  EXPECT_CALL(*read_grant,
+              RequestPermission_(testing::_, testing::_, testing::_))
+      .WillOnce(testing::DoAll(
+          [] {
+            EXPECT_TRUE(storage::ExternalMountPoints::GetSystemInstance()
+                            ->RevokeFileSystem(kTestMountPoint));
+          },
+          RunOnceCallback<2>(FileSystemAccessPermissionGrant::
+                                 PermissionRequestOutcome::kUserGranted)));
+  EXPECT_CALL(permission_context_,
+              GetReadPermissionGrant(
+                  kTestStorageKey.origin(), test_dir_info,
+                  FileSystemAccessPermissionContext::HandleType::kDirectory,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
+      .WillOnce(testing::Return(read_grant));
+
+  auto picker_options = blink::mojom::FilePickerOptions::New(
+      blink::mojom::TypeSpecificFilePickerOptionsUnion::
+          NewDirectoryPickerOptions(blink::mojom::DirectoryPickerOptions::New(
+              blink::mojom::FileSystemAccessPermissionMode::kRead)),
+      /*starting_directory_id=*/std::string(),
+      blink::mojom::FilePickerStartInOptionsUnionPtr());
+
+  base::test::TestFuture<blink::mojom::FileSystemAccessErrorPtr,
+                         std::vector<blink::mojom::FileSystemAccessEntryPtr>>
+      future;
+  manager_remote->ChooseEntries(std::move(picker_options),
+                                future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+
+  auto [error, entries] = future.Take();
+  EXPECT_EQ(error->status, blink::mojom::FileSystemAccessStatus::kFileError);
+  EXPECT_EQ(error->file_error, base::File::FILE_ERROR_NOT_FOUND);
+  EXPECT_TRUE(entries.empty());
 }
 
 TEST_F(FileSystemAccessManagerImplTest, ChooseEntries_InvalidStartInID) {

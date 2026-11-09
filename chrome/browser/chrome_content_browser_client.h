@@ -69,6 +69,7 @@ class ScopedKeepAlive;
 
 namespace base {
 class CommandLine;
+class ResponsivenessCalculatorDelegate;
 }  // namespace base
 
 namespace blink {
@@ -235,6 +236,8 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
       const GURL& site_url,
       std::optional<SpareProcessRefusedByEmbedderReason>& refused_reason)
       override;
+  bool CanBrowserContextUseSpareRenderProcessHost(
+      content::BrowserContext* browser_context) override;
   bool DoesSiteRequireDedicatedProcess(content::BrowserContext* browser_context,
                                        const GURL& effective_site_url) override;
   bool ShouldAllowCrossProcessSandboxedFrameForPrecursor(
@@ -428,8 +431,7 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
 
   bool IsPrivacySandboxReportingDestinationAttested(
       content::BrowserContext* browser_context,
-      const url::Origin& destination_origin,
-      content::PrivacySandboxInvokingAPI invoking_api) override;
+      const url::Origin& destination_origin) override;
   bool IsFullCookieAccessAllowed(
       content::BrowserContext* browser_context,
       content::WebContents* web_contents,
@@ -465,6 +467,10 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
 #if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
   device::GeolocationSystemPermissionManager*
   GetGeolocationSystemPermissionManager() override;
+#endif
+
+#if BUILDFLAG(IS_WIN)
+  bool SystemMayPromptForVideoCapture() override;
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -957,7 +963,7 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
       const GURL& original_url) override;
 
   content::BrowserContext* GetUserBrowserContext(
-      content::RenderFrameHost& render_frame_host) override;
+      content::WebContents& web_contents) override;
 
   void IsClipboardPasteAllowedByPolicy(
       const content::ClipboardEndpoint& source,
@@ -1126,7 +1132,7 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
 
   bool ShouldSkipBeforeUnloadDialog(content::RenderFrameHost* rfh) override;
 
-  std::unique_ptr<content::ResponsivenessCalculatorDelegate>
+  std::unique_ptr<base::ResponsivenessCalculatorDelegate>
   CreateResponsivenessCalculatorDelegate() override;
 
   void GetCloudIdentifiers(

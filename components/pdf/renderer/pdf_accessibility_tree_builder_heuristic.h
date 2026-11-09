@@ -54,9 +54,17 @@ struct ListLevel {
   raw_ptr<ui::AXNodeData> last_item;
   // The x-coordinate, in page pixels, where `last_item`'s text starts.
   float item_text_x = 0.0f;
+  // Page character index where `last_item`'s text starts, after its marker.
+  size_t last_item_start_char_index = 0;
+  // Character counts of this level's ended items, excluding markers and
+  // nested lists.
+  std::vector<size_t> item_char_counts;
   // The value of the most recent item if this is an ordered list; unset for an
   // unordered list.
   std::optional<int> last_ordered_value;
+  // Deepest level count reached under this list, including itself. Only
+  // tracked on the top-level list.
+  size_t max_nesting_depth = 1;
 };
 
 // Heuristic-based accessibility tree building for untagged PDFs.
@@ -85,11 +93,15 @@ struct PageLayoutData {
   base::raw_span<const uint32_t> text_run_start_indices;
 };
 
-// Bundles a single text run with its character span and the following run on
-// the page.
+// Bundles a text run with its characters and the runs just before and after
+// it on the page.
 struct TextRunContext {
   // The text run being evaluated.
   const raw_ref<const chrome_pdf::AccessibilityTextRunInfo> run;
+
+  // The immediately preceding text run on the page, or nullptr if `run` is the
+  // first run.
+  raw_ptr<const chrome_pdf::AccessibilityTextRunInfo> previous_run = nullptr;
 
   // The immediately following text run on the page, or nullptr if `run` is the
   // last run.
@@ -204,7 +216,6 @@ class PdfAccessibilityTreeBuilderHeuristic {
   class LineHelper;
 
   BlockLevelNodeResult CreateBlockLevelNode(
-      const PageLayoutData& layout,
       size_t text_run_index,
       const HeuristicPageProperties& page_properties,
       const chrome_pdf::AccessibilityFormGraphicInfo* graphic);
@@ -279,6 +290,9 @@ class PdfAccessibilityTreeBuilderHeuristic {
 
   raw_ref<PdfAccessibilityTreeBuilder> builder_;
 
+  // The page's text runs and characters from `builder_`.
+  const PageLayoutData page_layout_;
+
   // Sequential index tracking for page objects.
   uint32_t current_link_index_ = 0;
   uint32_t current_image_index_ = 0;
@@ -292,6 +306,11 @@ class PdfAccessibilityTreeBuilderHeuristic {
   // List levels from outermost to innermost. Empty if the current block is not
   // in a list.
   std::vector<ListLevel> list_levels_;
+
+  // Marker run whose ordered list lookahead was last recorded to UMA, so a
+  // marker checked by both `BreakParagraph()` and `CreateBlockLevelNode()` is
+  // recorded once.
+  std::optional<size_t> last_recorded_lookahead_run_index_;
 };
 
 }  // namespace pdf

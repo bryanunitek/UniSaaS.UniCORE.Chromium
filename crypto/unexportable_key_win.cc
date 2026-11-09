@@ -57,6 +57,9 @@
 
 namespace crypto {
 
+BASE_FEATURE(kUnexportableKeyProviderWinRequiresTpm,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 namespace {
 
 // Persistent ECC Storage Root Key (SRK) handle used as the parent key for
@@ -1587,10 +1590,35 @@ ScopedNCryptKey DuplicatePlatformKeyHandle(const UnexportableSigningKey& key) {
 
 std::unique_ptr<UnexportableKeyProvider> GetUnexportableKeyProviderWin() {
   // Any TPM version counts. TPM 1.2 machines get an RSA-only provider.
-  if (!GetTpmVersion()) {
+  if (base::FeatureList::IsEnabled(kUnexportableKeyProviderWinRequiresTpm) &&
+      !GetTpmVersion()) {
     return nullptr;
   }
   return std::make_unique<UnexportableKeyProviderWin>(ProviderType::kTPM);
+}
+
+internal::WinKeyHardwareSupport GetKeyHardwareSupportWin() {
+  using internal::WinKeyHardwareSupport;
+  if (!IsTbsAvailable()) {
+    return WinKeyHardwareSupport::kTbsUnavailable;
+  }
+  TPM_DEVICE_INFO tpm_info{};
+  TBS_RESULT result = ::Tbsi_GetDeviceInfo(sizeof(tpm_info), &tpm_info);
+  // `TBS_RESULT` is unsigned, while `TBS_E_*` are signed HRESULTs.
+  if (result == static_cast<TBS_RESULT>(TBS_E_TPM_NOT_FOUND)) {
+    return WinKeyHardwareSupport::kTpmNotFound;
+  }
+  if (result != TBS_SUCCESS) {
+    return WinKeyHardwareSupport::kGetDeviceInfoFailed;
+  }
+  switch (tpm_info.tpmVersion) {
+    case TPM_VERSION_12:
+      return WinKeyHardwareSupport::kTpm12;
+    case TPM_VERSION_20:
+      return WinKeyHardwareSupport::kTpm20;
+    default:
+      return WinKeyHardwareSupport::kUnknownTpmVersion;
+  }
 }
 
 std::unique_ptr<UnexportableKeyProvider>

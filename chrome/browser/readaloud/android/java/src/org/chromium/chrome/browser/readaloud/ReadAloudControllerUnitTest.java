@@ -39,6 +39,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
+import org.jni_zero.JniRawPtr;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -510,7 +511,8 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testCreatePlayback_nativeEnabled_createsNativePlayback() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         mController.playTab(mTab, ReadAloudController.Entrypoint.MAGIC_TOOLBAR);
@@ -521,9 +523,9 @@ public class ReadAloudControllerUnitTest {
         verify(mPlayerCoordinator)
                 .playbackReady(
                         any(NativePlayback.class), eq(PlaybackListener.State.PLAYBACK_CREATION));
-        verify(mNativeBridgeNatives).setLanguageCode(eq(12345L), eq("en"));
-        verify(mNativeBridgeNatives).setVoice(eq(12345L), eq("voiceA"));
-        verify(mNativeBridgeNatives).play(eq(12345L), eq(mWebContents));
+        verify(mNativeBridgeNatives).setLanguageCode(any(), eq("en"));
+        verify(mNativeBridgeNatives).setVoice(any(), eq("voiceA"));
+        verify(mNativeBridgeNatives).play(any(), eq(mWebContents));
     }
 
     @Test
@@ -563,7 +565,8 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testCreatePlayback_nativeEnabled_defersHighlighterUntilTextChunked() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
         mController.setTimepointsSupportedForTest(mTab.getUrl().getSpec(), true);
 
@@ -1021,12 +1024,13 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testCheckReadability_nativeEnabled() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         mController.maybeCheckReadability(mTab);
 
-        verify(mNativeBridgeNatives).checkReadability(eq(12345L), eq(sTestGURL));
+        verify(mNativeBridgeNatives).checkReadability(any(), eq(sTestGURL));
         verify(mHooksImpl, never())
                 .isPageReadable(
                         anyString(),
@@ -1036,25 +1040,27 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testCheckReadability_nativeBridgeNotInitialized_doesNotQueuePendingRequest() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(0L);
+        when(mNativeBridgeNatives.init(any(), any())).thenReturn(null);
         mController.onProfileAvailable(mMockProfile);
 
-        // When the native bridge is uninitialized (pointer == 0), checkReadability should not be
+        // When the native bridge is uninitialized (pointer == null), checkReadability should not be
         // called and the URL hash should not be stuck in mPendingRequests.
         mController.maybeCheckReadability(mTab);
-        verify(mNativeBridgeNatives, never()).checkReadability(anyLong(), any());
+        verify(mNativeBridgeNatives, never()).checkReadability(any(), any());
 
         // Re-initializing with a valid native bridge pointer should now allow the request through.
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
         mController.maybeCheckReadability(mTab);
-        verify(mNativeBridgeNatives).checkReadability(eq(12345L), eq(sTestGURL));
+        verify(mNativeBridgeNatives).checkReadability(any(), eq(sTestGURL));
     }
 
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testOnReadabilityResult_nativeEnabled() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         assertFalse(mController.isReadable(mTab));
@@ -1063,6 +1069,113 @@ public class ReadAloudControllerUnitTest {
 
         assertTrue(mController.isReadable(mTab));
         assertEquals(PlaybackMode.CLASSIC, mController.getModeToPlay(mTab));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testIsReadable_nativeEnabled_languageUnsupported() {
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
+        mController.onProfileAvailable(mMockProfile);
+        mController.onReadabilityResult(sTestGURL, true);
+        assertFalse(mController.isReadable(null));
+
+        mFakeTranslateBridge.setCurrentLanguage("en");
+        assertTrue(mController.isReadable(mTab));
+
+        // No voices are available for "ko", so entry points should be hidden.
+        mFakeTranslateBridge.setCurrentLanguage("ko");
+        assertFalse(mController.isReadable(mTab));
+        assertEquals(PlaybackMode.UNSPECIFIED, mController.getModeToPlay(mTab));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testIsReadable_nativeEnabled_unsupportedLanguageTranslatedToSupported() {
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
+        mController.onProfileAvailable(mMockProfile);
+        mController.onReadabilityResult(sTestGURL, true);
+
+        mFakeTranslateBridge.setCurrentLanguage("ko");
+        assertFalse(mController.isReadable(mTab));
+
+        // Translating the page to a supported language should show entry points.
+        mFakeTranslateBridge.setCurrentLanguage("en");
+        assertTrue(mController.isReadable(mTab));
+        assertEquals(PlaybackMode.CLASSIC, mController.getModeToPlay(mTab));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testOnVoicesAvailable_nativeEnabled_notifiesReadabilityListeners() {
+        Runnable listener = Mockito.mock(Runnable.class);
+        mController.addReadabilityUpdateListener(listener);
+
+        mController.onVoicesAvailable(
+                new String[] {"voiceA"},
+                new String[] {"Ruby"},
+                new String[] {"en"},
+                new String[] {"US"},
+                new int[] {PlaybackVoice.Pitch.MID},
+                new int[] {PlaybackVoice.Tone.WARM});
+
+        verify(listener).run();
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testIsReadable_nativeEnabled_hebrewMappedToVoiceCatalogCode() {
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
+        mController.onProfileAvailable(mMockProfile);
+        mController.onVoicesAvailable(
+                new String[] {"voiceA"},
+                new String[] {"Ruby"},
+                new String[] {"iw"},
+                new String[] {"IL"},
+                new int[] {PlaybackVoice.Pitch.MID},
+                new int[] {PlaybackVoice.Tone.WARM});
+        mController.onReadabilityResult(sTestGURL, true);
+
+        // TranslateBridge reports "he", but the voice catalog uses "iw".
+        mFakeTranslateBridge.setCurrentLanguage("he");
+        assertTrue(mController.isReadable(mTab));
+
+        mFakeTranslateBridge.setCurrentLanguage("he-IL");
+        assertTrue(mController.isReadable(mTab));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testIsReadable_nativeEnabled_voicesArriveAfterReadability() {
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
+        mController.onProfileAvailable(mMockProfile);
+        // Start with an empty voice catalog.
+        mController.onVoicesAvailable(
+                new String[] {},
+                new String[] {},
+                new String[] {},
+                new String[] {},
+                new int[] {},
+                new int[] {});
+        mFakeTranslateBridge.setCurrentLanguage("en");
+        mController.onReadabilityResult(sTestGURL, true);
+        assertFalse(mController.isReadable(mTab));
+
+        Runnable listener = Mockito.mock(Runnable.class);
+        mController.addReadabilityUpdateListener(listener);
+        mController.onVoicesAvailable(
+                new String[] {"voiceA"},
+                new String[] {"Ruby"},
+                new String[] {"en"},
+                new String[] {"US"},
+                new int[] {PlaybackVoice.Pitch.MID},
+                new int[] {PlaybackVoice.Tone.WARM});
+
+        verify(listener).run();
+        assertTrue(mController.isReadable(mTab));
     }
 
     @Test
@@ -2724,7 +2837,8 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testPreviewVoice_nativeEnabled() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         var voice = new PlaybackVoice("en", "voice_ruby", "");
@@ -2735,7 +2849,7 @@ public class ReadAloudControllerUnitTest {
         verify(mPlaybackHooks, never()).createPlayback(any(), any());
         verify(mNativeBridgeNatives)
                 .previewVoice(
-                        eq(12345L),
+                        any(),
                         eq("voice_ruby"),
                         eq(mActivity.getString(R.string.readaloud_voice_preview_message)));
 
@@ -2771,7 +2885,8 @@ public class ReadAloudControllerUnitTest {
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testPreviewVoice_localizesPreviewMessageToVoiceLanguage() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         String italianPreviewMessage =
@@ -2780,8 +2895,7 @@ public class ReadAloudControllerUnitTest {
                         + " nome.";
         mController.previewVoice(new PlaybackVoice("it", "voice_it", ""));
         resolvePromises();
-        verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_it"), eq(italianPreviewMessage));
+        verify(mNativeBridgeNatives).previewVoice(any(), eq("voice_it"), eq(italianPreviewMessage));
 
         String indonesianPreviewMessage =
                 "Berikut suara yang dapat dipilih untuk membacakan halaman web Anda. Jika Anda"
@@ -2789,21 +2903,22 @@ public class ReadAloudControllerUnitTest {
                         + " tersebut.";
         mController.previewVoice(new PlaybackVoice("id", "voice_id", ""));
         resolvePromises();
-        verify(mNativeBridgeNatives).stopVoicePreview(eq(12345L));
+        verify(mNativeBridgeNatives).stopVoicePreview(any());
         verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_id"), eq(indonesianPreviewMessage));
+                .previewVoice(any(), eq("voice_id"), eq(indonesianPreviewMessage));
 
         // Region subtags are ignored.
         mController.previewVoice(new PlaybackVoice("it-IT", "voice_it_it", ""));
         resolvePromises();
         verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_it_it"), eq(italianPreviewMessage));
+                .previewVoice(any(), eq("voice_it_it"), eq(italianPreviewMessage));
     }
 
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testPreviewVoice_fallsBackToDefaultMessageOnMissingOrUnsupportedLanguage() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         String defaultPreviewMessage =
@@ -2813,19 +2928,18 @@ public class ReadAloudControllerUnitTest {
         mController.previewVoice(new PlaybackVoice("", "voice_empty_lang", ""));
         resolvePromises();
         verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_empty_lang"), eq(defaultPreviewMessage));
+                .previewVoice(any(), eq("voice_empty_lang"), eq(defaultPreviewMessage));
 
         // 2. Null language.
         mController.previewVoice(new PlaybackVoice(null, "voice_null_lang", ""));
         resolvePromises();
         verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_null_lang"), eq(defaultPreviewMessage));
+                .previewVoice(any(), eq("voice_null_lang"), eq(defaultPreviewMessage));
 
         // 3. Language without a bundled translation.
         mController.previewVoice(new PlaybackVoice("ko", "voice_ko", ""));
         resolvePromises();
-        verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_ko"), eq(defaultPreviewMessage));
+        verify(mNativeBridgeNatives).previewVoice(any(), eq("voice_ko"), eq(defaultPreviewMessage));
     }
 
     /** Activity whose UI-language voice preview message is not English. */
@@ -2855,7 +2969,8 @@ public class ReadAloudControllerUnitTest {
 
         mController.destroy();
         mController = createController();
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         // The UI-language message is not English.
@@ -2868,14 +2983,14 @@ public class ReadAloudControllerUnitTest {
                         + " voice and want me to keep using it just tap the voice name.";
         mController.previewVoice(new PlaybackVoice("en", "voice_en", ""));
         resolvePromises();
-        verify(mNativeBridgeNatives)
-                .previewVoice(eq(12345L), eq("voice_en"), eq(englishPreviewMessage));
+        verify(mNativeBridgeNatives).previewVoice(any(), eq("voice_en"), eq(englishPreviewMessage));
     }
 
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testSetVoiceAndRestartPlayback_nativeEnabled() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
 
         var voiceB =
@@ -2897,8 +3012,8 @@ public class ReadAloudControllerUnitTest {
         mController.playTab(mTab, ReadAloudController.Entrypoint.MAGIC_TOOLBAR);
         resolvePromises();
 
-        verify(mNativeBridgeNatives).setVoice(eq(12345L), eq("voiceA"));
-        verify(mNativeBridgeNatives).play(eq(12345L), eq(mWebContents));
+        verify(mNativeBridgeNatives).setVoice(any(), eq("voiceA"));
+        verify(mNativeBridgeNatives).play(any(), eq(mWebContents));
 
         // Simulate active playback before switching voice.
         mController.onPlaybackStateChanged(PlaybackListener.State.PLAYING);
@@ -2909,17 +3024,89 @@ public class ReadAloudControllerUnitTest {
 
         verify(mReadAloudPrefsNatives).setVoice(eq(mPrefService), eq("en"), eq("voiceB"));
         assertEquals("voiceB", mController.getVoiceIdSupplier().get());
-        verify(mNativeBridgeNatives).stop(eq(12345L));
-        verify(mNativeBridgeNatives).setVoice(eq(12345L), eq("voiceB"));
-        verify(mNativeBridgeNatives, times(2)).play(eq(12345L), eq(mWebContents));
+        verify(mNativeBridgeNatives).stop(any());
+        verify(mNativeBridgeNatives).setVoice(any(), eq("voiceB"));
+        verify(mNativeBridgeNatives, times(2)).play(any(), eq(mWebContents));
+    }
+
+    /** Starts a native playback reading "bar": chunk 1, offset 4 of "Hello world Foo bar". */
+    private void startNativePlaybackReadingWord() {
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
+        mController.onProfileAvailable(mMockProfile);
+        mController.onVoicesAvailable(
+                new String[] {"voiceA", "voiceB"},
+                new String[] {"Ruby", "River"},
+                new String[] {"en", "en"},
+                new String[] {"US", "US"},
+                new int[] {PlaybackVoice.Pitch.MID, PlaybackVoice.Pitch.MID},
+                new int[] {PlaybackVoice.Tone.WARM, PlaybackVoice.Tone.CALM});
+
+        mController.playTab(mTab, ReadAloudController.Entrypoint.MAGIC_TOOLBAR);
+        resolvePromises();
+
+        mController.onTextChunked(new String[] {"Hello world", "Foo bar"});
+        mController.onWordHighlightUpdated(
+                /* absoluteStartIndex= */ 16, /* absoluteEndIndex= */ 19);
+        mController.onPlaybackStateChanged(PlaybackListener.State.PLAYING);
+        verify(mNativeBridgeNatives).play(any(), eq(mWebContents));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testSetVoice_nativeEnabled_resumesFromCurrentWord() {
+        startNativePlaybackReadingWord();
+
+        MockPrefServiceHelper.setVoices(mReadAloudPrefsNatives, Map.of("en", "voiceB"));
+        mController.setVoiceOverrideAndApplyToPlayback(new PlaybackVoice("en", "voiceB", ""));
+        resolvePromises();
+
+        // The new session resumes from the same word instead of the beginning.
+        verify(mNativeBridgeNatives, times(2)).play(any(), eq(mWebContents));
+        verify(mNativeBridgeNatives).seekToWord(any(), eq(1), eq(4));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testPreviewThenCloseVoiceMenu_nativeEnabled_resumesFromCurrentWord() {
+        startNativePlaybackReadingWord();
+
+        // Previewing stops the tab playback; selecting a voice must not restart it yet.
+        mController.previewVoice(new PlaybackVoice("en", "voiceB", ""));
+        resolvePromises();
+        MockPrefServiceHelper.setVoices(mReadAloudPrefsNatives, Map.of("en", "voiceB"));
+        mController.setVoiceOverrideAndApplyToPlayback(new PlaybackVoice("en", "voiceB", ""));
+        resolvePromises();
+        verify(mNativeBridgeNatives, times(1)).play(any(), eq(mWebContents));
+        verify(mNativeBridgeNatives, never()).seekToWord(any(), anyInt(), anyInt());
+
+        // Closing the menu restores the tab playback from the same word.
+        mController.onVoiceMenuClosed();
+        resolvePromises();
+        verify(mNativeBridgeNatives, times(2)).play(any(), eq(mWebContents));
+        verify(mNativeBridgeNatives).seekToWord(any(), eq(1), eq(4));
+    }
+
+    @Test
+    @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
+    public void testSetPlaybackMode_nativeEnabled_restartsFromBeginning() {
+        startNativePlaybackReadingWord();
+
+        mController.setPlaybackModeAndApplyToPlayback(PlaybackMode.OVERVIEW);
+        resolvePromises();
+
+        // A playback mode change restarts without restoring the position.
+        verify(mNativeBridgeNatives, times(2)).play(any(), eq(mWebContents));
+        verify(mNativeBridgeNatives, never()).seekToWord(any(), anyInt(), anyInt());
     }
 
     @Test
     @EnableFeatures(ReadAloudFeatures.READ_ALOUD_NATIVE)
     public void testOnVoicesAvailable_populatesCatalogAndUpdatesVoiceMenu_nativeEnabled() {
-        when(mNativeBridgeNatives.init(any(), any())).thenReturn(12345L);
+        when(mNativeBridgeNatives.init(any(), any()))
+                .thenAnswer(invocation -> JniRawPtr.createForTesting(12345L));
         mController.onProfileAvailable(mMockProfile);
-        verify(mNativeBridgeNatives).initVoices(eq(12345L));
+        verify(mNativeBridgeNatives).initVoices(any());
 
         MockPrefServiceHelper.setVoices(
                 mReadAloudPrefsNatives, Map.of("en", "en-GB-Chirp3-HD-Fern"));

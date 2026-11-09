@@ -12,7 +12,7 @@
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
-#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
+#include "chrome/browser/safe_browsing/navigation_observer/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -27,8 +27,8 @@
 #include "components/policy/core/common/cloud/dm_token.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
-#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
+#include "components/safe_browsing/content/browser/navigation_observer/safe_browsing_navigation_observer.h"
+#include "components/safe_browsing/content/browser/navigation_observer/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/navigation_controller.h"
@@ -356,6 +356,11 @@ INSTANTIATE_TEST_SUITE_P(
         base::BindRepeating([](PrefService* prefs) {
           enterprise_connectors::test::SetAnalysisConnector(
               prefs, enterprise_connectors::AnalysisConnector::BULK_DATA_ENTRY,
+              GetAnalysisPolicy());
+        }),
+        base::BindRepeating([](PrefService* prefs) {
+          enterprise_connectors::test::SetAnalysisConnector(
+              prefs, enterprise_connectors::AnalysisConnector::DATA_COPIED,
               GetAnalysisPolicy());
         }),
         base::BindRepeating([](PrefService* prefs) {

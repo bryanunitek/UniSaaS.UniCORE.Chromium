@@ -521,6 +521,7 @@
 <translation id="1384849755549338773">ಇತರ ಭಾಷೆಗಳಲ್ಲಿರುವ ವೆಬ್‌ಸೈಟ್‌ಗಳನ್ನು ಅನುವಾದಿಸಲು Google Translate ಗೆ ಅವಕಾಶ ನೀಡಿ</translation>
 <translation id="1384959399684842514">ಡೌನ್‌ಲೋಡ್ ವಿರಾಮಗೊಳಿಸಲಾಗಿದೆ</translation>
 <translation id="1386966479075994683">ಟ್ಯಾಬ್‌ಗಳನ್ನು ವಿಸ್ತರಿಸಿ</translation>
+<translation id="1387227841274754059">Google Lens ಮೂಲಕ ನಿಮ್ಮ ಸ್ಕ್ರೀನ್ ಕುರಿತು ಕೇಳಿ</translation>
 <translation id="1388253969141979417">ನಿಮ್ಮ ಮೈಕ್ರೊಫೋನ್ ಬಳಸಲು ಈ ಸೈಟ್‌ಗಳಿಗೆ ಅನುಮತಿಸಲಾಗಿದೆ</translation>
 <translation id="139013308650923562">ನಿಮ್ಮ ಸಾಧನದಲ್ಲಿ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಲಾದ ಫಾಂಟ್‌ಗಳನ್ನು ಬಳಸಲು ಅನುಮತಿಸಲಾಗಿದೆ</translation>
 <translation id="1390306150250850355"><ph name="APP_TYPE" /> ಆ್ಯಪ್ ಅನ್ನು ನಿಮ್ಮ <ph name="DEVICE_TYPE" /> ನಲ್ಲಿ ಮೊದಲೇ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಲಾಗಿದೆ</translation>
@@ -535,7 +536,6 @@
 <translation id="1401216725754314428">ಸಂಬಂಧಿತ ಸೈಟ್‌ಗಳ ಕುರಿತು ಹೊಸ ಟ್ಯಾಬ್‌ನಲ್ಲಿ ಇನ್ನಷ್ಟು ತಿಳಿಯಿರಿ</translation>
 <translation id="1402426911829176748">ನಿಮ್ಮ ಸಾಧನಕ್ಕೆ ಕನೆಕ್ಟ್ ಮಾಡಲಾಗುತ್ತಿದೆ</translation>
 <translation id="1405779994569073824">ಕ್ರ್ಯಾಶ್ ಆಗಿದೆ.</translation>
-<translation id="1406812885827747674">ಈ ಬಾರಿ ಅನುಮತಿಸಿ</translation>
 <translation id="1407069428457324124">ಡಾರ್ಕ್ ಥೀಮ್</translation>
 <translation id="1407135791313364759">ಎಲ್ಲವನ್ನೂ ತೆರೆಯಿರಿ</translation>
 <translation id="140723521119632973">ಸೆಲ್ಯುಲರ್ ಸಕ್ರಿಯಗೊಳಿಸುವಿಕೆ</translation>
@@ -1469,6 +1469,7 @@
 <translation id="2131548114076786395">ಟ್ಯಾಬ್ ಗುಂಪುಗಳಲ್ಲಿ ಹಂಚಿಕೊಳ್ಳಲು, ಸೇರಿಕೊಳ್ಳಲು ಮತ್ತು ಕೊಲಾಬೊರೇಟ್ ಮಾಡಲು, ಇದು ನೀವೇ ಎಂಬುದನ್ನು ದೃಢೀಕರಿಸಿಕೊಳ್ಳಿ</translation>
 <translation id="2131863825246488194">ಆನ್‌ಲೈನ್‌ನಲ್ಲಿ ಸುರಕ್ಷಿತವಾಗಿರಿ</translation>
 <translation id="2133857665503360653"><ph name="FILE_NAME" /> ಮರುಪ್ರಯತ್ನಿಸಿ</translation>
+<translation id="2134044938347520790">ರೀಡಿಂಗ್ ಮೋಡ್ ಸಮಸ್ಯೆಗಳು ಅಥವಾ ಫೀಚರ್ ವಿನಂತಿಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಿ</translation>
 <translation id="2134905185275441536">ಸಿಸ್ಟಂ CA ಗಳು</translation>
 <translation id="2135420518376202233">ಬ್ಲೂಟೂತ್ ಸಾಧನದ ಹೆಸರುಗಳು</translation>
 <translation id="21354425047973905">ಪಿನ್‌ಗಳನ್ನು ಮರೆಮಾಡಿ</translation>
@@ -2635,7 +2636,6 @@
 <translation id="3003967365858406397">ಖಾಸಗಿ ವೈ-ಫೈ ಸಂಪರ್ಕವನ್ನು ನಿಮ್ಮ <ph name="PHONE_NAME" /> ರಚಿಸುತ್ತದೆ.</translation>
 <translation id="3004385386820284928">ಕೀಬೋರ್ಡ್ ಕೀಗಳನ್ನು ಕಸ್ಟಮೈಸ್ ಮಾಡಿ</translation>
 <translation id="300580149047131921">ಇತ್ತೀಚೆಗೆ ಬಳಸಿರುವುದು</translation>
-<translation id="3005928441045180122">ಸಂಗ್ರಹಿಸಲಾಗಿದೆ</translation>
 <translation id="3006881078666935414">ಯಾವುದೇ ಬಳಕೆ ಡೇಟಾ ಇಲ್ಲ</translation>
 <translation id="3007555010975143508">ನಿಮ್ಮ ಸ್ಕ್ರೀನ್ ಅನ್ನು ರೆಕಾರ್ಡ್ ಮಾಡಲು ಈ ಆ್ಯಪ್‌ಗಳನ್ನು ಬಳಸಲಾಗುತ್ತದೆ:</translation>
 <translation id="3007771295016901659">ನಕಲಿ ಟ್ಯಾಬ್‌</translation>
@@ -4286,6 +4286,7 @@
 <translation id="4250596587221570622">ನಿಮ್ಮ ಪ್ರೊಫೈಲ್‌ಗಾಗಿ ಒಂದು ಥೀಮ್ ಅನ್ನು ಆಯ್ಕೆಮಾಡಿ</translation>
 <translation id="4250680216510889253">ಇಲ್ಲ</translation>
 <translation id="4251243704979202079"><ph name="FOLDERNAME" /> ಫೋಲ್ಡರ್‌ನಲ್ಲಿರುವ ಫೈಲ್‌ಗಳನ್ನು <ph name="ORIGIN" /> ನೋಡಲು ಮತ್ತು ಅವುಗಳ ಪ್ರತಿಗಳನ್ನು ಸ್ವಂತವಾಗಿ ಮಾಡಲು ಸಾಧ್ಯವಾಗುತ್ತದೆ</translation>
+<translation id="4251316952800826018">ಫೋಕಸ್ ಆಯ್ಕೆ ಹೆಡರ್</translation>
 <translation id="4252899949534773101">ಬ್ಲೂಟೂತ್ ನಿಷ್ಕ್ರಿಯಗೊಳಿಸಲಾಗಿದೆ</translation>
 <translation id="4252996741873942488"><ph name="WINDOW_TITLE" /> - ಟ್ಯಾಬ್ ವಿಷಯವನ್ನು ಹಂಚಿಕೊಳ್ಳಲಾಗಿದೆ</translation>
 <translation id="4253168017788158739">ಟಿಪ್ಪಣಿ</translation>
@@ -4713,6 +4714,7 @@
 <translation id="4580389561674319558">ಎಲ್ಲಾ ಸಂಪರ್ಕಗಳಿಗೆ ಕಾಣಿಸುತ್ತದೆ</translation>
 <translation id="4580596421317071374">ಈ ಸಾಧನದಲ್ಲಿ ಪಾಸ್‌ವರ್ಡ್‌ಗಳನ್ನು <ph name="GOOGLE_PASSWORD_MANAGER" /> ನಲ್ಲಿ ಉಳಿಸಲಾಗುತ್ತದೆ.</translation>
 <translation id="4582297591746054421">ಸೈಟ್‌ಗಳು ಸಾಮಾನ್ಯವಾಗಿ, ನೀವು ನಕಲಿಸಿದ ಪಠ್ಯದ ಫಾರ್ಮ್ಯಾಟಿಂಗ್ ಅನ್ನು ಇರಿಸಿಕೊಳ್ಳುವಂತಹ ಫೀಚರ್‌ಗಳಿಗಾಗಿ ನಿಮ್ಮ ಕ್ಲಿಪ್‌ಬೋರ್ಡ್ ಅನ್ನು ಓದುತ್ತವೆ</translation>
+<translation id="4582563038311694664">ಎಲ್ಲಾ ಸೆಟ್ಟಿಂಗ್‌ಗಳನ್ನು ರೀಸೆಟ್ ಮಾಡಿ</translation>
 <translation id="4584094413232466841">Chrome ಆಟೋಫಿಲ್‌ನಿಂದ ಈ ಮಾಹಿತಿಯನ್ನು ತೆಗೆದುಹಾಕಬೇಕೇ?</translation>
 <translation id="4584770411839426377">ವಿಂಡೋ</translation>
 <translation id="4584836561445313300">ಪಾಸ್‌ವರ್ಡ್‌ಗಳು ಮತ್ತು ಇತ್ಯಾದಿಗಳು ಒಳಗೊಂಡ ಹಾಗೆ ಅಸ್ತಿತ್ವದಲ್ಲಿರುವ ಯಾವುದೇ ಬ್ರೌಸಿಂಗ್ ಡೇಟಾವನ್ನು ನೋಡಲು ಮತ್ತು ನಿರ್ವಹಿಸಲು ನಿಮ್ಮ ಸಂಸ್ಥೆಗೆ ಸಾಧ್ಯವಾಗುತ್ತದೆ</translation>
@@ -4751,6 +4753,7 @@
 <translation id="4610637590575890427"><ph name="SITE" /> ವೆಬ್‌ಸೈಟ್‌ಗೆ ಹೋಗುವುದೇ?</translation>
 <translation id="4611619000650855880">ಎಡ ಮೌಸ್ ಬಟನ್ ಅನ್ನು ಆಯ್ಕೆ ಮಾಡಿದಾಗ, ಡಬಲ್‌-ಕ್ಲಿಕ್ ಮಾಡಲು "/" ಕೀಯನ್ನು ಬಳಸಿ</translation>
 <translation id="4613271546271159013">ನೀವು ಹೊಸ ಟ್ಯಾಬ್ ತೆರೆದಿರುವಾಗ ಯಾವ ಪುಟವನ್ನು ತೋರಿಸಲಾಗಿದೆ ಎಂಬುದರ ವಿಸ್ತರಣೆ ಬದಲಾಗಿದೆ.</translation>
+<translation id="4616024182698834938">ಫೈಲ್‌ಗಳನ್ನು ಇಲ್ಲಿಗೆ ಡ್ರ್ಯಾಗ್ ಅಂಡ್ ಡ್ರಾಪ್ ಮಾಡಿ</translation>
 <translation id="461613135510474570">ವಾಕ್ಯ</translation>
 <translation id="461661862154729886">ಶಕ್ತಿಯ ಮೂಲ</translation>
 <translation id="4617001782309103936">ತೀರಾ ಚಿಕ್ಕದು</translation>
@@ -5315,7 +5318,6 @@
 <translation id="5031769842769721381">{SELECTED_ITEMS,plural, =0{ವಿಳಾಸಗಳು}=1{ವಿಳಾಸಗಳು ({SELECTED_ITEMS})}one{ವಿಳಾಸಗಳು ({SELECTED_ITEMS})}other{ವಿಳಾಸಗಳು ({SELECTED_ITEMS})}}</translation>
 <translation id="5032430150487044192">QR ಕೋಡ್‌ ಅನ್ನು ರಚಿಸಲು ಸಾಧ್ಯವಾಗುತ್ತಿಲ್ಲ</translation>
 <translation id="5033137252639132982">ಮೋಷನ್ ಸೆನ್ಸರ್‌ಗಳನ್ನು ಬಳಸಲು ಈ ಸೈಟ್‌ಗಳಿಗೆ ಅನುಮತಿಸಲಾಗುವುದಿಲ್ಲ</translation>
-<translation id="5034158480345261097">ನಿಮ್ಮ ಪರವಾಗಿ ಸೈನ್ ಇನ್ ಮಾಡಲು <ph name="ACTOR_NAME" />, Google Password Manager ಅನ್ನು ಬಳಸಬಹುದು. <ph name="BEGIN_LINK" /><ph name="ACTOR_NAME" /> ನಿಮ್ಮ ಡೇಟಾವನ್ನು ಹೇಗೆ ನಿರ್ವಹಿಸುತ್ತದೆ ಎಂಬುದನ್ನು ತಿಳಿಯಿರಿ<ph name="END_LINK" /></translation>
 <translation id="5035846135112863536"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> ನಿಂದ ಇನ್ನಷ್ಟು ಮಾಹಿತಿಯನ್ನು ಪಡೆಯಲು ಕೆಳಗೆ "ಇನ್ನಷ್ಟು ವಿವರಗಳು" ಎಂಬುದನ್ನು ಆಯ್ಕೆಮಾಡಿ.</translation>
 <translation id="5037676449506322593">ಎಲ್ಲವನ್ನು ಆಯ್ಕೆಮಾಡಿ</translation>
 <translation id="5038621320029329200">ವಿಶ್ವಾಸಾರ್ಹ ಪ್ರಮಾಣಪತ್ರಗಳು</translation>
@@ -5581,6 +5583,7 @@
 <translation id="5230190638672215545">"ươ" ಪಡೆಯಲು "uow" ಎಂದು ಟೈಪ್ ಮಾಡಿ</translation>
 <translation id="5230516054153933099">ವಿಂಡೋ</translation>
 <translation id="5231255476752743708">ನಿಮ್ಮ ಪಾಸ್‌ವರ್ಡ್ ಅನ್ನು ಬದಲಾಯಿಸುವ ವಿಚಾರದಲ್ಲಿ Chrome ಗೆ ಸಹಾಯ ಬೇಕಾಗಿದೆ</translation>
+<translation id="5232607425694431024">ಫೈಲ್ ಅಥವಾ ಚಿತ್ರದ ಕುರಿತು ಕೇಳಿ</translation>
 <translation id="5232714764496316200">Google Lens ಬಳಸಿಕೊಂಡು ಹೋಮ್‌ವರ್ಕ್ ಸಹಾಯ ಪಡೆಯಿರಿ</translation>
 <translation id="5233231016133573565">ಪ್ರಗತಿ ID</translation>
 <translation id="5233638681132016545">ಹೊಸ ಟ್ಯಾಬ್</translation>
@@ -6434,7 +6437,6 @@
 <translation id="5922854266885514646">"Chrome ಅನ್ನು ಕಸ್ಟಮೈಸ್ ಮಾಡಿ" ಎಂಬುದನ್ನು ಕ್ಲಿಕ್ ಮಾಡಿ</translation>
 <translation id="5924047253200400718">ಸಹಾಯ ಪಡೆಯಿರಿ<ph name="SCANNING_STATUS" /></translation>
 <translation id="5924438086390153180">Microsoft ಫೈಲ್‌ಗಳನ್ನು Google Drive ಗೆ ಕಾಪಿ ಮಾಡುವ ಅಥವಾ ಸರಿಸುವ ಮೊದಲು ಕೇಳಿ</translation>
-<translation id="5925057331573749968">QR ಕೋಡ್ ಮೂಲಕ ವೇಗವಾಗಿ ಸೈನ್ ಇನ್ ಮಾಡಿ</translation>
 <translation id="5926936390113611560">ಎಲ್ಲಾ ಪ್ರೊಫೈಲ್‌ಗಳನ್ನು ತೆರೆಯಿರಿ</translation>
 <translation id="592880897588170157">Chrome ನಲ್ಲಿ PDF ಫೈಲ್‌ಗಳನ್ನು ಸ್ವಯಂಚಾಲಿತವಾಗಿ ತೆರೆಯುವ ಬದಲು ಅವುಗಳನ್ನು ಡೌನ್‌ಲೋಡ್‌ ಮಾಡಿ</translation>
 <translation id="5930567261594625340">ನೈಟ್ ಸ್ಕೈ</translation>
@@ -6772,6 +6774,7 @@
 <translation id="6185151644843671709">ಪಾಸ್‌ಕೀಯನ್ನು ಸೇವ್‌ ಮಾಡಲಾಗಿದೆ ಮತ್ತು ಪಿನ್ ಅನ್ನು ರಚಿಸಲಾಗಿದೆ</translation>
 <translation id="6185353868193925315">{PASSWORD_COUNT,plural, =1{1 ಪಾಸ್‌ವರ್ಡ್ ಮತ್ತು ಇತರ ಐಟಂಗಳನ್ನು ಈ ಸಾಧನದಲ್ಲಿ ಮಾತ್ರ ಸೇವ್‌ ಮಾಡಲಾಗಿದೆ. ಅವುಗಳನ್ನು ನಿಮ್ಮ ಇತರ ಸಾಧನಗಳಲ್ಲಿ ಬಳಸಲು, ಅವುಗಳನ್ನು ನಿಮ್ಮ Google ಖಾತೆಯಲ್ಲಿ ಸೇವ್‌ ಮಾಡಿ. ಇದು ಯಾವುದೇ ನಕಲುಗಳನ್ನು ಸಹ ಕ್ಲೀನ್ ಅಪ್ ಮಾಡುತ್ತದೆ.}one{{PASSWORD_COUNT} ಪಾಸ್‌ವರ್ಡ್‌ಗಳು ಮತ್ತು ಇತರ ಐಟಂಗಳನ್ನು ಈ ಸಾಧನದಲ್ಲಿ ಮಾತ್ರ ಸೇವ್‌ ಮಾಡಲಾಗಿದೆ. ಅವುಗಳನ್ನು ನಿಮ್ಮ ಇತರ ಸಾಧನಗಳಲ್ಲಿ ಬಳಸಲು, ಅವುಗಳನ್ನು ನಿಮ್ಮ Google ಖಾತೆಯಲ್ಲಿ ಸೇವ್‌ ಮಾಡಿ. ಇದು ಯಾವುದೇ ನಕಲುಗಳನ್ನು ಸಹ ಕ್ಲೀನ್ ಅಪ್ ಮಾಡುತ್ತದೆ.}other{{PASSWORD_COUNT} ಪಾಸ್‌ವರ್ಡ್‌ಗಳು ಮತ್ತು ಇತರ ಐಟಂಗಳನ್ನು ಈ ಸಾಧನದಲ್ಲಿ ಮಾತ್ರ ಸೇವ್‌ ಮಾಡಲಾಗಿದೆ. ಅವುಗಳನ್ನು ನಿಮ್ಮ ಇತರ ಸಾಧನಗಳಲ್ಲಿ ಬಳಸಲು, ಅವುಗಳನ್ನು ನಿಮ್ಮ Google ಖಾತೆಯಲ್ಲಿ ಸೇವ್‌ ಮಾಡಿ. ಇದು ಯಾವುದೇ ನಕಲುಗಳನ್ನು ಸಹ ಕ್ಲೀನ್ ಅಪ್ ಮಾಡುತ್ತದೆ.}}</translation>
 <translation id="6186177419203903310">ಇದು ಸಿಸ್ಟಮ್‌ನಾದ್ಯಂತ ಎಲ್ಲಾ ಹೊಸ USB ಪೆರಿಫೆರಲ್‌ಗಳಿಗಾಗಿ ನೋಟಿಫಿಕೇಶನ್‌ಗಳನ್ನು ಸಕ್ರಿಯಗೊಳಿಸುತ್ತದೆ. ನೀವು ಖಂಡಿತವಾಗಿಯೂ ಮುಂದುವರಿಯಲು ಬಯಸುತ್ತೀರಾ?</translation>
+<translation id="6187116431221566074"><ph name="GROUP_CONTENTS" /> - <ph name="COLLAPSED_STATE" /> ಮೇಲೆ ಫೋಕಸ್ ಮಾಡಲಾಗಿದೆ</translation>
 <translation id="6188822118034543225">ಅಕ್ಕಪಕ್ಕದ ಮತ್ತು ಸ್ಟ್ಯಾಕ್ ಮಾಡಲಾದ ಲೇಔಟ್‌ಗಳ ನಡುವೆ ಬದಲಾಯಿಸಲು ಸ್ಪ್ಲಿಟ್ ವ್ಯೂ ಮೆನುವನ್ನು ಬಳಸಿ.</translation>
 <translation id="6190953336330058278">ಫೋನ್ ಹಬ್ ಆ್ಯಪ್‌ಗಳು</translation>
 <translation id="6192333916571137726">ಫೈಲ್‌ ಅನ್ನು ಡೌನ್‌ಲೋಡ್‌ ಮಾಡಿ</translation>
@@ -7034,6 +7037,7 @@
 <translation id="6399675241776343019">ನಿರಾಕರಿಸಲಾಗಿದೆ</translation>
 <translation id="6399774419735315745">ಸ್ಪೈ</translation>
 <translation id="6400360390396538896"><ph name="ORIGIN" /> ನಲ್ಲಿ ಯಾವಾಗಲೂ ಅನುಮತಿಸಿ</translation>
+<translation id="6400714103322134861">ಟ್ಯಾಬ್ ಗುಂಪನ್ನು ಅನ್‌ಫೋಕಸ್ ಮಾಡಿ</translation>
 <translation id="6401118106417399952">ನಿಮ್ಮ ಸಾಧನದ EID ಸಂಖ್ಯೆ <ph name="EID_NUMBER" /> ಮತ್ತು ಸಾಧನದ ಕ್ರಮ ಸಂಖ್ಯೆ <ph name="SERIAL_NUMBER" /> ಆಗಿದೆ. ಸೇವೆಯನ್ನು ಸಕ್ರಿಯಗೊಳಿಸಲು ಸಹಾಯ ಮಾಡಲು ಈ ಸಂಖ್ಯೆಗಳನ್ನು ಬಳಸಬಹುದು.</translation>
 <translation id="6402042774506839496">ಏಕೆ ಎಂದು ತಿಳಿಯಲು, ಆ್ಯಪ್ ಡೆವಲಪರ್ ಅನ್ನು ಸಂಪರ್ಕಿಸಿ</translation>
 <translation id="6402921224457714577">ನಿಮ್ಮ MIDI ಸಾಧನಗಳನ್ನು ನಿಯಂತ್ರಿಸಲು ಮತ್ತು ಮರು ಪ್ರೋಗ್ರಾಂ ಮಾಡಲು ಸೈಟ್‌ಗಳು ಕೇಳಬಹುದು</translation>
@@ -7099,7 +7103,6 @@
 <translation id="6453687572758515877">ಎಲ್ಲಾ ಟ್ಯಾಬ್‌ಗಳನ್ನು ಗುಂಪು ಮಾಡಿ</translation>
 <translation id="6453921811609336127">ಮುಂದಿನ ಇನ್‌ಪುಟ್ ವಿಧಾನಕ್ಕೆ ಬದಲಾಯಿಸಲು, <ph name="BEGIN_SHORTCUT" /><ph name="BEGIN_CTRL" />Ctrl<ph name="END_CTRL" /><ph name="SEPARATOR1" /><ph name="BEGIN_SHIFT" />Shift<ph name="END_SHIFT" /><ph name="SEPARATOR2" /><ph name="BEGIN_SPACE" />ಸ್ಪೇಸ್<ph name="END_SPACE" /><ph name="END_SHORTCUT" /> ಒತ್ತಿರಿ</translation>
 <translation id="645433497989692531">ಇದು ಈ ಸಾಧನದಿಂದ ನಿಮ್ಮ ಬ್ರೌಸಿಂಗ್ ಡೇಟಾವನ್ನು ಶಾಶ್ವತವಾಗಿ ಅಳಿಸುತ್ತದೆ. ಡೇಟಾವನ್ನು ಮರಳಿ ಪಡೆಯಲು, ಹೀಗೆ ಸೈನ್ ಇನ್ ಮಾಡಿ</translation>
-<translation id="6454456397828627257">ಅಕ್ಕ ಪಕ್ಕ</translation>
 <translation id="6455264371803474013">ನಿರ್ದಿಷ್ಟ ಸೈಟ್‌ಗಳಲ್ಲಿ</translation>
 <translation id="6455521402703088376">ಆಫ್ • ಈ ವಿಸ್ತರಣೆಯ ಡೆವಲಪರ್ ಅದರ ಪ್ರಕಟಣೆಯನ್ನು ರದ್ದುಮಾಡಿದ್ದಾರೆ</translation>
 <translation id="6455894534188563617">&amp;ಹೊಸ ಫೋಲ್ಡರ್</translation>
@@ -7730,6 +7733,7 @@
 <translation id="6913051485529944333">ಈ ಪುಟದಲ್ಲಿ ನೀವು Google Calendar ಅನ್ನು ಮತ್ತೆ ನೋಡುವುದಿಲ್ಲ</translation>
 <translation id="6914812290245989348">ಅಸುರಕ್ಷಿತ ಸೈಟ್‌ಗಳಿಗೆ ಭೇಟಿ ನೀಡುವ ಮೊದಲು ಯಾವುದೇ ಎಚ್ಚರಿಕೆಗಳನ್ನು ನೋಡಬೇಡಿ</translation>
 <translation id="6916590542764765824">ವಿಸ್ತರಣೆಗಳನ್ನು ನಿರ್ವಹಿಸಿ</translation>
+<translation id="6916630302999048499">Gemini ಕಾರ್ಯವು ರನ್ ಆಗುತ್ತಿದೆ</translation>
 <translation id="6916676294509106572">Outlook Calendar ಅನ್ನು ಮರೆಮಾಡಲಾಗಿದೆ</translation>
 <translation id="6916818963747321523">ಎಲ್ಲವನ್ನೂ ವಿಸ್ತರಿಸಿ</translation>
 <translation id="6917873303492266709">ಟ್ಯಾಬ್ ಗುಂಪುಗಳಲ್ಲಿ ಹಂಚಿಕೊಳ್ಳಲು, ಸೇರಿಕೊಳ್ಳಲು ಮತ್ತು ಕೊಲಾಬೊರೇಟ್ ಮಾಡಲು, ಸೆಟ್ಟಿಂಗ್‌ಗಳನ್ನು ತೆರೆಯಿರಿ ಮತ್ತು Chrome ಸೈನ್-ಇನ್ ಅನ್ನು ಅನುಮತಿಸಿ ಎಂಬುದನ್ನು ಆನ್ ಮಾಡಿ</translation>
@@ -8260,6 +8264,7 @@
 <translation id="733058866272972585">ಸುರಕ್ಷಿತ ಕಂಟೆಂಟ್ ಅನ್ನು ಪ್ಲೇ ಮಾಡುವುದಕ್ಕಾಗಿ ಗುರುತಿಸುವಿಕೆಗಳನ್ನು ಬಳಸದಿರುವ ಹಾಗೆ ಈ ಸೈಟ್ ಅನ್ನು ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ.</translation>
 <translation id="7331646370422660166">alt + ಡೌನ್ ಆ್ಯರೋ</translation>
 <translation id="7332053360324989309">ಮೀಸಲು ಕೆಲಸಗಾರ: <ph name="SCRIPT_URL" /></translation>
+<translation id="7332618715997319332">ಆರಂಭವಾಗಿದೆ</translation>
 <translation id="7333388112938984914">ಮೀಟರ್ಡ್ ಕನೆಕ್ಷನ್‌ನಲ್ಲಿರುವಾಗ ಫೈಲ್‌ಗಳನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಲು ಸಾಧ್ಯವಿಲ್ಲ.</translation>
 <translation id="7335974957018254119">ಈ ಭಾಷೆಗಳಿಗಾಗಿ ಕಾಗುಣಿತ ಪರೀಕ್ಷೆಯನ್ನು ಬಳಸಿ</translation>
 <translation id="7336799713063880535">ಸೂಚನೆ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ</translation>
@@ -8491,7 +8496,6 @@
 <translation id="7495149565104413027">Android ಆ್ಯಪ್‌</translation>
 <translation id="7497322070873193353">Google AI</translation>
 <translation id="7497981768003291373">ನಿಮ್ಮಲ್ಲಿ ಇತ್ತೀಚೆಗೆ ಕ್ಯಾಪ್ಚರ್‌ ಆಗಿರುವ WebRTC ಪಠ್ಯ ಲಾಗ್‌ಗಳು ಇಲ್ಲ.</translation>
-<translation id="7499684925421947861">ನಿಮ್ಮ ಪರವಾಗಿ <ph name="DOMAIN" /> ಗೆ ಸೈನ್ ಇನ್ ಮಾಡಲು <ph name="ACTOR_NAME" /> ಗೆ ಅನುಮತಿಸಬೇಕೆ?</translation>
 <translation id="7501957181231305652">ಅಥವಾ</translation>
 <translation id="7502220299952823578">"ಯಾವಾಗಲೂ ಈ ಸೈಟ್‌ಗಳನ್ನು ಸಕ್ರಿಯವಾಗಿರಿಸಿಕೊಳ್ಳಿ" ಪಟ್ಟಿಗೆ ಸೇರಿಸಿ</translation>
 <translation id="7502528909759062987">ಟ್ಯಾಬ್ <ph name="DEVICE_NAME" /> ಗೆ ಬಿತ್ತರಿಸುವುದನ್ನು ವಿರಾಮಗೊಳಿಸಿ</translation>
@@ -8628,6 +8632,7 @@
 <translation id="7612655942094160088">ಸಂಪರ್ಕಿತ ಫೋನ್ ವೈಶಿಷ್ಟ್ಯಗಳನ್ನು ಸಕ್ರಿಯಗೊಳಿಸಿ.</translation>
 <translation id="7612989789287281429">ನಿಮ್ಮನ್ನು ಸೈನ್ ಇನ್ ಮಾಡಲಾಗುತ್ತಿದೆ…</translation>
 <translation id="76131528886466333">Microsoft Edge ಗಾಗಿ Google Search ಎಕ್ಸ್‌ಟೆನ್ಶನ್ ಅನ್ನು ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ</translation>
+<translation id="7613308212159091597"><ph name="GROUP_LABEL" /> ಮೇಲೆ ಫೋಕಸ್ ಮಾಡಲಾಗಿದೆ</translation>
 <translation id="7615365294369022248">ಖಾತೆಯನ್ನು ಸೇರಿಸುವಾಗ ದೋಷ ಕಂಡುಬಂದಿದೆ</translation>
 <translation id="7616964248951412133">ಗೇಮ್‌ಗಳು ಅಥವಾ ರಿಮೋಟ್ ಡೆಸ್ಕ್‌ಟಾಪ್ ಆ್ಯಪ್‌ಗಳಂತಹ ನಿಮ್ಮ ಮೌಸ್‌ನ ಇನ್‌ಪುಟ್ ಅನ್ನು ಕ್ಯಾಪ್ಚರ್ ಮಾಡಲು ಮತ್ತು ಬಳಸಲು ಸೈಟ್‌ಗಳು ಈ ಫೀಚರ್ ಅನ್ನು ಬಳಸುತ್ತವೆ.</translation>
 <translation id="7617263010641145920">Play Store  ಅನ್ನು ಆನ್ ಮಾಡಿ</translation>
@@ -10077,6 +10082,7 @@
 <translation id="8708000541097332489">ನಿರ್ಗಮಿಸುವಲ್ಲಿ ತೆರವುಗೊಳಿಸಿ</translation>
 <translation id="870805141700401153">Microsoft Individual Code Signing</translation>
 <translation id="8708671767545720562">&amp;ಹೆಚ್ಚಿನ ಮಾಹಿತಿ</translation>
+<translation id="8709234440040320647">(ಐಸೋಲೆಟೆಡ್ ಮೋಡ್)</translation>
 <translation id="8709368517685334931">Chrome ವೆಬ್‌ ಸ್ಟೋರ್‌ನಲ್ಲಿ ನೀವು ಹಳೆಯ ಬಣ್ಣಗಳನ್ನು ಕಾಣಬಹುದು</translation>
 <translation id="8710414664106871428">ಫ್ಯಾಂಟಸಿ</translation>
 <translation id="8711402221661888347">ಪಿಕಲ್ಸ್</translation>
@@ -10169,7 +10175,6 @@
 <translation id="8774379074441005279">ಮರುಸ್ಥಾಪನೆಯನ್ನು ದೃಢೀಕರಿಸಿ</translation>
 <translation id="8774934320277480003">ಮೇಲಿನ ಅಂಚು</translation>
 <translation id="8775144690796719618">ಅಮಾನ್ಯ URL</translation>
-<translation id="877515298105563553">ಅಕ್ಕ ಪಕ್ಕ</translation>
 <translation id="8776294611668764629">ಭದ್ರತೆ ಪರಿಶೀಲನೆಯನ್ನು ಮಾಡಲು ಈ ಫೈಲ್ ತುಂಬಾ ದೊಡ್ಡದಾಗಿರುವುದರಿಂದ ನಿಮ್ಮ ಸಂಸ್ಥೆಯು ಈ ಫೈಲ್ ಅನ್ನು ನಿರ್ಬಂಧಿಸಿದೆ. ನೀವು 50 MB ವರೆಗಿನ ಫೈಲ್‌ಗಳನ್ನು ತೆರೆಯಬಹುದು.</translation>
 <translation id="8777509665768981163">ನಿಮ್ಮ ಟ್ಯಾಬ್ಲೆಟ್‌ನಲ್ಲಿ ಬಟನ್‌ಗಳನ್ನು ಸೇರಿಸಿ ಅಥವಾ ಪತ್ತೆಮಾಡಿ</translation>
 <translation id="8779720597365936419">ಹೌದು, ನನ್ನ ಡೇಟಾವನ್ನು ಉದ್ಯೋಗದಿಂದ ಪ್ರತ್ಯೇಕವಾಗಿ ಇರಿಸಿ (ಶಿಫಾರಸು ಮಾಡಲಾಗಿದೆ)</translation>
@@ -10241,6 +10246,7 @@
 <translation id="8836360711089151515">ನಿಮ್ಮ ಡೇಟಾವನ್ನು ಬ್ಯಾಕಪ್ ಮಾಡಬೇಕೆಂದು ಮತ್ತು 1 ವಾರದ ಒಳಗಾಗಿ ಈ <ph name="DEVICE_TYPE" /> ಅನ್ನು ಹಿಂತಿರುಗಿಸಬೇಕೆಂದು <ph name="MANAGER" /> ಬಯಸುತ್ತದೆ. <ph name="LINK_BEGIN" />ವಿವರಗಳನ್ನು ನೋಡಿ<ph name="LINK_END" /></translation>
 <translation id="8836553134303716111">{NUM_GROUPS,plural, =1{ಗುಂಪನ್ನು ತೊರೆಯಿರಿ}one{ಗುಂಪುಗಳನ್ನು ತೊರೆಯಿರಿ}other{ಗುಂಪುಗಳನ್ನು ತೊರೆಯಿರಿ}}</translation>
 <translation id="8836782447513334597">ಮುಂದುವರಿಸಿ</translation>
+<translation id="8837072669197607689">ಐಸೋಲೆಟೆಡ್ ಮೋಡ್‌ನಲ್ಲಿ ಅನುಮತಿಸಿ</translation>
 <translation id="8837573527470979311">ಕೆಳಗಿನ ವೀಕ್ಷಣೆಯೊಂದಿಗೆ ಸ್ವ್ಯಾಪ್ ಮಾಡಿ</translation>
 <translation id="8838601485495657486">ಅಪಾರದರ್ಶಕ</translation>
 <translation id="8838770651474809439">ಹ್ಯಾಂಬರ್ಗರ್</translation>
@@ -10299,6 +10305,7 @@
 <translation id="8876307312329369159">ಈ ಸೆಟ್ಟಿಂಗ್ ಅನ್ನು ಡೆಮೊ ಸೆಷನ್‌ನಲ್ಲಿ ಬದಲಾಯಿಸಲು ಸಾಧ್ಯವಿಲ್ಲ.</translation>
 <translation id="8876965259056847565">ಸಮೀಪದಲ್ಲಿರುವ ಸಾಧನಗಳನ್ನು ಹುಡುಕಲು, ಬ್ಲೂಟೂತ್ ಸ್ಕ್ಯಾನಿಂಗ್ ಅನ್ನು <ph name="FEATURE_NAME" /> ಬಳಸಿಕೊಳ್ಳುತ್ತದೆ.</translation>
 <translation id="8877448029301136595">[ಮೂಲ ಡೈರೆಕ್ಟರಿ]</translation>
+<translation id="8878337214401484041"><ph name="TASK_TITLE" />: ಪ್ರಾರಂಭಿಸಲಾಗಿದೆ</translation>
 <translation id="8879284080359814990">ಟ್ಯಾಬ್‌ನಂತೆ &amp;ತೋರಿಸಿ</translation>
 <translation id="8879921471468674457">ಸೈನ್-ಇನ್ ಮಾಹಿತಿಯನ್ನು ನೆನಪಿನಲ್ಲಿಡಿ</translation>
 <translation id="8880009256105053174">Google ಮೂಲಕ ಈ ಪುಟವನ್ನು ಹುಡುಕಿ...</translation>
@@ -10531,6 +10538,7 @@
 <translation id="9043767139743235992">Google Disability ಬೆಂಬಲ ತಂಡವನ್ನು ಸಂಪರ್ಕಿಸಿ</translation>
 <translation id="9044646465488564462">ನೆಟ್‌ವರ್ಕ್‌ಗೆ ಸಂಪರ್ಕಿಸಲು ವಿಫಲವಾಗಿದೆ: <ph name="DETAILS" /></translation>
 <translation id="9045160989383249058">ನಿಮ್ಮ ಓದುವ ಪಟ್ಟಿಯನ್ನು ಹೊಸ ಸೈಡ್ ಪ್ಯಾನಲ್‌ಗೆ ಸರಿಸಲಾಗಿದೆ. ಇದನ್ನು ಇಲ್ಲಿ ಪ್ರಯತ್ನಿಸಿ.</translation>
+<translation id="9046240419485318563">ಮೆಮೊರಿಯನ್ನು ಬ್ರೌಸ್ ಮಾಡಿ</translation>
 <translation id="9048745018038487540">ಎಲ್ಲಾ ಫಾಂಟ್‌ಗಳನ್ನು ಆಯ್ಕೆಮಾಡಿ</translation>
 <translation id="9050666287014529139">ಪಾಸ್‌ಫ್ರೇಸ್</translation>
 <translation id="905137631551495997">ವಿಸ್ತರಣೆ(ಗಳು)</translation>
@@ -10701,7 +10709,6 @@
 <translation id="9170884462774788842">ನಿಮ್ಮ ಕಂಪ್ಯೂಟರ್‌ನಲ್ಲಿನ ಮತ್ತೊಂದು ಪ್ರೋಗ್ರಾಂ Chrome ಕಾರ್ಯನಿರ್ವಹಿಸುವ ವಿಧಾನವನ್ನು ಬದಲಿಸಬಹುದಾದಂತಹ ಥೀಮ್ ಅನ್ನು ಸೇರಿಸಿದೆ.</translation>
 <translation id="9172270007201309670">ಫಾಂಟ್ ಗಾತ್ರ ಹೆಚ್ಚಿದೆ</translation>
 <translation id="917350715406657904"><ph name="APP_NAME" /> ಗೆ ನಿಮ್ಮ ಪೋಷಕರು ಹೊಂದಿಸಿದ ಸಮಯ-ಮಿತಿಯನ್ನು ನೀವು ತಲುಪಿದ್ದೀರಿ. ನೀವು ಇದನ್ನು ನಾಳೆ <ph name="TIME_LIMIT" /> ಸಮಯದವರೆಗೆ ಬಳಸಬಹುದು.</translation>
-<translation id="9174854240439014335">ವಿಂಡೋದ ಎಡ ಅಥವಾ ಬಲ ಅಂಚಿನಲ್ಲಿ ವಿಭಜಿತ ವೀಕ್ಷಣೆ, ಡ್ರ್ಯಾಗ್ ಅಂಡ್ ಡ್ರಾಪ್ ಮಾಡಿ ಅನ್ನು ಅನುಮತಿಸಿ.</translation>
 <translation id="9174870712400134574">ಹೊಸ ಟ್ಯಾಬ್ ಪುಟದಲ್ಲಿ ಮಾತ್ರ ತೋರಿಸಿ</translation>
 <translation id="9176611096776448349"><ph name="WINDOW_TITLE" /> - ಬ್ಲೂಟೂತ್ ಸಾಧನ ಸಂಪರ್ಕಗೊಂಡಿದೆ</translation>
 <translation id="9177859716483578738">ಮುಂದುವರಿಸಲು, ಈ ಸೈಟ್‌ನ ಜೊತೆಗೆ <ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> ನಿಮ್ಮ <ph name="FIELDS_STRING" /> ಅನ್ನು ಹಂಚಿಕೊಳ್ಳುತ್ತದೆ. ಈ ಸೈಟ್‌ನ <ph name="BEGIN_LINK" />ಗೌಪ್ಯತೆ ನೀತಿಯನ್ನು<ph name="END_LINK" /> ನೋಡಿ.</translation>
@@ -10717,7 +10724,6 @@
 <translation id="9187967020623675250">ಕೀಗಳು ಹೊಂದಾಣಿಕೆಯಾಗುತ್ತಿಲ್ಲ. <ph name="RESPONSE" /> ಗೆ ಯಾವುದೇ ಕೀ ಅನ್ನು ಒತ್ತಿರಿ.</translation>
 <translation id="9192019773545828776">ಮಾತಿನ ಪ್ರತಿಕ್ರಿಯೆಯನ್ನು ಆಲಿಸಿ ಇದರಿಂದ ನೀವು ಸ್ಕ್ರೀನ್ ಅನ್ನು ನೋಡದೆಯೇ ನಿಮ್ಮ ಸಾಧನವನ್ನು ಬಳಸಬಹುದು. ಸಂಪರ್ಕಿತ ಸಾಧನದೊಂದಿಗೆ ಬ್ರೈಲ್ ಪ್ರತಿಕ್ರಿಯೆ ಲಭ್ಯವಿದೆ. ChromeVox ಅನ್ನು ಆನ್ ಮತ್ತು ಆಫ್ ಮಾಡಲು Ctrl + Alt + Z ಬಳಸಿ. ನ್ಯಾವಿಗೇಟ್ ಮಾಡಲು Search + ಲೆಫ್ಟ್ ಆ್ಯರೋ ಅಥವಾ ರೈಟ್ ಗುರುತನ್ನು ಬಳಸಿ. ಆಯ್ಕೆ ಮಾಡಲು (ಸಕ್ರಿಯಗೊಳಿಸಲು) Search + ಸ್ಪೇಸ್  ಅನ್ನು ಬಳಸಿ.</translation>
 <translation id="9195969368671142407">ನಿಮ್ಮ ಸಂಸ್ಥೆಯು ನಿಮ್ಮ Google ಖಾತೆಗೆ ಉಳಿತಾಯವನ್ನು ಮಿತಿಗೊಳಿಸಿದಾಗ, ನೀವು ಟ್ಯಾಬ್ ಗುಂಪುಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಲು ಅಥವಾ ಸೇರಿಕೊಳ್ಳಲು ಸಾಧ್ಯವಾಗುವುದಿಲ್ಲ</translation>
-<translation id="9197456336762295195">google.com ಗಾಗಿ ನಿಮ್ಮ ಪಾಸ್‌ಕೀಯನ್ನು ಹೊಂದಿರುವ ಸಾಧನದಲ್ಲಿನ ಕ್ಯಾಮರಾ ಮೂಲಕ ಈ QR ಕೋಡ್ ಅನ್ನು ಸ್ಕ್ಯಾನ್ ಮಾಡಿ</translation>
 <translation id="919840898042157087">ಸ್ಟ್ಯಾಟಿಕ್ ಮೂವ್‌ಮೆಂಟ್</translation>
 <translation id="9199503643457729322">ಗೌಪ್ಯತೆ ಗೈಡ್‌ನಿಂದ ದೂರ ನ್ಯಾವಿಗೇಟ್ ಮಾಡಲು ಕ್ಲಿಕ್ ಮಾಡಿ.</translation>
 <translation id="9199695835892108985">ಎಲ್ಲಾ USB ಸೀರಿಯಲ್ ಪೋರ್ಟ ಅನ್ನು ರೀಸೆಟ್ ಮಾಡಬೇಕೆ?</translation>

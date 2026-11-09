@@ -8,7 +8,6 @@
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -283,7 +282,10 @@ void MandatoryReauthBubbleControllerImpl::DoShowBubble() {
   view_android_ =
       MandatoryReauthOptInViewAndroid::CreateAndShow(web_contents(), this);
   if (!view_android_) {
-    java_controller_bridge_.Reset();
+    // Keep `java_controller_bridge_` alive when `CreateAndShow()` returns null
+    // (for example, when `BottomSheetController` queues the sheet behind
+    // another closing sheet) so `~MandatoryReauthBubbleControllerImpl()` still
+    // calls `destroy()` to clear its native pointer on `WebContents` teardown.
     return;
   }
   SetBubbleView(*view_android_.get());

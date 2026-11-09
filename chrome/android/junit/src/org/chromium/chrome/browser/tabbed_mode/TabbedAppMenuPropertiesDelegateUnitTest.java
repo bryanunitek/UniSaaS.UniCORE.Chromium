@@ -183,6 +183,7 @@ import org.chromium.google_apis.gaia.GoogleServiceAuthError;
 import org.chromium.google_apis.gaia.GoogleServiceAuthErrorState;
 import org.chromium.net.ConnectionType;
 import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
+import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
@@ -205,7 +206,6 @@ import java.util.Set;
 
 @RunWith(BaseRobolectricTestRunner.class)
 @DisableFeatures({
-    ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU,
     ChromeFeatureList.FEED_AUDIO_OVERVIEWS,
     ChromeFeatureList.LENS_OVERLAY_ANDROID,
     ChromeFeatureList.TASK_MANAGER_CLANK,
@@ -2714,6 +2714,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
     @Test
     @EnableFeatures(ChromeFeatureList.ANDROID_KEYBOARD_SHORTCUT_HINTS)
     public void testShortcutTextPopulatedWhenEnabled() {
+        DeviceInput.setSupportsAlphabeticKeyboardForTesting(true);
         setUpMocksForPageMenu();
         when(mTab.getUrl()).thenReturn(JUnitTestGURLs.EXAMPLE_URL);
         doReturn(mTabModel).when(mTabModelSelector).getCurrentModel();
@@ -4509,8 +4510,8 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
     public void testDownloadActionModel_SaveAsDisabled() {
+        DeviceInfo.setIsDesktopForTesting(false);
         setUpMocksForPageMenu();
         ModelList modelList = mTabbedAppMenuPropertiesDelegate.getMenuItems();
         ListItem iconRow = findItemById(modelList, R.id.icon_row_menu_id);
@@ -4524,7 +4525,6 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
     public void testDownloadActionModel_SaveAsEnabled() {
         DeviceInfo.setIsDesktopForTesting(true);
         setUpMocksForPageMenu();
@@ -4540,8 +4540,8 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
     public void testDownloadPageItemTitle_SaveAsDisabled() {
+        DeviceInfo.setIsDesktopForTesting(false);
         SaveAndShareItemBuilder builder =
                 new SaveAndShareItemBuilder(
                         ContextUtils.getApplicationContext(),
@@ -4556,7 +4556,6 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
     public void testDownloadPageItemTitle_SaveAsEnabled() {
         DeviceInfo.setIsDesktopForTesting(true);
         SaveAndShareItemBuilder builder =

@@ -200,6 +200,7 @@ void WaylandToplevelWindow::Hide() {
   // not the case here.
   xdg_toplevel_.reset();
   minimize_sync_callback_.reset();
+  fullscreen_sync_callback_.reset();
   toplevel_session_.reset();
   appmenu_.reset();
 
@@ -253,7 +254,8 @@ void WaylandToplevelWindow::SetFullscreen(bool fullscreen,
   // to the compositor to choose which display will be used to map this surface.
 
   // The `target_display_id` must be invalid if not going into fullscreen.
-  DCHECK(fullscreen || target_display_id == display::kInvalidDisplayId);
+  CHECK(fullscreen || target_display_id == display::kInvalidDisplayId,
+        base::NotFatalUntil::M163);
 
   if (base::FeatureList::IsEnabled(features::kAsyncFullscreenWindowState)) {
     if (!xdg_toplevel_) {
@@ -316,6 +318,7 @@ void WaylandToplevelWindow::Minimize() {
     } else {
       auto previous_state = applied_state().window_state;
       previously_maximized_ = previous_state == PlatformWindowState::kMaximized;
+      fullscreen_sync_callback_.reset();
       SendSetMinimized();
       ForceApplyWindowStateDoNotUse(PlatformWindowState::kMinimized);
       delegate()->OnWindowStateChanged(previous_state,
@@ -325,7 +328,7 @@ void WaylandToplevelWindow::Minimize() {
 }
 
 void WaylandToplevelWindow::Restore() {
-  DCHECK(xdg_toplevel_);
+  CHECK(xdg_toplevel_, base::NotFatalUntil::M163);
 
   // Differently from other platforms, under Wayland, unmaximizing the dragged
   // window before starting the drag loop is not needed as it is assumed to be
@@ -363,7 +366,7 @@ void WaylandToplevelWindow::ShowWindowControlsMenu(const gfx::Point& point) {
 }
 
 void WaylandToplevelWindow::ActivateWithToken(std::string token) {
-  DCHECK(connection()->xdg_activation());
+  CHECK(connection()->xdg_activation(), base::NotFatalUntil::M163);
 
   // Stacking the dragged xdg toplevel as the topmost one (and tied to the
   // pointer cursor) is reponsibility of the Wayland compositor, so bail out
@@ -576,10 +579,15 @@ void WaylandToplevelWindow::HandleToplevelConfigureWithOrigin(
           : (GetLatestRequestedState().window_state ==
                  PlatformWindowState::kMinimized &&
              !can_unminimize);
+  // With kAsyncFullscreenWindowState disabled, SetFullscreen(true) applies
+  // kFullScreen immediately and sets fullscreen_sync_callback_. A configure
+  // sent before the compositor processed set_fullscreen does not mean
+  // fullscreen was exited.
+  const bool is_pending_fullscreen = !!fullscreen_sync_callback_;
 
   if (is_minimized || window_states.is_minimized) {
     window_state = PlatformWindowState::kMinimized;
-  } else if (window_states.is_fullscreen) {
+  } else if (is_pending_fullscreen || window_states.is_fullscreen) {
     window_state = PlatformWindowState::kFullScreen;
   } else if (window_states.is_maximized) {
     window_state = PlatformWindowState::kMaximized;
@@ -603,13 +611,16 @@ void WaylandToplevelWindow::HandleToplevelConfigureWithOrigin(
   bool prev_suspended = is_suspended_;
   is_suspended_ = window_states.is_suspended;
 
-  // The compositor does not report the minimized state, but it still reports
-  // the state underneath, which is what Restore() should return to. Use that
-  // instead of the previous configure while the client keeps the window
-  // minimized.
+  // The compositor does not report the minimized state, and a configure that
+  // predates set_fullscreen does not yet report fullscreen, but either still
+  // reports the state underneath, which is what Restore() or exiting
+  // fullscreen should return to. Use that instead of the previous configure
+  // while the client keeps the window minimized or fullscreen.
   PlatformWindowState previous_state = last_configured_window_state_;
-  if (window_state == PlatformWindowState::kMinimized &&
-      !window_states.is_minimized) {
+  if ((window_state == PlatformWindowState::kMinimized &&
+       !window_states.is_minimized) ||
+      (window_state == PlatformWindowState::kFullScreen &&
+       !window_states.is_fullscreen)) {
     previous_state =
         window_states.is_fullscreen  ? PlatformWindowState::kFullScreen
         : window_states.is_maximized ? PlatformWindowState::kMaximized
@@ -638,8 +649,9 @@ void WaylandToplevelWindow::HandleToplevelConfigureWithOrigin(
 
   // Width or height set to 0 means that we should decide on width and height by
   // ourselves, but we don't want to set them to anything else. Use restored
-  // bounds size or the current bounds iff the current state is normal (neither
-  // maximized nor fullscreen).
+  // bounds size or the current bounds when the current state is normal, or keep
+  // the size from an earlier configure in this batch (falling back to the
+  // current bounds) when maximized or fullscreen.
   //
   // Note: if the browser was started with --start-fullscreen and a user exits
   // the fullscreen mode, wayland may set the width and height to be 1. Instead,
@@ -647,30 +659,65 @@ void WaylandToplevelWindow::HandleToplevelConfigureWithOrigin(
   // bounds.
   gfx::Rect bounds_dip(
       pending_configure_state_.bounds_dip.value_or(gfx::Rect()));
-  if (window_state == PlatformWindowState::kMinimized) {
+  const bool is_stale_fullscreen_configure =
+      window_state == PlatformWindowState::kFullScreen &&
+      !window_states.is_fullscreen;
+  if (window_state == PlatformWindowState::kMinimized ||
+      (is_stale_fullscreen_configure &&
+       (!window_states.is_maximized || width_dip <= 1 || height_dip <= 1))) {
     // Keep the current (restored) bounds while minimized. Otherwise the bounds
     // shrink to the no-shadow configure size, the throttled renderer keeps that
     // smaller buffer, and on un-minimize it is briefly shown mismatched against
     // the retained window geometry, shifting the content (Wayland-only).
+    // Likewise, keep current bounds on non-maximized or 0x0 configures that
+    // predate set_fullscreen so bounds_dip does not remain empty or shrink to a
+    // pre-fullscreen no-shadow size; stale maximized configures are still acked
+    // and must obey the configured size (crbug.com/576504456).
     bounds_dip = GetBoundsInDIP();
+    pending_configure_state_.geometry_size_dip =
+        applied_state().geometry_size_dip;
   } else if (width_dip > 1 && height_dip > 1) {
-    bounds_dip.SetRect(x, y, width_dip, height_dip);
-    const auto& insets = delegate()->CalculateInsetsInDIP(window_state);
-    if (ShouldSetBounds(window_state) && !insets.IsEmpty()) {
-      bounds_dip.Inset(-insets);
-      bounds_dip.set_origin({x, y});
-    }
+    // The configured size is the exact window geometry size in Wayland DIP.
+    const gfx::Size geometry_size_dip(width_dip, height_dip);
+    pending_configure_state_.geometry_size_dip = geometry_size_dip;
     // UI Scale must be applied only for size coming from the server. Restored
     // and current dip bounds (used below) are already ui-scale'd.
-    bounds_dip = gfx::ScaleToEnclosingRectIgnoringError(
-        bounds_dip, 1.f / applied_state().ui_scale);
+    const float ui_scale = applied_state().ui_scale;
+    bounds_dip =
+        gfx::Rect(gfx::ScaleToEnclosingRectIgnoringError(
+                      gfx::Rect(x, y, width_dip, height_dip), 1.f / ui_scale)
+                      .origin(),
+                  ShouldSetBounds(window_state)
+                      ? GeometrySizeToBoundsSizeDIP(geometry_size_dip,
+                                                    window_state, ui_scale)
+                      : gfx::ScaleToEnclosingRectIgnoringError(
+                            gfx::Rect(geometry_size_dip), 1.f / ui_scale)
+                            .size());
   } else if (ShouldSetBounds(window_state)) {
-    bounds_dip = !restored_bounds_dip().IsEmpty() ? restored_bounds_dip()
-                                                  : GetBoundsInDIP();
+    if (!restored_bounds_dip().IsEmpty()) {
+      bounds_dip = restored_bounds_dip();
+      pending_configure_state_.geometry_size_dip = GetRestoredGeometrySizeDIP();
+    } else {
+      bounds_dip = GetBoundsInDIP();
+      pending_configure_state_.geometry_size_dip =
+          applied_state().geometry_size_dip;
+    }
+  } else if (bounds_dip.IsEmpty()) {
+    // 0x0 maximized/fullscreen configure with no size from an earlier
+    // configure in this batch: keep the current bounds.
+    bounds_dip = GetBoundsInDIP();
+    pending_configure_state_.geometry_size_dip =
+        applied_state().geometry_size_dip;
   }
 
   if (ShouldSetBounds(window_state)) {
-    bounds_dip = AdjustBoundsToConstraintsDIP(bounds_dip);
+    const gfx::Rect adjusted_bounds_dip =
+        AdjustBoundsToConstraintsDIP(bounds_dip);
+    if (adjusted_bounds_dip.size() != bounds_dip.size()) {
+      // Derived from the adjusted bounds in RequestState().
+      pending_configure_state_.geometry_size_dip.reset();
+    }
+    bounds_dip = adjusted_bounds_dip;
   }
   pending_configure_state_.bounds_dip = bounds_dip;
   pending_configure_state_.size_px =
@@ -684,7 +731,7 @@ void WaylandToplevelWindow::HandleToplevelConfigureWithOrigin(
   if (ShouldSetBounds(window_state)) {
     SetRestoredBoundsInDIP({});
   } else if (GetRestoredBoundsInDIP().IsEmpty()) {
-    SetRestoredBoundsInDIP(GetBoundsInDIP());
+    SetRestoredGeometry(GetBoundsInDIP(), applied_state().geometry_size_dip);
   }
 
   auto alive = weak_ptr_factory_.GetWeakPtr();
@@ -774,7 +821,7 @@ bool WaylandToplevelWindow::IsSurfaceConfigured() {
 
 void WaylandToplevelWindow::SetWindowGeometry(
     const PlatformWindowDelegate::State& state) {
-  DCHECK(connection()->SupportsSetWindowGeometry());
+  CHECK(connection()->SupportsSetWindowGeometry(), base::NotFatalUntil::M163);
 
   if (!xdg_toplevel_) {
     return;
@@ -790,24 +837,12 @@ void WaylandToplevelWindow::SetWindowGeometry(
     return;
   }
 
-  gfx::Rect geometry_dip = gfx::ScaleToEnclosingRectIgnoringError(
-      gfx::Rect(state.bounds_dip.size()), state.ui_scale);
-
-  auto insets_dip = delegate()->CalculateInsetsInDIP(state.window_state);
-  if (!insets_dip.IsEmpty()) {
-    geometry_dip.Inset(insets_dip);
-
-    // Shrinking the bounds by the decoration insets might result in empty
-    // bounds. For the reasons already explained in WaylandWindow::Initialize(),
-    // we mustn't request an empty window geometry.
-    if (geometry_dip.width() == 0) {
-      geometry_dip.set_width(1);
-    }
-    if (geometry_dip.height() == 0) {
-      geometry_dip.set_height(1);
-    }
-  }
-  xdg_toplevel_->SetWindowGeometry(geometry_dip);
+  // `geometry_size_dip` is already in Wayland DIP and excludes the decoration
+  // insets, and is never empty.
+  const auto insets_dip = delegate()->CalculateInsetsInDIP(state.window_state);
+  xdg_toplevel_->SetWindowGeometry(
+      gfx::Rect(gfx::Point(insets_dip.left(), insets_dip.top()),
+                state.geometry_size_dip));
 }
 
 void WaylandToplevelWindow::AckConfigure(uint32_t serial) {
@@ -836,31 +871,31 @@ base::WeakPtr<WaylandWindow> WaylandToplevelWindow::AsWeakPtr() {
 
 bool WaylandToplevelWindow::IsClientControlledWindowMovementSupported() const {
   auto* window_drag_controller = connection()->window_drag_controller();
-  DCHECK(window_drag_controller);
+  CHECK(window_drag_controller, base::NotFatalUntil::M163);
   return window_drag_controller->IsWindowDragProtocolAvailable();
 }
 
 bool WaylandToplevelWindow::ShouldReleaseCaptureForDrag(
     ui::OSExchangeData* data) const {
   auto* data_drag_controller = connection()->data_drag_controller();
-  DCHECK(data_drag_controller);
+  CHECK(data_drag_controller, base::NotFatalUntil::M163);
   return data_drag_controller->ShouldReleaseCaptureForDrag(data);
 }
 
 bool WaylandToplevelWindow::RunMoveLoop(const gfx::Vector2d& drag_offset) {
-  DCHECK(connection()->window_drag_controller());
+  CHECK(connection()->window_drag_controller(), base::NotFatalUntil::M163);
   return connection()->window_drag_controller()->Drag(this, drag_offset);
 }
 
 void WaylandToplevelWindow::EndMoveLoop() {
-  DCHECK(connection()->window_drag_controller());
+  CHECK(connection()->window_drag_controller(), base::NotFatalUntil::M163);
   connection()->window_drag_controller()->StopDragging();
 }
 
 void WaylandToplevelWindow::StartWindowDraggingSessionIfNeeded(
     ui::mojom::DragEventSource event_source,
     bool allow_system_drag) {
-  DCHECK(connection()->window_drag_controller());
+  CHECK(connection()->window_drag_controller(), base::NotFatalUntil::M163);
   // If extended-drag and xdg-toplevel-drag are not available and
   // |allow_system_drag| is set, this is no-op and WaylandDataDragController is
   // assumed to be used instead. i.e: Fallback to a simpler window drag UX based
@@ -951,6 +986,9 @@ void WaylandToplevelWindow::TriggerStateChanges(
         window_state == PlatformWindowState::kFullScreen);
   CHECK(!base::FeatureList::IsEnabled(features::kAsyncFullscreenWindowState));
 
+  if (window_state != PlatformWindowState::kFullScreen) {
+    fullscreen_sync_callback_.reset();
+  }
   if (xdg_toplevel_) {
     // A client-initiated state is in applied_state() before any request
     // carries it, so check both for the state being left.
@@ -966,8 +1004,7 @@ void WaylandToplevelWindow::TriggerStateChanges(
       SendSetMinimized();
       pending_minimize_ = true;
     } else if (window_state == PlatformWindowState::kFullScreen) {
-      xdg_toplevel_->SetFullscreen(
-          GetWaylandOutputForDisplayId(fullscreen_display_id));
+      SendSetFullscreen(fullscreen_display_id);
     } else if (window_state == PlatformWindowState::kMaximized) {
       if (is_leaving(PlatformWindowState::kFullScreen)) {
         xdg_toplevel_->UnSetFullscreen();
@@ -1045,6 +1082,31 @@ void WaylandToplevelWindow::OnMinimizeSyncDone(void* data,
   self->minimize_sync_callback_.reset();
 }
 
+void WaylandToplevelWindow::SendSetFullscreen(int64_t fullscreen_display_id) {
+  CHECK(xdg_toplevel_);
+  xdg_toplevel_->SetFullscreen(
+      GetWaylandOutputForDisplayId(fullscreen_display_id));
+
+  // Requests are processed in order, so the sync completes only after the
+  // compositor has processed set_fullscreen.
+  fullscreen_sync_callback_.reset(connection()->GetSyncCallback());
+  static constexpr wl_callback_listener kFullscreenSyncListener = {
+      .done = &OnFullscreenSyncDone,
+  };
+  wl_callback_add_listener(fullscreen_sync_callback_.get(),
+                           &kFullscreenSyncListener, this);
+  connection()->Flush();
+}
+
+// static
+void WaylandToplevelWindow::OnFullscreenSyncDone(void* data,
+                                                 wl_callback* callback,
+                                                 uint32_t time) {
+  auto* self = static_cast<WaylandToplevelWindow*>(data);
+  CHECK_EQ(self->fullscreen_sync_callback_.get(), callback);
+  self->fullscreen_sync_callback_.reset();
+}
+
 void WaylandToplevelWindow::UpdatePreviouslyMaximized(
     PlatformWindowState previous_state,
     PlatformWindowState new_state) {
@@ -1067,7 +1129,7 @@ WmMoveResizeHandler* WaylandToplevelWindow::AsWmMoveResizeHandler() {
 }
 
 void WaylandToplevelWindow::SetSizeConstraints() {
-  DCHECK(delegate());
+  CHECK(delegate(), base::NotFatalUntil::M163);
 
   auto min_size_dip = delegate()->GetMinimumSizeForWindow();
   auto max_size_dip = delegate()->GetMaximumSizeForWindow();
@@ -1102,12 +1164,12 @@ void WaylandToplevelWindow::SetSizeConstraints() {
 
 void WaylandToplevelWindow::SetUpShellIntegration() {
   // This method should be called after the XDG surface is initialized.
-  DCHECK(xdg_toplevel_);
+  CHECK(xdg_toplevel_, base::NotFatalUntil::M163);
   TryAnnounceAppmenu();
 }
 
 void WaylandToplevelWindow::OnDecorationModeChanged() {
-  DCHECK(xdg_toplevel_);
+  CHECK(xdg_toplevel_, base::NotFatalUntil::M163);
   if (use_native_frame_) {
     // Set server-side decoration for windows using a native frame,
     // e.g. taskmanager

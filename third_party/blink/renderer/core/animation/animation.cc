@@ -896,31 +896,20 @@ bool Animation::PreCommit(
   // animation may be able to start on the compositor.
   NativePaintWorkletReasons npw_reasons = GetNativePaintWorkletReasons();
   if (!compositor_state_ &&
-      npw_reasons != NativePaintWorkletProperties::kNoPaintWorklet &&
-      compositing_decision_.disposition !=
-          CompositorAnimations::kAnimationHasNoVisibleChange) {
+      npw_reasons != NativePaintWorkletProperties::kNoPaintWorklet) {
     KeyframeEffect* keyframe_effect = DynamicTo<KeyframeEffect>(content_.Get());
     Element* target =
         keyframe_effect ? keyframe_effect->EffectTarget() : nullptr;
     ElementAnimations* element_animations =
         target ? target->GetElementAnimations() : nullptr;
     if (element_animations) {
-      if (npw_reasons &
-          NativePaintWorkletProperties::kBackgroundColorPaintWorklet) {
-        NativePaintWorkletData* npw_data =
-            element_animations->GetBackgroundColorNpwData();
-        if (npw_data && npw_data->GetAnimation() == this) {
-          element_animations->SetCompositedBackgroundColorStatus(
-              ElementAnimations::CompositedPaintStatus::kNotComposited);
-        }
+      if (NativePaintWorkletData* npw_data =
+              element_animations->GetBackgroundColorNpwData()) {
+        npw_data->NotifyNotComposited(this);
       }
-      if (npw_reasons & NativePaintWorkletProperties::kClipPathPaintWorklet) {
-        NativePaintWorkletData* npw_data =
-            element_animations->GetClipPathNpwData();
-        if (npw_data && npw_data->GetAnimation() == this) {
-          element_animations->SetCompositedClipPathStatus(
-              ElementAnimations::CompositedPaintStatus::kNotComposited);
-        }
+      if (NativePaintWorkletData* npw_data =
+              element_animations->GetClipPathNpwData()) {
+        npw_data->NotifyNotComposited(this);
       }
     }
   }
@@ -2476,11 +2465,11 @@ void Animation::ClearOutdated() {
 }
 
 void Animation::SetOutdated() {
-  if (outdated_)
-    return;
-  outdated_ = true;
-  if (timeline_) {
-    timeline_->SetOutdatedAnimation(this);
+  if (!outdated_) {
+    outdated_ = true;
+    if (timeline_) {
+      timeline_->SetOutdatedAnimation(this);
+    }
   }
   KeyframeEffect* keyframe_effect = DynamicTo<KeyframeEffect>(content_.Get());
   Element* target = keyframe_effect ? keyframe_effect->EffectTarget() : nullptr;
@@ -3303,10 +3292,14 @@ bool Animation::Update(TimingUpdateReason reason) {
   // time of an animation also involves:
   //   * Running the update an animation’s finished state procedure.
   //   * Queueing animation events.
-
   if (!Outdated() && reason == kTimingUpdateForAnimationFrame &&
-      IsInDisplayLockedSubtree())
-    return true;
+      IsInDisplayLockedSubtree()) {
+    // IsInDisplayLockedSubtree() may trigger slot assignment recalc and update
+    // animation state.
+    if (!Outdated()) {
+      return !inactive_;
+    }
+  }
 
   ClearOutdated();
   bool idle =
@@ -4089,6 +4082,19 @@ const HeapHashSet<WeakMember<AnimationTrigger>>& Animation::GetTriggers() {
 }
 
 void Animation::DisassociateTriggers() {
+  if (auto* css_animation = DynamicTo<CSSAnimation>(this)) {
+    // Style changes, including changes to animation-trigger, don't attach the
+    // animation to triggers again, just as they don't revive a cancelled
+    // animation otherwise.
+    css_animation->SetIgnoreCSSTrigger(true);
+    css_animation->SetTriggerAttachments(nullptr);
+    css_animation->NamedTriggerAttachments().clear();
+    if (GetDocument()) {
+      GetDocument()
+          ->GetDocumentAnimations()
+          .RemoveCSSAnimationNeedingTriggerAttachment(css_animation);
+    }
+  }
   HeapHashSet<WeakMember<AnimationTrigger>> triggers;
   triggers.swap(triggers_);
   for (AnimationTrigger* trigger : triggers) {

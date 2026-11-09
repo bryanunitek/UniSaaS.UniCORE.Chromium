@@ -82,7 +82,7 @@ NSString* GetPromoLabelString(
         return nil;
       }
       if (NSString* label =
-              signin::GetPromoLabelStringForNtpSignedOutIcon(preference)) {
+              signin::GetPromoLabelStringForDefaultFlow(preference)) {
         return label;
       }
       return l10n_util::GetNSString(IDS_IOS_IDENTITY_DISC_SIGN_IN_PROMO_LABEL);
@@ -202,6 +202,7 @@ NSString* GetPromoLabelString(
     case signin_metrics::AccessPoint::kAppSwitcherAISummarization:
     case signin_metrics::AccessPoint::kGeminiExternalAppStoreEvent:
     case signin_metrics::AccessPoint::kPasswordManagerCard:
+    case signin_metrics::AccessPoint::kEnterpriseProxy:
       // Nothing prevents instantiating ConsistencyDefaultAccountViewController
       // with an arbitrary entry point, API-wise. In doubt, no label is a good,
       // generic default that fits all entry points.

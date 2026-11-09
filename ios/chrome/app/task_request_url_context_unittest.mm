@@ -30,7 +30,6 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
@@ -43,9 +42,51 @@
 #import "ios/chrome/common/app_group/app_group_constants.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest/include/gtest/gtest.h"
+#import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
+
+// Test double for SceneController to verify tab opening from TaskRequests.
+@interface TaskRequestURLContextTestTabOpener : SceneController <TabOpening>
+
+// The mode in which the tab was requested to be opened.
+@property(nonatomic, assign) ApplicationModeForTabOpening targetMode;
+// The parameters used to load the opened tab.
+@property(nonatomic, assign) UrlLoadParams urlLoadParams;
+// Whether the omnibox was requested to be dismissed.
+@property(nonatomic, assign) BOOL dismissOmnibox;
+// The post-opening action requested for the opened tab.
+@property(nonatomic, assign) TabOpeningPostOpeningAction completionAction;
+// Whether the post-opening completion was executed.
+@property(nonatomic, assign) BOOL completionActionExecuted;
+
+@end
+
+@implementation TaskRequestURLContextTestTabOpener
+
+- (ProceduralBlock)completionBlockForTriggeringAction:
+    (TabOpeningPostOpeningAction)action {
+  self.completionAction = action;
+  return ^{
+    self.completionActionExecuted = YES;
+  };
+}
+
+- (void)dismissModalsAndMaybeOpenSelectedTabInMode:
+            (ApplicationModeForTabOpening)targetMode
+                                 withUrlLoadParams:(UrlLoadParams)urlLoadParams
+                                    dismissOmnibox:(BOOL)dismissOmnibox
+                                        completion:(ProceduralBlock)completion {
+  self.targetMode = targetMode;
+  self.urlLoadParams = urlLoadParams;
+  self.dismissOmnibox = dismissOmnibox;
+  if (completion) {
+    completion();
+  }
+}
+
+@end
 
 class TaskRequestForURLContextTest : public PlatformTest {
  protected:
@@ -53,6 +94,9 @@ class TaskRequestForURLContextTest : public PlatformTest {
     PlatformTest::SetUp();
 
     ClearDefaultBrowserPromoData();
+    // Shared defaults persist across test runs on the simulator.
+    [app_group::GetGroupUserDefaults()
+        removeObjectForKey:AppGroupCommandPreference()];
 
     ResetEnableNewStartupFlowEnabledForTesting();
     scoped_feature_list_.InitAndEnableFeature(kEnableNewStartupFlow);
@@ -70,6 +114,8 @@ class TaskRequestForURLContextTest : public PlatformTest {
   }
 
   void TearDown() override {
+    [app_group::GetGroupUserDefaults()
+        removeObjectForKey:AppGroupCommandPreference()];
     app_state_ = nil;
     mock_startup_information_ = nil;
     browser_.reset();
@@ -99,6 +145,62 @@ class TaskRequestForURLContextTest : public PlatformTest {
   void SetIsFirstRun(BOOL is_first_run) {
     OCMStub([mock_startup_information_ isFirstRun]).andReturn(is_first_run);
   }
+
+  // Writes an App Group command from the share extension, issued at
+  // `command_time`, to the shared defaults.
+  void WriteShareExtensionCommand(NSDate* command_time) {
+    WriteAppGroupCommand(@{
+      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandAppPreference) :
+          app_group::kOpenCommandSourceShareExtension,
+      base::SysUTF8ToNSString(
+          app_group::kChromeAppGroupCommandCommandPreference) :
+          base::SysUTF8ToNSString(app_group::kChromeAppGroupOpenURLCommand),
+      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandTimePreference) :
+          command_time,
+    });
+  }
+
+  // Writes an App Group command only holding its `command_time` to the shared
+  // defaults.
+  void WriteAppGroupCommandWithOnlyTime(NSDate* command_time) {
+    WriteAppGroupCommand(@{
+      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandTimePreference) :
+          command_time,
+    });
+  }
+
+  void WriteAppGroupCommand(NSDictionary* command_dictionary) {
+    [app_group::GetGroupUserDefaults() setObject:command_dictionary
+                                          forKey:AppGroupCommandPreference()];
+  }
+
+  // Returns whether an App Group command is in the shared defaults.
+  bool HasAppGroupCommand() {
+    return [app_group::GetGroupUserDefaults()
+               objectForKey:AppGroupCommandPreference()] != nil;
+  }
+
+  NSString* AppGroupCommandPreference() {
+    return base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandPreference);
+  }
+
+  // Returns a request for `url_string`, with `kTestGaiaID` appended as the
+  // `gaia_id` query item.
+  TaskRequestForURLContext* CreateRequestWithGaiaID(NSString* url_string) {
+    NSString* full_url_string = [NSString
+        stringWithFormat:@"%@%@%s=%@", url_string,
+                         [url_string containsString:@"?"] ? @"&" : @"?",
+                         app_group::kGaiaIDQueryItemName, kTestGaiaID];
+    return [TaskRequestForURLContext
+        taskRequestWithURLContext:CreateMockURLContext(
+                                      [NSURL URLWithString:full_url_string])
+                       sceneState:scene_state_
+                      isColdStart:YES];
+  }
+
+  NSString* const kTestGaiaID = @"test_gaia_id";
+  NSString* const kAppGroupCommandURL =
+      @"googlechrome://x-callback-url/app-group-command";
 
   web::WebTaskEnvironment task_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -272,9 +374,9 @@ TEST_F(TaskRequestForURLContextTest, TestXCallbackURLMetrics) {
   }
 }
 
-// Tests that X-Callback app-group-command URLs cache `commandTime` on
-// initialization and log the application group command delay metric during
-// execute.
+// Tests that X-Callback app-group-command URLs consume the App Group command
+// on initialization, which logs the application group command delay metric
+// once.
 TEST_F(TaskRequestForURLContextTest, TestXCallbackAppGroupCommandDelayMetric) {
   base::HistogramTester histogram_tester;
 
@@ -310,11 +412,9 @@ TEST_F(TaskRequestForURLContextTest, TestXCallbackAppGroupCommandDelayMetric) {
   EXPECT_NE(request, nil);
   histogram_tester.ExpectTotalCount(kUMAMobileSessionStartActionHistogram, 0);
   histogram_tester.ExpectTotalCount(kAppLaunchSource, 0);
-  histogram_tester.ExpectTotalCount("Startup.ApplicationGroupCommandDelay", 0);
-
-  // Clear shared defaults before execution to verify `commandTime` was cached
-  // at initialization time.
-  [sharedDefaults removeObjectForKey:commandDictionaryPreference];
+  histogram_tester.ExpectUniqueSample("Startup.ApplicationGroupCommandDelay", 5,
+                                      1);
+  EXPECT_FALSE(HasAppGroupCommand());
 
   [request execute];
 
@@ -324,9 +424,161 @@ TEST_F(TaskRequestForURLContextTest, TestXCallbackAppGroupCommandDelayMetric) {
   histogram_tester.ExpectUniqueSample(kAppLaunchSource,
                                       AppLaunchSource::X_CALLBACK, 1);
 
-  // Verify that the command delay was recorded during execute.
-  histogram_tester.ExpectTotalCount("Startup.ApplicationGroupCommandDelay", 1);
+  // The command delay is not recorded again during execute.
   histogram_tester.ExpectUniqueSample("Startup.ApplicationGroupCommandDelay", 5,
+                                      1);
+}
+
+// Tests that a valid share extension App Group command is consumed at
+// initialization, marks the request as coming from the share extension and
+// extracts the `gaia_id`.
+TEST_F(TaskRequestForURLContextTest, TestShareExtensionCommandSetsGaiaID) {
+  WriteShareExtensionCommand([NSDate date]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_TRUE(request.isFromShareExtension);
+  EXPECT_NSEQ(kTestGaiaID, request.gaiaID);
+  EXPECT_FALSE(HasAppGroupCommand());
+}
+
+// Tests that the share extension origin is kept after the App Group command is
+// no longer in the shared defaults, e.g. when the task is executed later.
+TEST_F(TaskRequestForURLContextTest,
+       TestShareExtensionOriginSurvivesCommandRemoval) {
+  WriteShareExtensionCommand([NSDate date]);
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  // A second request can't consume the command again.
+  TaskRequestForURLContext* second_request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_TRUE(request.isFromShareExtension);
+  EXPECT_FALSE(second_request.isFromShareExtension);
+  EXPECT_NSEQ(nil, second_request.gaiaID);
+}
+
+// Tests that an expired App Group command doesn't allow an account switch.
+TEST_F(TaskRequestForURLContextTest, TestExpiredShareExtensionCommand) {
+  WriteShareExtensionCommand([NSDate
+      dateWithTimeIntervalSinceNow:-2 * app_group::kAppGroupCommandTimeout]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(nil, request.gaiaID);
+  EXPECT_FALSE(HasAppGroupCommand());
+}
+
+// Tests that an App Group command URL without a command in the shared defaults
+// doesn't allow an account switch.
+TEST_F(TaskRequestForURLContextTest, TestAppGroupURLWithoutCommand) {
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(nil, request.gaiaID);
+}
+
+// Tests that a recent App Group command allows an account switch even if it
+// can't be executed (no caller or command).
+TEST_F(TaskRequestForURLContextTest, TestRecentCommandWithOnlyTimeSetsGaiaID) {
+  WriteAppGroupCommandWithOnlyTime([NSDate date]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_TRUE(request.isFromShareExtension);
+  EXPECT_NSEQ(kTestGaiaID, request.gaiaID);
+  EXPECT_FALSE(HasAppGroupCommand());
+}
+
+// Tests that a command dated in the future allows an account switch.
+TEST_F(TaskRequestForURLContextTest, TestFutureShareExtensionCommand) {
+  WriteShareExtensionCommand(
+      [NSDate dateWithTimeIntervalSinceNow:app_group::kAppGroupCommandTimeout]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  EXPECT_TRUE(request.isFromShareExtension);
+  EXPECT_NSEQ(kTestGaiaID, request.gaiaID);
+}
+
+// Tests that an HTTPS URL mimicking an App Group command doesn't allow an
+// account switch, as any app or webpage can open it.
+TEST_F(TaskRequestForURLContextTest, TestHTTPSAppGroupURLIgnoresGaiaID) {
+  WriteShareExtensionCommand([NSDate date]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(@"https://x-callback-url/app-group-command");
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(nil, request.gaiaID);
+  // The command is still consumed, as X-Callback URLs are recognized by their
+  // host only.
+  EXPECT_FALSE(HasAppGroupCommand());
+}
+
+// Tests that widget URLs neither consume the App Group command nor are
+// attributed to the share extension.
+TEST_F(TaskRequestForURLContextTest, TestWidgetURLDoesNotConsumeCommand) {
+  WriteShareExtensionCommand([NSDate date]);
+
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(@"chromewidgetkit://search-widget/search");
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_TRUE(HasAppGroupCommand());
+}
+
+// Tests that X-Callback URLs other than App Group commands neither consume the
+// App Group command nor allow an account switch.
+TEST_F(TaskRequestForURLContextTest, TestXCallbackOpenDoesNotConsumeCommand) {
+  WriteShareExtensionCommand([NSDate date]);
+
+  TaskRequestForURLContext* request = CreateRequestWithGaiaID(
+      @"googlechrome://x-callback-url/open?url=https://www.example.com");
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(nil, request.gaiaID);
+  EXPECT_TRUE(HasAppGroupCommand());
+}
+
+// Tests that widget URLs allow an account switch without being attributed to
+// the share extension.
+TEST_F(TaskRequestForURLContextTest, TestWidgetURLSetsGaiaID) {
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(@"chromewidgetkit://search-widget/search");
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(kTestGaiaID, request.gaiaID);
+}
+
+// Tests that standard URLs don't allow an account switch.
+TEST_F(TaskRequestForURLContextTest, TestStandardURLIgnoresGaiaID) {
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(@"https://www.example.com");
+
+  EXPECT_FALSE(request.isFromShareExtension);
+  EXPECT_NSEQ(nil, request.gaiaID);
+}
+
+// Tests that the caller app of a valid App Group command is taken from the
+// command, which is a trusted source.
+TEST_F(TaskRequestForURLContextTest, TestShareExtensionCommandCallerApp) {
+  base::HistogramTester histogram_tester;
+  WriteShareExtensionCommand([NSDate date]);
+  TaskRequestForURLContext* request =
+      CreateRequestWithGaiaID(kAppGroupCommandURL);
+
+  [request execute];
+
+  histogram_tester.ExpectUniqueSample("Startup.MobileSessionStartFromApps",
+                                      CALLER_APP_GOOGLE_CHROME_SHARE_EXTENSION,
                                       1);
 }
 
@@ -446,42 +698,6 @@ TEST_F(TaskRequestForURLContextTest, TestExternalActionMetrics) {
     }
   }
 }
-
-// Test double for SceneController to verify tab opening from TaskRequests.
-@interface TaskRequestURLContextTestTabOpener : SceneController <TabOpening>
-
-@property(nonatomic, assign) ApplicationModeForTabOpening targetMode;
-@property(nonatomic, assign) UrlLoadParams urlLoadParams;
-@property(nonatomic, assign) BOOL dismissOmnibox;
-@property(nonatomic, assign) TabOpeningPostOpeningAction completionAction;
-@property(nonatomic, assign) BOOL completionActionExecuted;
-
-@end
-
-@implementation TaskRequestURLContextTestTabOpener
-
-- (ProceduralBlock)completionBlockForTriggeringAction:
-    (TabOpeningPostOpeningAction)action {
-  self.completionAction = action;
-  return ^{
-    self.completionActionExecuted = YES;
-  };
-}
-
-- (void)dismissModalsAndMaybeOpenSelectedTabInMode:
-            (ApplicationModeForTabOpening)targetMode
-                                 withUrlLoadParams:(UrlLoadParams)urlLoadParams
-                                    dismissOmnibox:(BOOL)dismissOmnibox
-                                        completion:(ProceduralBlock)completion {
-  self.targetMode = targetMode;
-  self.urlLoadParams = urlLoadParams;
-  self.dismissOmnibox = dismissOmnibox;
-  if (completion) {
-    completion();
-  }
-}
-
-@end
 
 // Tests that WidgetKit URL execution correctly triggers the scene controller.
 TEST_F(TaskRequestForURLContextTest, TestWidgetURLContextExecution) {
@@ -724,9 +940,8 @@ TEST_F(TaskRequestForURLContextTest, TestGoogleOneDeepLinkEnabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(kSupportGoogleOneDeepLink);
 
-  CommandDispatcher* dispatcher =
-      scene_state_.browserProviderInterface.currentBrowserProvider.browser
-          ->GetCommandDispatcher();
+  CommandDispatcher* dispatcher = scene_state_.browserProviderInterface
+                                      .currentBrowser->GetCommandDispatcher();
   id mock_google_one_handler = OCMProtocolMock(@protocol(GoogleOneCommands));
   [dispatcher startDispatchingToTarget:mock_google_one_handler
                            forProtocol:@protocol(GoogleOneCommands)];

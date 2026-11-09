@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">ამ საიტების თარგმნის შემოთავაზების აკრძალვა</translation>
 <translation id="1143193470214071120">დახურეთ ან მართეთ ფანჯრები</translation>
 <translation id="1143486892058798649">ბმულის შენახვა, როგორც…</translation>
+<translation id="1149644372535087155">პაროლების შენახვა Chrome-ში</translation>
 <translation id="1149725087019908252">მიმდინარეობს <ph name="FILE_NAME" />-ის სკანირება</translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> გაიხსნება Chrome-ში. გაგრძელებით ეთანხმებით <ph name="BEGIN_LINK1" />Google-ის მომსახურების პირობებს<ph name="END_LINK1" />, ასევე, <ph name="BEGIN_LINK2" />Google Chrome-ისა და ChromeOS-ის მომსახურების დამატებით პირობებს<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Google პაროლების მმართველში არ გაქვთ შენახული პაროლები.</translation>
@@ -188,6 +189,7 @@
 <translation id="1749561566933687563">განახორციელეთ თქვენი სანიშნეების სინქრონიზაცია</translation>
 <translation id="1750238553597293878">გააგრძელეთ პაროლების გამოყენება თქვენს Google ანგარიშში</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">ფანჯრის „<ph name="TITLE_OF_WINDOW" />“ აღდგენა.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{გვერდები, სიაშია 1 გვერდი}other{გვერდები, სიაშია # გვერდი}}</translation>
 <translation id="1771929606532798550">Google-ს ეგზავნება ინფორმაცია თქვენ მიერ Chrome-ის გამოყენების შესახებ, თუმცა ის უშუალოდ თქვენთან დაკავშირებული არ არის\n\nChrome-ის ავარიულად გათიშვის შემთხვევაში, ავარიული გათიშვის დეტალები შეიძლება მოიცავდეს თქვენს ზოგიერთ პერსონალურ მონაცემს\n\nGoogle ანგარიშში თქვენი ისტორიის სინქრონიზაციის ჩართვის შემთხვევაში, მეტრიკა შეიძლება მოიცავდეს ინფორმაციას თქვენ მიერ მონახულებული URL-ების შესახებ</translation>
 <translation id="1778457539567749232">წაუკითხავად მონიშვნა</translation>
@@ -299,6 +301,7 @@
 <translation id="2190355936436201913">(ცარიელი)</translation>
 <translation id="219283042927675668">ჩანართები ჯგუფში</translation>
 <translation id="2194856509914051091">გასათვალისწინებელი საკითხები</translation>
+<translation id="2195339740518523951">ისარგებლეთ Chrome-ის უსაფრთხოების ყველაზე ძლიერი ფუნქციებით</translation>
 <translation id="2196695604589508993">ისტორიის გახსნა</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, ჩამაგრებულია ჩანართი, რომელიც აზიარებს კონტენტს</translation>
 <translation id="22091350895006575">მომხმარებლის სახელის დამატება</translation>
@@ -1256,6 +1259,7 @@
 <translation id="6022659036123304283">მოირგეთ Chrome</translation>
 <translation id="6023820583797130428">უკან დასაბრუნებლად გახსენით მენიუ</translation>
 <translation id="6026538407078977628">სრულ ეკრანზე გაფართოება</translation>
+<translation id="6027619584715411062">შედით სისტემაში, რომ მიიღოთ თქვენი სანიშნეები, პაროლები და სხვა მონაცემები თქვენს ყველა მოწყობილობაზე.</translation>
 <translation id="6039379616847168523">შემდეგ ჩანართზე გადასვლა</translation>
 <translation id="6040143037577758943">დახურვა</translation>
 <translation id="604124094241169006">ავტომატური</translation>
@@ -1600,6 +1604,7 @@
 <translation id="7190921792980745354">გსურთ, დაბლოკოთ <ph name="MEMBER_FULL_NAME" />?</translation>
 <translation id="7191430249889272776">ჩანართი გაიხსნა ფონურ რეჟიმში.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{ეს პაროლი ახლავე უნდა შეცვალოთ}other{ეს პაროლები ახლავე უნდა შეცვალოთ}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{<ph name="TAB_COUNT_ONE" /> ჩანართის ფანჯრის აღდგენა.}other{<ph name="TAB_COUNT_MANY" /> ჩანართის ფანჯრის აღდგენა.}}</translation>
 <translation id="7196215469483532480">კონფიდენციალურობის სახელმძღვანელოს განმარტება გახსნილია სრულ სიმაღლეზე</translation>
 <translation id="7196455519852483601">შეგიძლიათ, მთლიანად ან ნაწილობრივ წაშალოთ ისტორია, ქუქი-ჩანაწერები, საიტების და სხვა მონაცემები</translation>
 <translation id="7197682514647286393">სწრაფად წაშალეთ დათვალიერების მონაცემები</translation>
@@ -1853,6 +1858,7 @@
 <translation id="8135406045838672858">ჩამოტვირთული PDF-ები ავტომატურად გაიხსნება <ph name="APP_NAME" />-ით</translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{მიღებულია ბმული}other{მიღებულია # ბმული}}</translation>
 <translation id="8137562778192957619">ამ პაროლის დამახსოვრება არ დაგჭირდებათ. ის შეინახება Google პაროლების მმართველში.</translation>
+<translation id="8149825829235553327">დაიცავით თქვენი ინკოგნიტო ჩანართები</translation>
 <translation id="8151185429379586178">დეველოპერის ხელსაწყოები</translation>
 <translation id="8152331954420209374">Lens-ზე გადასვლა</translation>
 <translation id="8153206878708357851">კურსორით დათვალიერების გადართვა</translation>

@@ -53,16 +53,15 @@ class SessionControllerImpl : public SessionController,
   // SessionController and SessionViewDelegate implementation:
   Profile* GetProfile() override;
   void EndSessionAsync() override;
+  SessionLifecycle GetSessionLifecycle() const override;
 
   // SessionController implementation:
   void AddObserver(SessionController::Observer* observer) override;
   void RemoveObserver(SessionController::Observer* observer) override;
   void SendTextInput(const std::string& text) override;
-  void OnSessionInitialized() override;
   void OnError(ErrorCode error) override;
   SessionJournalImpl& GetJournal() override;
   DebugSink* GetDebugSink() override;
-  SessionLifecycle GetSessionLifecycle() const override;
   void SetSessionLifecycle(SessionLifecycle lifecycle) override;
   void ProcessToolCall(const ToolRequest& tool_request,
                        ToolResponseCallback tool_response_callback) override;
@@ -89,6 +88,10 @@ class SessionControllerImpl : public SessionController,
 
   actor::TaskId GetActorTaskId() const;
 
+  // Replaces the session's actor task if it was stopped outside of the
+  // session. Must be called before acting.
+  void EnsureActorTaskCreated();
+
   // Mutes or unmutes the user's microphone. While muted, no audio is captured
   // or sent to the model. Only a live session can be muted, and it goes live
   // unmuted. Returns whether the state changed: false unless the session is
@@ -105,7 +108,7 @@ class SessionControllerImpl : public SessionController,
   void OnPageContextFetched(const PageContextResult& result);
   void OnInactivityTimeout();
 
-  // Passes the transcripts of the current exchange on to the session UI.
+  // Passes the transcripts of the current exchange on to observers.
   void NotifyTranscriptsUpdated();
 
   // Safe because TtcKeyedService owns this object and outlives it. Gets
@@ -131,7 +134,7 @@ class SessionControllerImpl : public SessionController,
 
   base::ObserverList<SessionController::Observer> observers_;
 
-  // The transcripts of the current exchange, for the session UI.
+  // The transcripts of the current exchange.
   TranscriptTracker transcript_tracker_;
 
   std::unique_ptr<SessionInactivityDetector> inactivity_detector_;

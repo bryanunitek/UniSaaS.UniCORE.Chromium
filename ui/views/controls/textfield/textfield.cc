@@ -1113,9 +1113,10 @@ views::View::DropCallback Textfield::GetDropCallback(
     }
   }
 
-  CHECK(!initiating_drag_ ||
-            !GetRenderText()->IsPointInSelection(event.location()),
-        base::NotFatalUntil::M163);
+  // TODO(crbug.com/580097037): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!initiating_drag_ ||
+         !GetRenderText()->IsPointInSelection(event.location()));
 
   return base::BindOnce(&Textfield::DropDraggedText,
                         drop_weak_ptr_factory_.GetWeakPtr());
@@ -2146,8 +2147,9 @@ bool Textfield::IsTextEditCommandEnabled(ui::TextEditCommand command) const {
 }
 
 void Textfield::SetTextEditCommandForNextKeyEvent(ui::TextEditCommand command) {
-  CHECK_EQ(ui::TextEditCommand::INVALID_COMMAND, scheduled_text_edit_command_,
-           base::NotFatalUntil::M163);
+  // TODO(crbug.com/582403114): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK_EQ(ui::TextEditCommand::INVALID_COMMAND, scheduled_text_edit_command_);
   scheduled_text_edit_command_ = command;
 }
 
@@ -3081,7 +3083,9 @@ void Textfield::OnCaretBoundsChanged() {
 }
 
 void Textfield::OnBeforeUserAction() {
-  CHECK(!performing_user_action_, base::NotFatalUntil::M163);
+  // TODO(crbug.com/581069842): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!performing_user_action_);
   performing_user_action_ = true;
   if (controller_) {
     controller_->OnBeforeUserAction(this);

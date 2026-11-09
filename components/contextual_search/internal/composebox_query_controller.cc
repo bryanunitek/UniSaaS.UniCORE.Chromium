@@ -21,6 +21,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
@@ -423,6 +424,14 @@ std::string ImageTypeToString(
   }
 }
 
+bool IsHeicMimeType(std::optional<std::string_view> mime_type) {
+  if (!mime_type.has_value()) {
+    return false;
+  }
+  return base::EqualsCaseInsensitiveASCII(*mime_type, "image/heic") ||
+         base::EqualsCaseInsensitiveASCII(*mime_type, "image/heif");
+}
+
 }  // namespace
 
 bool ComposeboxQueryController::HasC2paMetadata(
@@ -442,8 +451,7 @@ bool ComposeboxQueryController::IsSupportedC2paMimeType(
          base::EqualsCaseInsensitiveASCII(*mime_type, "image/jpg") ||
          base::EqualsCaseInsensitiveASCII(*mime_type, "image/png") ||
          base::EqualsCaseInsensitiveASCII(*mime_type, "image/webp") ||
-         base::EqualsCaseInsensitiveASCII(*mime_type, "image/heic") ||
-         base::EqualsCaseInsensitiveASCII(*mime_type, "image/heif");
+         IsHeicMimeType(mime_type);
 }
 
 std::optional<lens::ImageData>
@@ -757,11 +765,6 @@ void ComposeboxQueryController::CreateSearchUrl(
         {kVoiceSearchQueryParameterKey, "1"});
   }
 
-  bool send_upload_type =
-      base::FeatureList::IsEnabled(
-          contextual_tasks::kContextualTasksSendContextualInputUploadType) &&
-      contextual_tasks::kSendContextualInputUploadTypeInSearchUrl.Get() &&
-      is_aim_search;
   if (is_aim_search) {
     // For AIM queries, add the added inputs param to the request url params,
     // regardless of if any of the context was a Lens upload.
@@ -799,7 +802,7 @@ void ComposeboxQueryController::CreateSearchUrl(
   if (should_create_multimodal_url && cluster_info_.has_value()) {
     std::unique_ptr<lens::LensOverlayContextualInputs> contextual_inputs =
         CreateContextualInputs(search_url_request_info->file_tokens,
-                               send_upload_type);
+                               /*send_upload_type=*/is_aim_search);
     const FileInfo* last_active_lens_file = nullptr;
     bool has_image_upload = false;
     bool has_drive_id = false;
@@ -921,7 +924,7 @@ void ComposeboxQueryController::CreateSearchUrl(
           (!suppress_lns_surface_param_if_no_image_ || has_image_upload);
       std::string lns_surface =
           should_send_lns_surface ? kLnsSurfaceParameterValue : std::string();
-      if (contextual_inputs->inputs_size() == 1 && !send_upload_type &&
+      if (contextual_inputs->inputs_size() == 1 && !is_aim_search &&
           !has_drive_id) {
         bool is_raw_file = last_active_lens_file->request_id->media_type() ==
                            lens::LensOverlayRequestId::MEDIA_TYPE_RAW_FILE;
@@ -930,20 +933,14 @@ void ComposeboxQueryController::CreateSearchUrl(
             lens::TRANSLATE_CHIP;
         std::unique_ptr<lens::LensOverlayRequestId> request_id = nullptr;
         if (!is_translate) {
-          if (is_aim_search) {
-            request_id = std::make_unique<lens::LensOverlayRequestId>(
-                *last_active_lens_file->request_id);
-          } else {
-            request_id =
-                is_raw_file
-                    ? request_id_generator_.GetNextRequestId(
-                          lens::RequestIdUpdateMode::kSearchUrl,
-                          last_active_lens_file->request_id->mime_type(),
-                          lens::LensOverlayRequestId::MEDIA_TYPE_RAW_FILE)
-                    : request_id_generator_.GetNextRequestId(
-                          lens::RequestIdUpdateMode::kSearchUrl,
-                          context_media_type);
-          }
+          request_id =
+              is_raw_file ? request_id_generator_.GetNextRequestId(
+                                lens::RequestIdUpdateMode::kSearchUrl,
+                                last_active_lens_file->request_id->mime_type(),
+                                lens::LensOverlayRequestId::MEDIA_TYPE_RAW_FILE)
+                          : request_id_generator_.GetNextRequestId(
+                                lens::RequestIdUpdateMode::kSearchUrl,
+                                context_media_type);
         }
 
         // Cache the generated Search URL request ID and ensure it preserves
@@ -1085,16 +1082,10 @@ lens::ClientToAimMessage ComposeboxQueryController::CreateClientToAimRequest(
                 lens::LensOverlayVisualInputType::VISUAL_INPUT_TYPE_UNKNOWN) {
               query_data->set_visual_input_type(visual_input_type);
             }
-            if (base::FeatureList::IsEnabled(
-                    contextual_tasks::
-                        kContextualTasksSendContextualInputUploadType) &&
-                contextual_tasks::kSendContextualInputUploadTypeInAimRequest
-                    .Get()) {
-              if (file_info->input_data &&
-                  file_info->input_data->upload_type.has_value()) {
-                query_data->set_contextual_input_upload_type(
-                    *file_info->input_data->upload_type);
-              }
+            if (file_info->input_data &&
+                file_info->input_data->upload_type.has_value()) {
+              query_data->set_contextual_input_upload_type(
+                  *file_info->input_data->upload_type);
             }
             return query_data;
           };
@@ -1582,10 +1573,14 @@ void ComposeboxQueryController::
 
   int max_processed_dimension = std::max(image_data.image_metadata().width(),
                                          image_data.image_metadata().height());
-  base::UmaHistogramCustomCounts(
-      base::StrCat({"Lens.Composebox.ImageUpload.",
-                    ImageTypeToString(image_type), ".ProcessedMaxDimension"}),
-      max_processed_dimension, 1, 10000, 50);
+  // Images sent as raw bytes (e.g. HEIC/HEIF) are not processed on the client,
+  // so their dimensions are unknown.
+  if (max_processed_dimension > 0) {
+    base::UmaHistogramCustomCounts(
+        base::StrCat({"Lens.Composebox.ImageUpload.",
+                      ImageTypeToString(image_type), ".ProcessedMaxDimension"}),
+        max_processed_dimension, 1, 10000, 50);
+  }
   lens::LensOverlayServerRequest request;
   auto* objects_request = request.mutable_objects_request();
   objects_request->mutable_request_context()->mutable_request_id()->CopyFrom(
@@ -1776,10 +1771,9 @@ ComposeboxQueryController::CreateSuggestInputs(
       base::FeatureList::IsEnabled(
           omnibox::kSuggestRequestSendsMultifileCgiParam) &&
       attached_context_tokens.size() > 1) {
-    bool send_upload_type = base::FeatureList::IsEnabled(
-        contextual_tasks::kContextualTasksSendContextualInputUploadType);
     std::unique_ptr<lens::LensOverlayContextualInputs> contextual_inputs =
-        CreateContextualInputs(attached_context_tokens, send_upload_type);
+        CreateContextualInputs(attached_context_tokens,
+                               /*send_upload_type=*/true);
     if (contextual_inputs->inputs_size() > 0) {
       std::string serialized_contextual_inputs;
       if (contextual_inputs->SerializeToString(&serialized_contextual_inputs)) {
@@ -2404,6 +2398,28 @@ void ComposeboxQueryController::CreateImageUploadRequest(
     RequestBodyProtoCreatedCallback callback) {
 #if !BUILDFLAG(IS_IOS)
   CHECK(image_options.has_value());
+
+  // Blink's image decoder does not support HEIC/HEIF on non-iOS platforms.
+  // Bypass client-side decoding, downscaling, and re-encoding and send raw
+  // bytes so the Lens server transcodes the image (matching AIM Web).
+  if (IsHeicMimeType(mime_type_string)) {
+    auto ref_counted_logs =
+        base::MakeRefCounted<lens::RefCountedLensOverlayClientLogs>();
+    lens::ImageData image_data_proto;
+    if (!image_data.empty()) {
+      base::UmaHistogramBoolean(
+          base::StrCat({"Lens.Composebox.ImageUpload.",
+                        ImageTypeToString(image_type), ".C2paDetected"}),
+          HasC2paMetadata(image_data));
+      image_data_proto.mutable_payload()->mutable_image_bytes()->assign(
+          image_data.begin(), image_data.end());
+    }
+    CreateFileUploadRequestProtoWithImageDataAndContinue(
+        request_id, CreateClientContext(), ref_counted_logs,
+        std::move(callback), page_url, page_title, file_name, image_type,
+        std::move(image_data_proto));
+    return;
+  }
 
   auto refcounted_image_data =
       base::MakeRefCounted<base::RefCountedData<std::vector<uint8_t>>>(

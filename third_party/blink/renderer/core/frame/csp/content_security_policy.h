@@ -179,6 +179,23 @@ class CORE_EXPORT ContentSecurityPolicyDelegate : public GarbageCollectedMixin {
   virtual void DidAddContentSecurityPolicies(
       Vector<network::mojom::blink::ContentSecurityPolicyPtr>) = 0;
   virtual bool ScriptSrcExtendedHashesEnabled() = 0;
+
+  // Reports the CSP violation on the outside context and returns true, if the
+  // violation is detected while fetching the module graph of a worker or
+  // worklet and the outside context can receive it. In this case, the worker
+  // or worklet context doesn't report the violation. Otherwise returns false.
+  // https://w3c.github.io/webappsec-csp/#create-violation-for-request
+  virtual bool ReportViolationOnOutsideSettingsIfNeeded(
+      CSPDirectiveName effective_type,
+      const String& console_message,
+      const KURL& blocked_url,
+      const Vector<String>& report_endpoints,
+      bool use_reporting_api,
+      const String& header,
+      network::mojom::ContentSecurityPolicyType header_type,
+      const SourceLocation* source_location) {
+    return false;
+  }
 };
 
 class CORE_EXPORT ContentSecurityPolicy final
@@ -367,7 +384,25 @@ class CORE_EXPORT ContentSecurityPolicy final
   // reported on the issue. This is useful to provide a link from the
   // JavaScript TypeError to the inspector issue in the DevTools front-end.
   void ReportViolation(
-      const String& directive_text,
+      CSPDirectiveName effective_type,
+      const KURL& blocked_url,
+      const Vector<String>& report_endpoints,
+      bool use_reporting_api,
+      const String& header,
+      network::mojom::ContentSecurityPolicyType,
+      ContentSecurityPolicyViolationType,
+      SourceLocation* source_location,
+      LocalFrame* context_frame = nullptr,
+      Element* element = nullptr,
+      const String& source = g_empty_string,
+      const String& source_prefix = g_empty_string,
+      std::optional<base::UnguessableToken> issue_id = std::nullopt,
+      const String& eval_hash = String(),
+      const String& url_hash = String());
+
+  // Same as ReportViolation(), but also logs |console_message| to the console
+  // if the message is not empty.
+  void LogToConsoleAndReportViolation(
       CSPDirectiveName effective_type,
       const String& console_message,
       const KURL& blocked_url,
@@ -376,9 +411,9 @@ class CORE_EXPORT ContentSecurityPolicy final
       const String& header,
       network::mojom::ContentSecurityPolicyType,
       ContentSecurityPolicyViolationType,
-      SourceLocation*,
-      LocalFrame* = nullptr,
-      Element* = nullptr,
+      SourceLocation* source_location,
+      LocalFrame* context_frame = nullptr,
+      Element* element = nullptr,
       const String& source = g_empty_string,
       const String& source_prefix = g_empty_string,
       std::optional<base::UnguessableToken> issue_id = std::nullopt,

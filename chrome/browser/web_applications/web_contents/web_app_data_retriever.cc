@@ -348,9 +348,9 @@ void WebAppDataRetriever::OnDidPerformInstallableCheck(
   const bool is_installable = data.errors.empty();
   CHECK(!is_installable || data.installable_check_passed);
 
-  blink::mojom::ManifestPtr opt_manifest;
+  std::optional<blink::Manifest> opt_manifest;
   if (data.manifest) {
-    opt_manifest = blink::ManifestToMojom(*data.manifest);
+    opt_manifest = *data.manifest;
   }
 
   CHECK(!check_installability_callback_.is_null());
@@ -360,8 +360,7 @@ void WebAppDataRetriever::OnDidPerformInstallableCheck(
 }
 
 void WebAppDataRetriever::OnGotDeveloperSpecifiedManifest(
-    const base::expected<blink::mojom::ManifestPtr,
-                         blink::mojom::RequestManifestErrorPtr>& result) {
+    const ManifestResult& result) {
   if (!get_specified_manifest_callback_) {
     return;
   }
@@ -430,8 +429,8 @@ void WebAppDataRetriever::CallCallbackOnError(
     std::move(get_web_app_info_callback_).Run(nullptr);
   } else if (check_installability_callback_) {
     std::move(check_installability_callback_)
-        .Run(/*manifest=*/nullptr,
-             /*installable_check_passed_for_web_app=*/false,
+        .Run(/*opt_manifest=*/std::nullopt,
+             /*valid_manifest_for_web_app=*/false,
              /*error_code=*/
              error_code);
   } else if (get_icons_callback_) {

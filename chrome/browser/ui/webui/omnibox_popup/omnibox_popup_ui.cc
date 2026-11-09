@@ -26,7 +26,6 @@
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 #include "chrome/browser/ui/webui/cr_components/searchbox/plural_string_provider.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter_service.h"
@@ -143,6 +142,7 @@ OmniboxPopupUI::OmniboxPopupUI(content::WebUI* web_ui)
     : TopChromeWebUIController(web_ui,
                                /*enable_chrome_send=*/true,
                                /*enable_chrome_histograms=*/true),
+      content::WebContentsObserver(web_ui->GetWebContents()),
       profile_(Profile::FromWebUI(web_ui)) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile_, chrome::kChromeUIOmniboxPopupHost);
@@ -295,7 +295,7 @@ OmniboxPopupUI::OmniboxPopupUI(content::WebUI* web_ui)
 
   int default_resource = IDR_OMNIBOX_POPUP_OMNIBOX_POPUP_HTML;
   if (omnibox::internal::IsWebUIOmniboxFullPopupEnabled()) {
-    default_resource = IDR_OMNIBOX_POPUP_OMNIBOX_POPUP_FULL_HTML;
+    default_resource = IDR_OMNIBOX_POPUP_FULL_OMNIBOX_POPUP_FULL_HTML;
     // Serves layout_constants_v<N>.css, which the full popup links from its
     // <head>.
     WebUIToolbarLayoutCssHelper::SetAsRequestFilter(source);
@@ -349,9 +349,13 @@ base::DictValue OmniboxPopupUI::GetProfileLoadTimeData(Profile* profile) {
 
   PopulateAiModeButtonUiConfig(dict, profile);
 
+  // We lack `WebContents` `ColorProvider` context to fetch theme from.
+  // Default to light mode; `OmniboxPopupHandler` will push the correct themed
+  // icon upon connection.
   dict.Set("searchboxDefaultIcon",
            GetDefaultSearchProviderIcon(
-               TemplateURLServiceFactory::GetForProfile(profile)));
+               TemplateURLServiceFactory::GetForProfile(profile),
+               /*is_dark_mode=*/false));
   // The popup chip UI entrypoint is enabled by the AskG experiment
   // (kAskGShowChip).
   dict.Set("composeboxShowChip",
@@ -393,6 +397,12 @@ void OmniboxPopupUI::PopulateLocalResourceLoaderConfig(
   }
   theme_colors_manager->PopulateLocalResourceLoaderConfig(
       config, requesting_origin, web_ui()->GetWebContents());
+}
+
+void OmniboxPopupUI::OnColorProviderChanged() {
+  if (popup_handler_) {
+    popup_handler_->NotifyDefaultSearchProviderChanged();
+  }
 }
 
 void OmniboxPopupUI::BindInterface(
@@ -511,14 +521,17 @@ void OmniboxPopupUI::CreatePageHandler(
                           base::Unretained(this)),
       base::BindRepeating(&OmniboxPopupUI::ClearContextualSessionHandle,
                           base::Unretained(this)));
+  if (omnibox::IsDynamicAimFulfillmentEnabledForOmnibox()) {
+    composebox_handler_->OptInToDynamicAimFulfillment();
+  }
 
-  // If presenter delegate is connected, set the delegate in the handler so the
-  // handler can notify the delegate when there are embedded permissions prompt
-  // changes. Otherwise, once the presenter delegate connects itself, connect
-  // the two there instead. `composebox_handler_` is used since composebox page
-  // handler is where PEPC mojo call lives.
-  if (presenter_delegate_) {
-    composebox_handler_->set_delegate(presenter_delegate_);
+  // If the searchbox handler delegate is connected, set the delegate in the
+  // handler so the handler can notify the delegate when there are embedded
+  // permissions prompt changes. Otherwise, once the delegate connects itself,
+  // connect the two there instead. `composebox_handler_` is used since
+  // composebox page handler is where PEPC mojo call lives.
+  if (searchbox_handler_delegate_) {
+    composebox_handler_->set_delegate(searchbox_handler_delegate_);
   }
 }
 
@@ -582,8 +595,9 @@ void OmniboxPopupUI::ClearContextualSessionHandle() {
   shared_session_handle_.reset();
 }
 
-void OmniboxPopupUI::SetPresenterDelegate(OmniboxPopupPresenterBase* delegate) {
-  presenter_delegate_ = delegate;
+void OmniboxPopupUI::SetSearchboxHandlerDelegate(
+    SearchboxHandler::Delegate* delegate) {
+  searchbox_handler_delegate_ = delegate;
 
   // If the handler is initialized already, set the delegate in the handler so
   // the handler can notify the delegate when there are embedded permissions
@@ -591,7 +605,7 @@ void OmniboxPopupUI::SetPresenterDelegate(OmniboxPopupPresenterBase* delegate) {
   // there instead. `composebox_handler_` is used since composebox page handler
   // is where PEPC mojo call lives.
   if (composebox_handler_) {
-    composebox_handler_->set_delegate(presenter_delegate_);
+    composebox_handler_->set_delegate(searchbox_handler_delegate_);
   }
 }
 
@@ -638,4 +652,14 @@ void OmniboxPopupUI::AttachToWindow(OmniboxController* omnibox_controller) {
     static_cast<OmniboxComposeboxHandler*>(composebox_handler_.get())
         ->AttachToOmniboxController(omnibox_controller);
   }
+}
+
+bool OmniboxPopupUI::CanMoveToAnotherWindow() const {
+  if (popup_aim_handler_ && popup_aim_handler_->preserve_context_on_close()) {
+    return false;
+  }
+  if (omnibox_handler_ && omnibox_handler_->IsDriveUploadPending()) {
+    return false;
+  }
+  return !composebox_handler_ || !composebox_handler_->IsDriveUploadPending();
 }

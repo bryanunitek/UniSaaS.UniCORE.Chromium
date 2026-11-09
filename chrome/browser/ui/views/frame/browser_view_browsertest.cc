@@ -29,7 +29,7 @@
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/safe_browsing/chrome_enterprise_url_lookup_service_factory.h"
+#include "chrome/browser/safe_browsing/realtime/chrome_enterprise_url_lookup_service_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_command_controller.h"
@@ -84,6 +84,7 @@
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
 #include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -1588,6 +1589,10 @@ IN_PROC_BROWSER_TEST_F(BrowserViewDesktopWidgetDisabledTest,
     return;
   }
 #endif
+  if (features::IsWebUIAppMenuButtonEnabled()) {
+    ASSERT_TRUE(WaitForWebUIToolbarAccessibilityNode(
+        browser(), l10n_util::GetStringUTF8(IDS_ACCNAME_APP)));
+  }
 
   // There is no dialog, but the browser UI should be visible. So we expect the
   // browser's app menu button and no "OK" button from a dialog.
@@ -1649,6 +1654,10 @@ IN_PROC_BROWSER_TEST_F(BrowserViewDesktopWidgetEnabledTest,
     return;
   }
 #endif
+  if (features::IsWebUIAppMenuButtonEnabled()) {
+    ASSERT_TRUE(WaitForWebUIToolbarAccessibilityNode(
+        browser(), l10n_util::GetStringUTF8(IDS_ACCNAME_APP)));
+  }
 
   content::WebContents* contents = browser_view()->GetActiveWebContents();
   auto delegate = std::make_unique<TestTabModalConfirmDialogDelegate>(contents);
@@ -1927,7 +1936,8 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, ScrimForTabModalInSplitView) {
   // Swapping the tab with the tab modal dialog into the inactive spot in the
   // split should show the scrim but not change the active tab.
   browser()->GetTabStripModel()->UpdateTabInSplit(
-      browser()->GetTabStripModel()->GetTabAtIndex(1), 2,
+      browser()->GetTabStripModel()->GetTabAtIndex(1)->GetHandle(),
+      browser()->GetTabStripModel()->GetTabAtIndex(2)->GetHandle(),
       TabStripModel::SplitUpdateType::kSwap);
   EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
   EXPECT_TRUE(

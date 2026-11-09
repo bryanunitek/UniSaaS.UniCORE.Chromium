@@ -59,6 +59,7 @@
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_api_metrics.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_feature.h"
 #include "chrome/browser/glic/public/glic_fre_store.h"
 #include "chrome/browser/glic/public/glic_instance_metrics_backwards_compatibility.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
@@ -89,11 +90,12 @@
 #include "components/policy/core/common/management/management_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/ui_manager.h"
+#include "components/safe_browsing/content/browser/interstitials/ui_manager.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
+#include "components/subscription_eligibility/ai_subscription_tier_names.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/remote_device_info.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -1030,6 +1032,10 @@ class GlicWebClientHandler
   void CreateExperimentalTriggeringClient(
       mojo::PendingRemote<mojom::ExperimentalTriggeringClient> client)
       override {
+    if (!glic_service_->provider_spec().SupportsFeature(
+            GlicFeature::kExperimentalTriggering)) {
+      return;
+    }
     if (auto* manager =
             host().instance_delegate().GetExperimentalTriggeringManager()) {
       manager->Bind(std::move(client));
@@ -1065,6 +1071,11 @@ class GlicWebClientHandler
       mojo::PendingReceiver<ai_overlay_dialog::mojom::AiOverlayTools> receiver)
       override {
 #if !BUILDFLAG(IS_ANDROID)
+    if (!GetGlicProviderSpec(profile_).SupportsFeature(
+            GlicFeature::kDynamicChromeTools)) {
+      // Dropping `receiver` disconnects the client's remote.
+      return;
+    }
     ai_overlay_tools_ =
         CreateAiOverlayToolsForGlic(profile_, std::move(receiver));
 #endif
@@ -1375,7 +1386,7 @@ class GlicWebClientHandler
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
     result->has_avatar_ring =
         base::FeatureList::IsEnabled(kEnableGlicAiAvatarRing) &&
-        ShouldShowAvatarGradientRing(profile_);
+        GetAvatarAiDecoration(profile_).show_decoration;
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 
     // TODO(crbug.com/382794680): Determine the correct size.
@@ -1600,6 +1611,11 @@ class GlicWebClientHandler
     host().instance_metrics().OnActionSubmitted(is_retry);
   }
 
+  void OnTooltipImpression(mojom::TooltipImpressionType impression) override {
+    LogApiRequest(GlicHostApiRequestId::kOnTooltipImpression);
+    host().instance_metrics().OnTooltipImpression(impression);
+  }
+
   void SetSyntheticExperimentState(const std::string& trial_name,
                                    const std::string& group_name) override {
     LogApiRequest(GlicHostApiRequestId::kSetSyntheticExperimentState);
@@ -1739,13 +1755,15 @@ class GlicWebClientHandler
       std::optional<bool> is_fre,
       GetZeroStateSuggestionsForFocusedTabCallback callback) override {
     LogApiRequest(GlicHostApiRequestId::kGetZeroStateSuggestionsForFocusedTab);
-    if (!IsZeroStateSuggestionsEnabled()) {
+    // LINT.IfChange(GlicZeroStateSuggestionsEnabled)
+    if (!IsZeroStateSuggestionsEnabled(profile_)) {
       receiver_.ReportBadMessage(
           "Client should not call "
           "GetZeroStateSuggestionsForFocusedTab "
           "without the GlicZeroStateSuggestions feature enabled.");
       return;
     }
+    // LINT.ThenChange(//chrome/browser/glic/host/guest_util.cc:GlicZeroStateSuggestionsEnabled)
 
     // TODO(crbug.com/424472586): Pass supported tools to service from web
     // client.

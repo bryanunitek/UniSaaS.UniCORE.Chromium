@@ -135,9 +135,6 @@ class ComposeboxQueryControllerTest
       bool enable_send_vit_for_single_context_next_queries = true,
       bool enable_send_raw_file_media_types = false,
       bool enable_only_send_aai_for_modality_chips = true,
-      bool enable_send_contextual_input_upload_type = false,
-      bool send_contextual_input_upload_type_in_search_url = true,
-      bool send_contextual_input_upload_type_in_aim_request = true,
       bool exclude_raw_and_drive_files = true,
       bool enable_contextual_tasks_upload_chunking = false,
       bool enable_non_blocking_url_navigation = false) {
@@ -185,20 +182,6 @@ class ComposeboxQueryControllerTest
     } else {
       disabled_features.push_back(
           lens::features::kLensOnlySendAaiForModalityChips);
-    }
-
-    if (enable_send_contextual_input_upload_type) {
-      base::FieldTrialParams params;
-      params["send_in_search_url"] =
-          send_contextual_input_upload_type_in_search_url ? "true" : "false";
-      params["send_in_aim_request"] =
-          send_contextual_input_upload_type_in_aim_request ? "true" : "false";
-      enabled_features.push_back(
-          {contextual_tasks::kContextualTasksSendContextualInputUploadType,
-           params});
-    } else {
-      disabled_features.push_back(
-          contextual_tasks::kContextualTasksSendContextualInputUploadType);
     }
 
     if (enable_contextual_tasks_upload_chunking) {
@@ -1295,9 +1278,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/false,
       /*enable_non_blocking_url_navigation=*/true);
@@ -1731,6 +1711,8 @@ TEST_F(ComposeboxQueryControllerTest, IsSupportedC2paMimeType) {
   EXPECT_TRUE(ComposeboxQueryController::IsSupportedC2paMimeType("IMAGE/JPEG"));
   EXPECT_TRUE(ComposeboxQueryController::IsSupportedC2paMimeType("image/PNG"));
   EXPECT_TRUE(ComposeboxQueryController::IsSupportedC2paMimeType("image/WebP"));
+  EXPECT_TRUE(ComposeboxQueryController::IsSupportedC2paMimeType("IMAGE/HEIC"));
+  EXPECT_TRUE(ComposeboxQueryController::IsSupportedC2paMimeType("image/HEIF"));
 
   // Unsupported MIME types
   EXPECT_FALSE(ComposeboxQueryController::IsSupportedC2paMimeType("image/bmp"));
@@ -1745,6 +1727,81 @@ TEST_F(ComposeboxQueryControllerTest, IsSupportedC2paMimeType) {
 }
 
 #if !BUILDFLAG(IS_IOS)
+TEST_F(ComposeboxQueryControllerTest,
+       UploadHeicImageFileRequestBypassesDecode) {
+  base::HistogramTester histogram_tester;
+  controller().InitializeIfNeeded();
+
+  const base::UnguessableToken file_token = base::UnguessableToken::Create();
+  auto input_data = std::make_unique<lens::ContextualInputData>();
+  input_data->primary_content_type = lens::MimeType::kImage;
+  input_data->mime_type_string = "image/heic";
+  input_data->context_input = std::vector<lens::ContextualInput>();
+
+  // Arbitrary raw HEIC header bytes that Blink's `ImageDecoder` cannot decode.
+  std::vector<uint8_t> heic_bytes = {'f', 't', 'y',  'p',  'h',  'e',
+                                     'i', 'c', 0x00, 0x01, 0x02, 0x03};
+  input_data->context_input->push_back(
+      lens::ContextualInput(heic_bytes, lens::MimeType::kImage));
+  input_data->file_name = "test_photo.heic";
+
+  lens::ImageEncodingOptions image_options{.max_size = 1000000,
+                                           .max_height = 1000,
+                                           .max_width = 1000,
+                                           .compression_quality = 30};
+
+  controller().StartFileUploadFlow(file_token, std::move(input_data),
+                                   image_options);
+
+  WaitForClusterInfo();
+  WaitForFileUpload(file_token, lens::MimeType::kImage);
+
+  std::optional<lens::LensOverlayServerRequest> last_request =
+      controller().last_sent_file_upload_request();
+  ASSERT_TRUE(last_request.has_value());
+  const lens::ImageData& image_data =
+      last_request->objects_request().image_data();
+  std::string expected_bytes(heic_bytes.begin(), heic_bytes.end());
+  EXPECT_EQ(image_data.payload().image_bytes(), expected_bytes);
+  EXPECT_EQ(image_data.image_metadata().width(), 0);
+  EXPECT_EQ(image_data.image_metadata().height(), 0);
+  EXPECT_EQ(image_data.image_metadata().file_name(), "test_photo.heic");
+  histogram_tester.ExpectUniqueSample(
+      "Lens.Composebox.ImageUpload.File.C2paDetected", false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Lens.Composebox.ImageUpload.File.DownscaleAndEncodeFailed", false, 1);
+  // The raw HEIC bytes have unknown dimensions, so no dimension is recorded.
+  histogram_tester.ExpectTotalCount(
+      "Lens.Composebox.ImageUpload.File.ProcessedMaxDimension", 0);
+}
+
+TEST_F(ComposeboxQueryControllerTest, UploadEmptyHeicImageFileRequestFailure) {
+  controller().InitializeIfNeeded();
+
+  const base::UnguessableToken file_token = base::UnguessableToken::Create();
+  auto input_data = std::make_unique<lens::ContextualInputData>();
+  input_data->primary_content_type = lens::MimeType::kImage;
+  input_data->mime_type_string = "image/heif";
+  input_data->context_input = std::vector<lens::ContextualInput>();
+  input_data->context_input->push_back(
+      lens::ContextualInput(std::vector<uint8_t>(), lens::MimeType::kImage));
+  input_data->file_name = "empty.heif";
+
+  lens::ImageEncodingOptions image_options{.max_size = 1000000,
+                                           .max_height = 1000,
+                                           .max_width = 1000,
+                                           .compression_quality = 30};
+
+  controller().StartFileUploadFlow(file_token, std::move(input_data),
+                                   image_options);
+
+  WaitForClusterInfo();
+  WaitForFileUpload(file_token, lens::MimeType::kImage,
+                    ContextUploadStatus::kValidationFailed,
+                    ContextUploadErrorType::kImageProcessingError,
+                    /*expect_suggest_signals_ready=*/false);
+}
+
 TEST_F(ComposeboxQueryControllerTest, UploadImageRequestC2paBypass) {
   base::HistogramTester histogram_tester;
   base::test::ScopedFeatureList local_feature_list;
@@ -3409,13 +3466,15 @@ TEST_F(ComposeboxQueryControllerTest,
                 .media_type(),
             lens::LensOverlayRequestId::MEDIA_TYPE_WEBPAGE_AND_IMAGE);
 
-  // Check that the Lens request id is in the AIM url is correct.
+  // Check that the Lens request id in the AIM url is in cinpts.
   std::string vsrid_value;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
-                                         &vsrid_value));
-  EXPECT_FALSE(vsrid_value.empty());
+  EXPECT_FALSE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
+                                          &vsrid_value));
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
   EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_WEBPAGE_AND_IMAGE,
-            DecodeRequestIdFromVsrid(vsrid_value).media_type());
+            contextual_inputs.inputs(0).request_id().media_type());
 
   // Check that the amc is present and set to 1.
   std::string amc_value;
@@ -3585,10 +3644,7 @@ TEST_F(ComposeboxQueryControllerTest,
       /*attach_page_title_and_url_to_suggest_requests=*/false,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
-      /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/true,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true);
+      /*enable_only_send_aai_for_modality_chips=*/true);
 
   // Act: Start the session.
   controller().InitializeIfNeeded();
@@ -4443,13 +4499,15 @@ TEST_F(ComposeboxQueryControllerTest, QuerySubmittedWithUploadedPdf) {
   EXPECT_FALSE(net::GetValueForKeyInQuery(
       aim_url, kVisualSearchInteractionDataParameterKey, &vsint_param));
 
-  // Assert: Lens request id is NOT added to multimodal pdf queries.
+  // Assert: Lens request id is sent via cinpts on AIM pdf queries.
   std::string vsrid_value;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
-                                         &vsrid_value));
-  EXPECT_FALSE(vsrid_value.empty());
+  EXPECT_FALSE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
+                                          &vsrid_value));
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
   EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_PDF,
-            DecodeRequestIdFromVsrid(vsrid_value).media_type());
+            contextual_inputs.inputs(0).request_id().media_type());
 
   // Assert: Gsession id is added to multimodal pdf queries.
   std::string gsession_id_value;
@@ -5040,13 +5098,15 @@ TEST_F(ComposeboxQueryControllerTest, QuerySubmittedWithUploadedImage) {
   EXPECT_FALSE(net::GetValueForKeyInQuery(
       aim_url, kVisualSearchInteractionDataParameterKey, &vsint_param));
 
-  // Assert: Lens request id is NOT added to multimodal pdf queries.
+  // Assert: Lens request id is sent via cinpts on AIM image queries.
   std::string vsrid_value;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
-                                         &vsrid_value));
-  EXPECT_FALSE(vsrid_value.empty());
+  EXPECT_FALSE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
+                                          &vsrid_value));
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
   EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE,
-            DecodeRequestIdFromVsrid(vsrid_value).media_type());
+            contextual_inputs.inputs(0).request_id().media_type());
 
   // Assert: Gsession id is added to multimodal pdf queries.
   std::string gsession_id_value;
@@ -5076,7 +5136,7 @@ TEST_F(ComposeboxQueryControllerTest, QuerySubmittedWithUploadedImage) {
 }
 
 TEST_F(ComposeboxQueryControllerTest,
-       SingleContextImageUploadQueryHasVsridAndQueryParam) {
+       SingleContextImageUploadQueryHasCinptsAndQueryParam) {
   // Act: Start the session.
   controller().InitializeIfNeeded();
 
@@ -5107,24 +5167,22 @@ TEST_F(ComposeboxQueryControllerTest,
                                url_future.GetCallback());
   GURL aim_url = url_future.Take();
 
-  // Assert: vsrid parameter is present and contains "MEDIA_TYPE_DEFAULT_IMAGE".
+  // Assert: vsrid parameter is not present; AIM queries use cinpts.
   std::string vsrid_value;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
-                                         &vsrid_value));
-  EXPECT_FALSE(vsrid_value.empty());
-  EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE,
-            DecodeRequestIdFromVsrid(vsrid_value).media_type());
+  EXPECT_FALSE(net::GetValueForKeyInQuery(aim_url, kRequestIdParameterKey,
+                                          &vsrid_value));
 
   // Assert: q parameter contains the query text.
   std::string query_value;
   EXPECT_TRUE(net::GetValueForKeyInQuery(aim_url, "q", &query_value));
   EXPECT_EQ(query_value, "hello");
 
-  // Assert: cinpts parameter is not present.
-  // Single context only uses vsrid.
-  std::string cinpts_value;
-  EXPECT_FALSE(net::GetValueForKeyInQuery(
-      aim_url, kContextualInputsParameterKey, &cinpts_value));
+  // Assert: cinpts parameter is present and contains MEDIA_TYPE_DEFAULT_IMAGE.
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
+  EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE,
+            contextual_inputs.inputs(0).request_id().media_type());
 }
 
 TEST_F(ComposeboxQueryControllerTest,
@@ -6498,11 +6556,11 @@ TEST_F(ComposeboxQueryControllerTest, CreateSearchUrl_SkipsUnresolvedUrl) {
                                url_future.GetCallback());
   GURL search_url = url_future.Take();
 
-  // Verify vsrid param.
-  std::optional<lens::LensOverlayRequestId> request_id =
-      GetRequestIdFromUrl(search_url.spec());
-  ASSERT_TRUE(request_id.has_value());
-  EXPECT_EQ(request_id->media_type(),
+  // Verify cinpts param.
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(search_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
+  EXPECT_EQ(contextual_inputs.inputs(0).request_id().media_type(),
             lens::LensOverlayRequestId::MEDIA_TYPE_UNRESOLVED_URL);
 
   // Verify AddedInputs param (should be skipped).
@@ -7633,11 +7691,11 @@ TEST_F(ComposeboxQueryControllerTest,
                                url_future.GetCallback());
   GURL aim_url = url_future.Take();
 
-  // Assert: vsrid param is present and sequence_id is not incremented.
-  std::optional<lens::LensOverlayRequestId> request_id =
-      GetRequestIdFromUrl(aim_url.spec());
-  ASSERT_TRUE(request_id.has_value());
-  EXPECT_EQ(request_id->sequence_id(), 1);
+  // Assert: cinpts param is present and sequence_id is not incremented.
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
+  EXPECT_EQ(contextual_inputs.inputs(0).request_id().sequence_id(), 1);
 }
 
 TEST_F(ComposeboxQueryControllerTest,
@@ -7974,8 +8032,8 @@ TEST_F(ComposeboxQueryControllerTest,
                 .request_id()
                 .uuid());
 
-  // Verify that creating a search URL references the uploaded request ID in
-  // vsrid and does not emit an un-uploaded duplicate ID in cinpts.
+  // Verify that creating a search URL references only the uploaded request ID
+  // in cinpts and does not emit an un-uploaded duplicate ID.
   std::unique_ptr<CreateSearchUrlRequestInfo> search_url_request_info =
       std::make_unique<CreateSearchUrlRequestInfo>();
   search_url_request_info->query_text = "hello";
@@ -7986,19 +8044,20 @@ TEST_F(ComposeboxQueryControllerTest,
                                url_future.GetCallback());
   GURL aim_url = url_future.Take();
 
-  std::string cinpts_value;
-  EXPECT_FALSE(net::GetValueForKeyInQuery(
-      aim_url, kContextualInputsParameterKey, &cinpts_value));
-
   std::optional<lens::LensOverlayRequestId> vsrid =
       GetRequestIdFromUrl(aim_url.spec());
-  ASSERT_TRUE(vsrid.has_value());
-  EXPECT_EQ(vsrid->uuid(), controller()
-                               .last_sent_file_upload_request()
-                               ->objects_request()
-                               .request_context()
-                               .request_id()
-                               .uuid());
+  EXPECT_FALSE(vsrid.has_value());
+
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(aim_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
+  EXPECT_EQ(contextual_inputs.inputs(0).request_id().uuid(),
+            controller()
+                .last_sent_file_upload_request()
+                ->objects_request()
+                .request_context()
+                .request_id()
+                .uuid());
 }
 
 TEST_F(
@@ -8542,9 +8601,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/true,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/false);
 
@@ -8632,9 +8688,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/true,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/false,
       /*enable_contextual_tasks_upload_chunking=*/false);
 
@@ -8773,11 +8826,11 @@ TEST_F(ComposeboxQueryControllerTest,
                                url_future.GetCallback());
   GURL search_url = url_future.Take();
 
-  // Verify vsrid param.
-  std::optional<lens::LensOverlayRequestId> request_id =
-      GetRequestIdFromUrl(search_url.spec());
-  ASSERT_TRUE(request_id.has_value());
-  EXPECT_EQ(request_id->media_type(),
+  // Verify cinpts param.
+  lens::LensOverlayContextualInputs contextual_inputs =
+      GetContextualInputsFromUrl(search_url.spec());
+  ASSERT_EQ(contextual_inputs.inputs_size(), 1);
+  EXPECT_EQ(contextual_inputs.inputs(0).request_id().media_type(),
             lens::LensOverlayRequestId::MEDIA_TYPE_UNRESOLVED_URL);
 
   // Verify AddedInputs param.
@@ -8900,10 +8953,6 @@ TEST_F(ComposeboxQueryControllerTest,
 
 TEST_F(ComposeboxQueryControllerTest,
        CreateSearchUrl_SendsUploadType_SingleInput) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      contextual_tasks::kContextualTasksSendContextualInputUploadType);
-
   controller().InitializeIfNeeded();
 
   const base::UnguessableToken file_token = base::UnguessableToken::Create();
@@ -8942,10 +8991,6 @@ TEST_F(ComposeboxQueryControllerTest,
 
 TEST_F(ComposeboxQueryControllerTest,
        CreateClientToAimRequest_SendsUploadType) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      contextual_tasks::kContextualTasksSendContextualInputUploadType);
-
   controller().InitializeIfNeeded();
 
   const base::UnguessableToken file_token = base::UnguessableToken::Create();
@@ -8972,89 +9017,6 @@ TEST_F(ComposeboxQueryControllerTest,
   EXPECT_EQ(lens_image_query_data.contextual_input_upload_type(),
             lens::LensOverlayContextualInputUploadType::
                 CONTEXTUAL_INPUT_UPLOAD_TYPE_EXPLICIT);
-}
-
-TEST_F(ComposeboxQueryControllerTest,
-       CreateSearchUrl_DoesNotSendUploadType_WhenSearchUrlParamDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  base::FieldTrialParams params;
-  params["send_in_search_url"] = "false";
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      contextual_tasks::kContextualTasksSendContextualInputUploadType, params);
-
-  controller().InitializeIfNeeded();
-
-  const base::UnguessableToken file_token_1 = base::UnguessableToken::Create();
-  StartPdfFileUploadFlow(file_token_1, /*file_data=*/std::vector<uint8_t>());
-  WaitForClusterInfo();
-  WaitForFileUpload(file_token_1, lens::MimeType::kPdf);
-
-  const base::UnguessableToken file_token_2 = base::UnguessableToken::Create();
-  StartPdfFileUploadFlow(file_token_2, /*file_data=*/std::vector<uint8_t>());
-  WaitForFileUpload(file_token_2, lens::MimeType::kPdf);
-
-  // Set up search request.
-  std::unique_ptr<CreateSearchUrlRequestInfo> search_url_request_info =
-      std::make_unique<CreateSearchUrlRequestInfo>();
-  search_url_request_info->query_text = "hello";
-  search_url_request_info->query_start_time = kTestQueryStartTime;
-  search_url_request_info->file_tokens.push_back(file_token_1);
-  search_url_request_info->file_tokens.push_back(file_token_2);
-  search_url_request_info->search_url_type =
-      ComposeboxQueryController::SearchUrlType::kAim;
-
-  base::test::TestFuture<GURL> url_future;
-  controller().CreateSearchUrl(std::move(search_url_request_info),
-                               url_future.GetCallback());
-  GURL aim_url = url_future.Take();
-
-  // Verify that cinpts is present but does NOT contain the upload type.
-  lens::LensOverlayContextualInputs contextual_inputs =
-      GetContextualInputsFromUrl(aim_url.spec());
-  EXPECT_EQ(contextual_inputs.inputs_size(), 2);
-  EXPECT_EQ(contextual_inputs.inputs(0).upload_type(),
-            lens::LensOverlayContextualInputUploadType::
-                CONTEXTUAL_INPUT_UPLOAD_TYPE_UNSPECIFIED);
-  EXPECT_EQ(contextual_inputs.inputs(1).upload_type(),
-            lens::LensOverlayContextualInputUploadType::
-                CONTEXTUAL_INPUT_UPLOAD_TYPE_UNSPECIFIED);
-}
-
-TEST_F(
-    ComposeboxQueryControllerTest,
-    CreateClientToAimRequest_DoesNotSendUploadType_WhenAimRequestParamDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  base::FieldTrialParams params;
-  params["send_in_aim_request"] = "false";
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      contextual_tasks::kContextualTasksSendContextualInputUploadType, params);
-
-  controller().InitializeIfNeeded();
-
-  const base::UnguessableToken file_token = base::UnguessableToken::Create();
-  StartPdfFileUploadFlow(file_token, /*file_data=*/std::vector<uint8_t>());
-  WaitForClusterInfo();
-  WaitForFileUpload(file_token, lens::MimeType::kPdf);
-
-  // Create ClientToAimRequest.
-  auto create_client_to_aim_request_info =
-      std::make_unique<CreateClientToAimRequestInfo>();
-  create_client_to_aim_request_info->query_text = "test query";
-  create_client_to_aim_request_info->file_tokens = {file_token};
-
-  auto client_to_aim_message = controller().CreateClientToAimRequest(
-      std::move(create_client_to_aim_request_info));
-
-  // Verify lens_image_query_data does NOT have upload_type set.
-  ASSERT_EQ(client_to_aim_message.submit_query()
-                .payload()
-                .lens_image_query_data_size(),
-            1);
-  const auto& lens_image_query_data =
-      client_to_aim_message.submit_query().payload().lens_image_query_data(0);
-  EXPECT_EQ(lens_image_query_data.contextual_input_upload_type(),
-            lens::LensOverlayContextualInputUploadType::
-                CONTEXTUAL_INPUT_UPLOAD_TYPE_UNSPECIFIED);
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -9113,9 +9075,6 @@ TEST_F(ComposeboxQueryControllerTest, UploadPdfFileRequest_ChunkingEnabled) {
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9178,9 +9137,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9218,9 +9174,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9262,9 +9215,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9302,9 +9252,6 @@ TEST_F(ComposeboxQueryControllerTest, UploadPdfFileRequest_ChunkingRetry) {
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9367,9 +9314,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/true,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();
@@ -9434,9 +9378,6 @@ TEST_F(ComposeboxQueryControllerTest,
       /*enable_send_vit_for_single_context_next_queries=*/true,
       /*enable_send_raw_file_media_types=*/false,
       /*enable_only_send_aai_for_modality_chips=*/true,
-      /*enable_send_contextual_input_upload_type=*/false,
-      /*send_contextual_input_upload_type_in_search_url=*/true,
-      /*send_contextual_input_upload_type_in_aim_request=*/true,
       /*exclude_raw_and_drive_files=*/true,
       /*enable_contextual_tasks_upload_chunking=*/true);
   controller().InitializeIfNeeded();

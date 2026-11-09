@@ -184,6 +184,7 @@
 #include "third_party/blink/public/mojom/presentation/presentation.mojom-forward.h"
 #include "third_party/blink/public/mojom/render_accessibility.mojom.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-forward.h"
+#include "third_party/blink/public/mojom/security_context/outside_context_csp_violation_reporter.mojom.h"
 #include "third_party/blink/public/mojom/sensor/web_sensor_provider.mojom-forward.h"
 #include "third_party/blink/public/mojom/serial/serial.mojom-forward.h"
 #include "third_party/blink/public/mojom/sms/webotp_service.mojom-forward.h"
@@ -608,6 +609,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
       blink::mojom::UserActivationNotificationType notification_type) override;
   bool Reload() override;
   bool IsDOMContentLoaded() override;
+  ScriptToolsReadyState GetScriptToolsReadyState() override;
   void UpdateToAdFrame() override;
   bool IsAdFrame() const override;
   void SetIsXrOverlaySetup() override;
@@ -1600,9 +1602,6 @@ class CONTENT_EXPORT RenderFrameHostImpl
   void BindNFCReceiver(mojo::PendingReceiver<device::mojom::NFC> receiver);
 #endif
 
-  void BindModelContextHost(
-      mojo::PendingReceiver<blink::mojom::ModelContextHost> receiver);
-
   void BindInputInjectorReceiver(
       mojo::PendingReceiver<mojom::InputInjector> receiver);
 
@@ -1628,6 +1627,9 @@ class CONTENT_EXPORT RenderFrameHostImpl
       mojo::PendingAssociatedReceiver<blink::mojom::FileBackedBlobFactory>
           receiver);
 
+  void BindModelContextHost(
+      mojo::PendingAssociatedReceiver<blink::mojom::ModelContextHost> receiver);
+
   // END IPC REVIEW BOUNDARY
 
   bool IsFocused() override;
@@ -1650,6 +1652,13 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // Returns associated remote for the blink::mojom::LocalFrame Mojo interface.
   const mojo::AssociatedRemote<blink::mojom::LocalFrame>&
   GetAssociatedLocalFrame();
+
+  // Returns associated remote for the
+  // blink::mojom::OutsideContextCSPViolationReporter Mojo interface, which
+  // reports the CSP violations checked in the frame host to the frame.
+  const mojo::AssociatedRemote<
+      blink::mojom::OutsideContextCSPViolationReporter>&
+  GetAssociatedOutsideContextCSPViolationReporter();
 
   // Returns the AgentSchedulingGroupHost associated with this
   // RenderFrameHostImpl.
@@ -3660,19 +3669,23 @@ class CONTENT_EXPORT RenderFrameHostImpl
 
   // Like CreateNetworkServiceDefaultFactoryInternal but also sets up a
   // connection error handler to detect and recover from NetworkService
-  // crashes.
+  // crashes. `committing_navigation_request` is non-null when the factory is
+  // being created for an in-flight navigation commit rather than the already
+  // committed document.
   bool CreateNetworkServiceDefaultFactoryAndObserve(
       network::mojom::URLLoaderFactoryParamsPtr params,
       ukm::SourceIdObj ukm_source_id,
       mojo::PendingReceiver<network::mojom::URLLoaderFactory>
-          default_factory_receiver);
+          default_factory_receiver,
+      NavigationRequest* committing_navigation_request = nullptr);
 
   // Asks an appropriate `NetworkService` to create a new URLLoaderFactory with
   // the given `params` and binds the factory to the `default_factory_receiver`.
   //
   // The callers typically base the `params` on either 1) the current state of
   // `this` RenderFrameHostImpl (e.g. the origin of the initial empty document,
-  // or the last committed origin) or 2) a pending NavigationRequest.
+  // or the last committed origin) or 2) a pending NavigationRequest
+  // (`committing_navigation_request`).
   //
   // If this returns true, any redirect safety checks should be bypassed in
   // downstream loaders.  (This indicates that a layer above //content has
@@ -3682,7 +3695,8 @@ class CONTENT_EXPORT RenderFrameHostImpl
       network::mojom::URLLoaderFactoryParamsPtr params,
       ukm::SourceIdObj ukm_source_id,
       mojo::PendingReceiver<network::mojom::URLLoaderFactory>
-          default_factory_receiver);
+          default_factory_receiver,
+      NavigationRequest* committing_navigation_request = nullptr);
 
   // Returns true if the ExecuteJavaScript() API can be used on this host.
   // The checks do not apply to ExecuteJavaScriptInIsolatedWorld, nor to
@@ -3938,6 +3952,13 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // data is reset with each cross-document navigation, but there are some
   // exceptions involving speculative RenderFrameHosts.
   bool ShouldResetDocumentAssociatedDataAtCommit() const;
+
+  // Resets state for renderer-side Document replacements (the result of a
+  // javascript: URL, XSLT or discard, and the synchronous about:blank commit
+  // that replaces the initial about:blank Document). This is state which is
+  // strictly coupled with the renderer's Document and should be reset for
+  // each Document change.
+  void ResetStateForReplacedRendererDocument();
 
   // Called when we received the confirmation a new document committed in the
   // renderer. It was created from the |navigation|.
@@ -4817,6 +4838,11 @@ class CONTENT_EXPORT RenderFrameHostImpl
 
   // Holder of Mojo connection with the LocalFrame in Blink.
   mojo::AssociatedRemote<blink::mojom::LocalFrame> local_frame_;
+
+  // Holder of Mojo connection with the OutsideContextCSPViolationReporter of
+  // the frame in Blink.
+  mojo::AssociatedRemote<blink::mojom::OutsideContextCSPViolationReporter>
+      outside_context_csp_violation_reporter_;
 
   // Holder of Mojo connection with the LocalMainFrame in Blink. This
   // remote will be valid when the frame is the active main frame.

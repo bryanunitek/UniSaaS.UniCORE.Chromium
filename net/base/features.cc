@@ -87,6 +87,9 @@ BASE_FEATURE(kDnsPlatformFailFastAndRetry, base::FEATURE_DISABLED_BY_DEFAULT);
 const base::FeatureParam<bool> kDnsPlatformCancelPreviousAttemptOnRetry{
     &kDnsPlatformFailFastAndRetry, "cancel_previous_attempt_on_retry", false};
 
+BASE_FEATURE(kDnsTaskAllowPartialAddressResults,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kUseDnsHttpsSvcb, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUseDnsHttpsSvcbAddressHints, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -271,6 +274,24 @@ BASE_FEATURE_PARAM(bool,
 
 BASE_FEATURE(kConnectionKeepAliveForHttp2, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kQuicPreconnectInitialRtt, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kQuicPreconnectInitialRttParam,
+                   &kQuicPreconnectInitialRtt,
+                   base::Milliseconds(25));
+
+std::optional<base::TimeDelta> GetQuicPreconnectInitialRtt() {
+  if (!base::FeatureList::IsEnabled(kQuicPreconnectInitialRtt)) {
+    return std::nullopt;
+  }
+  const base::TimeDelta initial_rtt = kQuicPreconnectInitialRttParam.Get();
+  if (!initial_rtt.is_positive() || initial_rtt.is_inf()) {
+    return std::nullopt;
+  }
+  return initial_rtt;
+}
+
 BASE_FEATURE(kShortLaxAllowUnsafeThreshold, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSameSiteDefaultChecksMethodRigorously,
@@ -299,6 +320,8 @@ BASE_FEATURE(kCookieSameSiteConsidersRedirectChain,
 BASE_FEATURE(kStaticKeyPinningEnforcement, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCookieDomainRejectNonASCII, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kCookieRequireCompliantHost, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables partitioning of third party storage (IndexedDB, CacheStorage, etc.)
 // by the top level site to reduce fingerprinting.
@@ -506,7 +529,12 @@ BASE_FEATURE(kDeviceBoundSessionsFederatedRegistrationBlockRedirects,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kDeviceBoundSessionsForRestrictedSites,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
 BASE_FEATURE(kDeviceBoundSessionsClientCertSelection,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -681,6 +709,8 @@ BASE_FEATURE_PARAM(bool,
 
 BASE_FEATURE(kIgnoreHSTSForLocalhost, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kRejectNonCompliantHttpHosts, base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kSimpleCachePrioritizedCaching, base::FEATURE_ENABLED_BY_DEFAULT);
 
 const base::FeatureParam<int>
@@ -738,7 +768,7 @@ BASE_FEATURE(kSelfSignedLocalNetworkInterstitial,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
-BASE_FEATURE(kVerifyQWACs, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kVerifyQWACs, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
 
 BASE_FEATURE(kRestrictAbusePorts, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -1130,6 +1160,9 @@ BASE_FEATURE_PARAM(bool,
                    false);
 
 BASE_FEATURE(kHttpChunkedDecoderInRust, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPostHandshakeIpPoolingAllEndpoints,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace net::features
 

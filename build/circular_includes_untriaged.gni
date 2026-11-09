@@ -119,7 +119,6 @@ allow_circular_includes_from_untriaged = [
   "//chrome/browser/ash/video_conference:video_conference",
   "//chrome/browser/chromeos/enterprise/cloud_storage:cloud_storage",
   "//chrome/browser/chromeos/policy/dlp:dlp",
-  "//chrome/browser/chromeos/reporting:reporting",
   "//chrome/browser/content_settings:content_settings",
   "//chrome/browser/enterprise/data_controls:data_controls",
   "//chrome/browser/extensions:extensions",
@@ -260,7 +259,5 @@ allow_circular_includes_from_untriaged = [
   "//third_party/pdfium/xfa/fxfa/layout:layout",
   "//third_party/pdfium/xfa/fxfa/parser:parser",
   "//third_party/pdfium/xfa/fxfa:fxfa",
-  "//ui/ozone:platform",
-  "//ui/ozone:ui_test_support",
   "//v8:v8_initializers",
 ]

@@ -215,8 +215,6 @@ include_rules = [
   "+components/media_router/browser",
   "+components/history_clusters",
   "+components/history_clusters/history_clusters_internals",
-  "+components/history_embeddings/content",
-  "+components/history_embeddings/core",
   "+components/manta",
   "+components/multistep_filter/core",
   "+components/media_effects",
@@ -607,7 +605,7 @@ specific_include_rules = {
   r"platform_util_ash\.cc": [
     "+ash/wm/window_pin_util.h",
   ],
-  "platform_util_linux.cc": [
+  r"platform_util_linux(_unittest)?\.cc": [
     # The following is used to call the org.freedesktop.FileManager1
     # DBus interface to highlight a file within its parent folder
     "+dbus"

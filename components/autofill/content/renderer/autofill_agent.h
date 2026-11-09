@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CONTENT_RENDERER_AUTOFILL_AGENT_H_
 #define COMPONENTS_AUTOFILL_CONTENT_RENDERER_AUTOFILL_AGENT_H_
 
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <optional>
@@ -54,6 +55,7 @@
 
 namespace autofill {
 
+class CustomFormControlScriptExecutor;
 class PasswordAutofillAgent;
 class PasswordGenerationAgent;
 
@@ -157,6 +159,12 @@ class AutofillAgent : public content::RenderFrameObserver,
   void BindPendingReceiver(
       mojo::PendingAssociatedReceiver<mojom::AutofillAgent> pending_receiver);
 
+  // Lets custom form control scripts run in this frame, in the isolated world
+  // `world_id` (Chrome passes
+  // `ISOLATED_WORLD_ID_AUTOFILL_CUSTOM_FORM_CONTROLS`). Requires
+  // `features::kAutofillCustomFormControlScripts`. Call at most once.
+  void EnableCustomFormControlScripts(int32_t world_id);
+
   blink::WebDocument GetDocument() const;
 
   // Callers must not store the returned value longer than a function scope.
@@ -185,10 +193,10 @@ class AutofillAgent : public content::RenderFrameObserver,
 
   // mojom::AutofillAgent:
   void ScrollFieldIntoView(FieldRendererId field_id) override;
-  void TriggerFormExtraction() override;
+  void TriggerFormExtraction(bool force) override;
   void TriggerFormExtractionWithResponse(
+      bool force,
       base::OnceCallback<void(bool)> callback) override;
-  void ClearFormCache() override;
   void ApplyFieldsAction(mojom::FormActionType action_type,
                          mojom::ActionPersistence action_persistence,
                          const std::vector<FormFieldData::FillData>& fields,
@@ -495,6 +503,13 @@ class AutofillAgent : public content::RenderFrameObserver,
   std::unique_ptr<FormSubmissionTracker> form_tracker_;
 
   mojo::AssociatedReceiver<mojom::AutofillAgent> receiver_{this};
+
+  // Runs the custom form control script of the current document. Only exists
+  // if custom form control scripts are enabled (see
+  // `EnableCustomFormControlScripts()`), until the frame is destroyed (see
+  // `OnDestruct()`).
+  std::unique_ptr<CustomFormControlScriptExecutor>
+      custom_form_control_script_executor_;
 
   mojo::AssociatedRemote<mojom::AutofillDriver> autofill_driver_;
 

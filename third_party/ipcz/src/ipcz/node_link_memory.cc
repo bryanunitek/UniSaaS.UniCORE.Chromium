@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "base/logging.h"
 #include "ipcz/buffer_id.h"
 #include "ipcz/driver_memory.h"
 #include "ipcz/fragment_descriptor.h"
@@ -20,7 +21,6 @@
 #include "third_party/abseil-cpp/absl/base/macros.h"
 #include "third_party/abseil-cpp/absl/numeric/bits.h"
 #include "third_party/abseil-cpp/absl/synchronization/mutex.h"
-#include "util/log.h"
 #include "util/ref_counted.h"
 
 namespace ipcz {
@@ -233,14 +233,14 @@ DriverMemoryWithMapping NodeLinkMemory::AllocateMemory(
   primary_buffer.header.next_sublink_id.store(kMaxInitialPortals,
                                               std::memory_order_relaxed);
 
-  // Note: InitializeRegion() performs an atomic release, so atomic stores
-  // before this section can be relaxed.
-  primary_buffer.block_allocator_64().InitializeRegion();
-  primary_buffer.block_allocator_256().InitializeRegion();
-  primary_buffer.block_allocator_512().InitializeRegion();
-  primary_buffer.block_allocator_1k().InitializeRegion();
-  primary_buffer.block_allocator_2k().InitializeRegion();
-  primary_buffer.block_allocator_4k().InitializeRegion();
+  // Note: InitializePrezeroedRegion() performs an atomic release, so atomic
+  // stores before this section can be relaxed.
+  primary_buffer.block_allocator_64().InitializePrezeroedRegion();
+  primary_buffer.block_allocator_256().InitializePrezeroedRegion();
+  primary_buffer.block_allocator_512().InitializePrezeroedRegion();
+  primary_buffer.block_allocator_1k().InitializePrezeroedRegion();
+  primary_buffer.block_allocator_2k().InitializePrezeroedRegion();
+  primary_buffer.block_allocator_4k().InitializePrezeroedRegion();
   return {std::move(memory), std::move(mapping)};
 }
 
@@ -471,7 +471,7 @@ void NodeLinkMemory::AllocateBlockBuffer(Ref<NodeLink> link,
         }
 
         BlockAllocator allocator(mapping.bytes(), block_size);
-        allocator.InitializeRegion();
+        allocator.InitializePrezeroedRegion();
 
         // SUBTLE: We first share the new buffer with the remote node, then
         // register it locally. If we registered the buffer locally first, this

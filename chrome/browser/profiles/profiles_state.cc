@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -67,11 +68,41 @@ bool IsMultipleProfilesEnabled() {
 #endif
 }
 
+#if BUILDFLAG(IS_ANDROID)
+bool IsAndroidMultiprofileStartupDataEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kAndroidMultiprofileStartupData);
+}
+#endif
+
 base::FilePath GetDefaultProfileDir(const base::FilePath& user_data_dir) {
   base::FilePath default_profile_dir(user_data_dir);
   default_profile_dir =
       default_profile_dir.AppendASCII(chrome::kInitialProfile);
   return default_profile_dir;
+}
+
+base::FilePath GetLastUsedProfileBaseName(const PrefService& local_state) {
+  const base::FilePath initial_profile =
+      base::FilePath::FromASCII(chrome::kInitialProfile);
+  base::FilePath base_name = local_state.GetFilePath(prefs::kProfileLastUsed);
+  if (base_name.empty() || base_name.value() == chrome::kSystemProfileDir) {
+    return initial_profile;
+  }
+
+#if BUILDFLAG(IS_ANDROID)
+  // With AndroidMultiprofileStartupData, the startup profile is chosen from
+  // this value, so require a ProfileAttributesStorage entry. This also rejects
+  // deleted profiles and values that are not profile directory names, such as
+  // "..".
+  if (IsAndroidMultiprofileStartupDataEnabled() &&
+      !local_state.GetDict(prefs::kProfileAttributes)
+           .contains(base_name.AsUTF8Unsafe())) {
+    return initial_profile;
+  }
+#endif
+
+  return base_name;
 }
 
 void RegisterPrefs(PrefRegistrySimple* registry) {

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -128,6 +129,12 @@ class DesktopNativeWidgetTopLevelHandler : public aura::WindowObserver {
       init_params.remove_standard_frame = true;
     }
 #endif
+    if (base::FeatureList::IsEnabled(
+            ::features::kOmitNativeFrameOnShadowlessMenus) &&
+        child_window->GetProperty(wm::kShadowElevationKey) ==
+            wm::kShadowElevationNone) {
+      init_params.shadow_type = Widget::InitParams::ShadowType::kNone;
+    }
     // If the window should be transparent, then ensure the top level widget
     // is also not opaque.
     if (child_window->GetTransparent()) {
@@ -190,7 +197,7 @@ class DesktopNativeWidgetTopLevelHandler : public aura::WindowObserver {
     }
 
     if (top_level_widget_) {
-      DCHECK(top_level_widget_->GetNativeView());
+      CHECK(top_level_widget_->GetNativeView(), base::NotFatalUntil::M163);
       top_level_widget_->GetNativeView()->RemoveObserver(this);
       // When we receive a notification that the child of the window created
       // above is being destroyed we go ahead and initiate the destruction of
@@ -1500,7 +1507,7 @@ void DesktopNativeWidgetAura::OnKeyEvent(ui::KeyEvent* event) {
 }
 
 void DesktopNativeWidgetAura::OnMouseEvent(ui::MouseEvent* event) {
-  DCHECK(content_window_->IsVisible());
+  CHECK(content_window_->IsVisible(), base::NotFatalUntil::M163);
 
 #if BUILDFLAG(IS_WIN)
   if (event->type() == ui::EventType::kMouseMoved) {
@@ -1572,7 +1579,8 @@ void DesktopNativeWidgetAura::OnWindowActivated(
     wm::ActivationChangeObserver::ActivationReason reason,
     aura::Window* gained_active,
     aura::Window* lost_active) {
-  DCHECK(content_window_ == gained_active || content_window_ == lost_active);
+  CHECK(content_window_ == gained_active || content_window_ == lost_active,
+        base::NotFatalUntil::M163);
   if (gained_active == content_window_ && restore_focus_on_activate_) {
     restore_focus_on_activate_ = false;
     // For OS_LINUX, desktop native widget may not be activated when child
@@ -1582,7 +1590,7 @@ void DesktopNativeWidgetAura::OnWindowActivated(
       GetWidget()->GetFocusManager()->RestoreFocusedView();
     }
   } else if (lost_active == content_window_ && GetWidget()->HasFocusManager()) {
-    DCHECK(!restore_focus_on_activate_);
+    CHECK(!restore_focus_on_activate_, base::NotFatalUntil::M163);
     restore_focus_on_activate_ = true;
     // Pass in false so that ClearNativeFocus() isn't invoked.
     if (GetWidget()) {

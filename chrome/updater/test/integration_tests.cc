@@ -143,37 +143,39 @@ void ExpectNoUpdateSequence(
            "request.apps",
            base::ListValue().Append(std::move(app_expectation))))},
       base::BindRepeating(
-          [](const std::string& app_id, bool v4) {
-            return v4 ? absl::StrFormat(
-                            ")]}'\n"
-                            R"({"response":{)"
-                            R"(  "protocol":"4.0",)"
-                            R"(  "apps":[)"
-                            R"(    {)"
-                            R"(      "appid":"%s",)"
-                            R"(      "status":"ok",)"
-                            R"(      "updatecheck":{)"
-                            R"(        "status":"noupdate")"
-                            R"(      })"
-                            R"(    })"
-                            R"(  ])"
-                            R"(}})",
-                            app_id)
-                      : absl::StrFormat(
-                            ")]}'\n"
-                            R"({"response":{)"
-                            R"(  "protocol":"3.1",)"
-                            R"(  "app":[)"
-                            R"(    {)"
-                            R"(      "appid":"%s",)"
-                            R"(      "status":"ok",)"
-                            R"(      "updatecheck":{)"
-                            R"(        "status":"noupdate")"
-                            R"(      })"
-                            R"(    })"
-                            R"(  ])"
-                            R"(}})",
-                            app_id);
+          [](const std::string& app_id, ProtocolVersion protocol_version) {
+            if (protocol_version == ProtocolVersion::kV4) {
+              return absl::StrFormat(
+                  ")]}'\n"
+                  R"({"response":{)"
+                  R"(  "protocol":"4.0",)"
+                  R"(  "apps":[)"
+                  R"(    {)"
+                  R"(      "appid":"%s",)"
+                  R"(      "status":"ok",)"
+                  R"(      "updatecheck":{)"
+                  R"(        "status":"noupdate")"
+                  R"(      })"
+                  R"(    })"
+                  R"(  ])"
+                  R"(}})",
+                  app_id);
+            }
+            return absl::StrFormat(
+                ")]}'\n"
+                R"({"response":{)"
+                R"(  "protocol":"3.1",)"
+                R"(  "app":[)"
+                R"(    {)"
+                R"(      "appid":"%s",)"
+                R"(      "status":"ok",)"
+                R"(      "updatecheck":{)"
+                R"(        "status":"noupdate")"
+                R"(      })"
+                R"(    })"
+                R"(  ])"
+                R"(}})",
+                app_id);
           },
           app_id));
 }
@@ -6768,13 +6770,13 @@ TEST_F(EventLoggingIntegrationTest, SendsLogs) {
                                 UpdateService::Priority::kForeground, v1, v1));
   test_event_logging_server.ExpectOnce(
       {request::GetPathMatcher(test_event_logging_server.event_logging_path()),
-       base::BindRepeating([](const HttpRequest& request) {
+       base::BindRepeating([](const HttpRequest& request)
+                               -> testing::AssertionResult {
          enterprise_companion::telemetry_logger::proto::LogRequest log_request;
          if (!log_request.ParseFromString(request.decoded_content)) {
-           ADD_FAILURE() << "Failed to parse log request";
-           return false;
+           return testing::AssertionFailure() << "Failed to parse log request";
          }
-         return true;
+         return testing::AssertionSuccess();
        })},
       enterprise_companion::telemetry_logger::proto::LogResponse()
           .SerializeAsString(),

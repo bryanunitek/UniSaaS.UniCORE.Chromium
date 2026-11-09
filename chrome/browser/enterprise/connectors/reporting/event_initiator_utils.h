@@ -7,9 +7,13 @@
 
 #include <optional>
 
+#include "components/enterprise/common/proto/synced/browser_events.pb.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 
+class SessionID;
+
 namespace content {
+class BrowserContext;
 class WebContents;
 }  // namespace content
 
@@ -44,6 +48,40 @@ GetExtensionInitiatorInfo(download::DownloadItem* download);
 // Must be called on the UI thread.
 std::optional<safe_browsing::ExtensionTelemetryReportRequest::ExtensionInfo>
 GetActiveExtensionInitiatorInfo(content::WebContents* web_contents);
+
+// Same as above for the tab identified by `tab_id` in `browser_context`, for
+// callers that only know a tab's `SessionID` (e.g. the real-time URL lookup
+// service). Off-the-record tabs of `browser_context` are included.
+//
+// Returns `std::nullopt` if `browser_context` is null, the feature is off, no
+// such tab exists, or under the same conditions as the `WebContents` overload.
+//
+// Must be called on the UI thread.
+std::optional<safe_browsing::ExtensionTelemetryReportRequest::ExtensionInfo>
+GetActiveExtensionInitiatorInfo(content::BrowserContext* browser_context,
+                                SessionID tab_id);
+
+// Resolves `EventInitiatorInfo` for the entity currently acting on
+// `web_contents`, checking `GetActiveExtensionInitiatorInfo()` first and
+// falling back to `CdpActorSessionTracker::GetEventInitiatorInfo()`. Returns
+// `std::nullopt` if `web_contents` is null or no actor is currently attributed.
+//
+// Must be called on the UI thread.
+std::optional<chrome::cros::reporting::proto::EventInitiatorInfo>
+GetActiveEventInitiatorInfo(content::WebContents* web_contents);
+
+// Same as above for the tab identified by `tab_id` in `browser_context`, for
+// callers that only know a tab's `SessionID` (e.g. the real-time URL lookup
+// service). Device-level CDP attribution (`ExternalProcessInfo` /
+// `BrowserFeatureInfo`) is included only when `browser_context`'s real-time URL
+// lookup policy scope allows device info; otherwise only extension attribution
+// is returned. Returns `std::nullopt` if `browser_context` is null, no such tab
+// exists, or no eligible actor is currently attributed.
+//
+// Must be called on the UI thread.
+std::optional<chrome::cros::reporting::proto::EventInitiatorInfo>
+GetActiveEventInitiatorInfo(content::BrowserContext* browser_context,
+                            SessionID tab_id);
 
 }  // namespace enterprise_connectors
 

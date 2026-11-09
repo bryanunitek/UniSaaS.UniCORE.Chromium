@@ -13,7 +13,6 @@ import android.graphics.Bitmap;
 import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList;
@@ -32,11 +31,17 @@ import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgrou
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.components.image_fetcher.ImageFetcher;
 
-/** Manages the lifecycle of NtpSyncedThemeBridge and observes committed theme changes. */
+/**
+ * Observes the profile's NtpSyncedThemeBridge and reports committed theme changes to it. The
+ * manager is process-wide while its state is profile-scoped, so it releases that state when the
+ * profile is destroyed.
+ */
 @NullMarked
-public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
+public class NtpSyncedThemeManager
+        implements NtpSyncedThemeBridge.Observer, ProfileManager.Observer {
     private static @Nullable NtpSyncedThemeManager sInstanceForTesting;
 
     /** Static class that implements the initialization-on-demand holder idiom. */
@@ -76,9 +81,8 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
     // synced theme is about to be applied, rather than the next image pre-fetched for the local
     // daily refresh.
     private boolean mIsSyncedImageDownloading;
-    // Callbacks waiting for the theme image downloading to complete.
-    private final ObserverList<Callback<@Nullable NtpBackgroundDataThemeCollection>>
-            mDownloadCallbacks = new ObserverList<>();
+    // Callbacks waiting for initial theme sync and any in-flight sync image download to complete.
+    private final ObserverList<Runnable> mReadinessCallbacks = new ObserverList<>();
 
     private NtpSyncedThemeManager() {
         this(NtpCustomizationConfigManager.getInstance());
@@ -98,9 +102,10 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
     }
 
     /**
-     * Attaches the manager to the given profile: creates the {@link NtpSyncedThemeBridge} and the
-     * {@link ImageFetcher}. Calling this again with the same profile is a no-op; calling it with a
-     * different profile releases the previous profile's state first.
+     * Attaches the manager to the given profile: observes {@link ProfileManager} and the profile's
+     * {@link NtpSyncedThemeBridge}, and creates the {@link ImageFetcher}. Calling this again with
+     * the same profile is a no-op; calling it with a different profile releases the previous
+     * profile's state first. The state is also released when the profile is destroyed.
      *
      * @param profile The original (non-incognito) profile.
      */
@@ -111,32 +116,50 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
 
         if (mProfile == profile) return;
 
-        destroy();
+        if (mProfile != null) {
+            destroy();
+        }
+        ProfileManager.addObserver(this);
         mProfile = profile;
         mImageFetcher = NtpCustomizationUtils.createImageFetcher(profile);
-        mNtpSyncedThemeBridge = new NtpSyncedThemeBridge(profile, this);
-        // The singleton outlives a test, so detach it between tests. Otherwise the next test's
-        // activity would skip the attach above and keep the previous test's bridge.
-        ResettersForTesting.register(this::destroy);
-        // A theme synced before the bridge attached is only stored in native preferences.
+        mNtpSyncedThemeBridge = NtpSyncedThemeBridge.getForProfile(profile);
+        mNtpSyncedThemeBridge.setObserver(this);
+        // A theme synced before the observer attached is only stored in native preferences.
         mNtpSyncedThemeBridge.getStoredContinuousThemeAndNotify();
+        maybeNotifyReadinessCallbacks();
     }
 
     /**
-     * Releases the profile-dependent state: the C++ side of {@link NtpSyncedThemeBridge}, the
-     * {@link ImageFetcher}, and any in-flight download bookkeeping.
+     * Releases the profile-dependent state: stops observing {@link ProfileManager} and the {@link
+     * NtpSyncedThemeBridge}, destroys the {@link ImageFetcher}, and drops any in-flight download
+     * bookkeeping.
      */
     public void destroy() {
         if (mNtpSyncedThemeBridge != null) {
-            mNtpSyncedThemeBridge.destroy();
+            mNtpSyncedThemeBridge.resetObserver();
             mNtpSyncedThemeBridge = null;
         }
         if (mImageFetcher != null) {
             mImageFetcher.destroy();
             mImageFetcher = null;
         }
+        ProfileManager.removeObserver(this);
         mProfile = null;
         invalidateInFlightDownload();
+        mReadinessCallbacks.clear();
+    }
+
+    @Override
+    public void onProfileAdded(Profile profile) {}
+
+    /**
+     * Releases the attached profile's state before its KeyedServices, including the native side of
+     * {@link NtpSyncedThemeBridge}, are shut down: ProfileImpl's destructor sends this notification
+     * first. {@link #destroy()} makes no JNI calls, so it is safe at this point.
+     */
+    @Override
+    public void onProfileDestroyed(Profile profile) {
+        if (profile == mProfile) destroy();
     }
 
     /**
@@ -205,6 +228,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
         if (info.isDailyRefreshEnabled) {
             // TODO(crbug.com/488439751): Synced theme collection daily refresh isn't supported
             // yet, so there is nothing to download.
+            maybeNotifyReadinessCallbacks();
             return;
         }
 
@@ -221,6 +245,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
         if (NtpCustomizationUtils.isSyncedBackgroundPersisted(candidate)) {
             // E.g. the stored theme delivered when the bridge attaches at startup, or another
             // device selecting the theme this device already uses.
+            maybeNotifyReadinessCallbacks();
             return;
         }
 
@@ -273,7 +298,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
      * @param colorId The synced color ID.
      */
     @Override
-    public void onChromeColorSynced(int colorId) {
+    public void onChromeColorSynced(@NtpThemeColorId int colorId) {
         if (colorId <= NtpThemeColorId.DEFAULT || colorId >= NtpThemeColorId.NUM_ENTRIES) {
             onDefaultThemeSynced();
             return;
@@ -288,6 +313,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
                         colorId,
                         /* isChromeColorDailyRefreshEnabled= */ false);
         mNtpCustomizationConfigManager.onSyncedChromeColorChanged(mContext, colorData);
+        maybeNotifyReadinessCallbacks();
     }
 
     /** Called when the theme is reset to default from sync. */
@@ -295,6 +321,12 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
     public void onDefaultThemeSynced() {
         invalidateInFlightDownload();
         mNtpCustomizationConfigManager.onSyncedDefaultThemeReset(mContext);
+        maybeNotifyReadinessCallbacks();
+    }
+
+    @Override
+    public void onThemeSyncReady() {
+        maybeNotifyReadinessCallbacks();
     }
 
     /**
@@ -308,6 +340,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
         // first, its staged result was already discarded by
         // NtpCustomizationConfigManager#clearPendingSyncedBackgroundAndSharedPreference.
         invalidateInFlightDownload();
+        maybeNotifyReadinessCallbacks();
         if (mNtpSyncedThemeBridge == null) {
             return;
         }
@@ -383,16 +416,10 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
         }
     }
 
-    /**
-     * Drops the result of any in-flight download, and notifies the callbacks waiting for a synced
-     * image download with {@code null} since it won't complete.
-     */
+    /** Drops the result of any in-flight download. */
     private void invalidateInFlightDownload() {
         resetDownloadCallbackController();
-        if (!mIsSyncedImageDownloading) return;
-
         mIsSyncedImageDownloading = false;
-        notifyDownloadCallbacks(null);
     }
 
     /** Cancels and clears the {@link CallbackController} for the in-flight download, if any. */
@@ -404,8 +431,8 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
     }
 
     /**
-     * Applies a synced static theme collection image from another device, and notifies the
-     * callbacks waiting for the download. A synced daily refresh returns early in {@link
+     * Applies a synced static theme collection image from another device, and notifies any waiting
+     * readiness callbacks. A synced daily refresh returns early in {@link
      * #onContinuousSyncedThemeCollectionImageAvailable}.
      *
      * @param info The {@link CustomBackgroundInfo} containing theme collection metadata.
@@ -418,7 +445,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
             @Nullable @ColorInt Integer syncedPrimaryColor) {
         mIsSyncedImageDownloading = false;
         if (bitmap == null) {
-            notifyDownloadCallbacks(null);
+            maybeNotifyReadinessCallbacks();
             return;
         }
 
@@ -433,7 +460,7 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
                                 info.backgroundUrl.getPath()));
         mNtpCustomizationConfigManager.onSyncedThemeCollectionImageChanged(
                 mContext, themeCollectionData);
-        notifyDownloadCallbacks(themeCollectionData);
+        maybeNotifyReadinessCallbacks();
     }
 
     /**
@@ -452,43 +479,46 @@ public class NtpSyncedThemeManager implements NtpSyncedThemeBridge.Observer {
     }
 
     /**
-     * Notifies all registered download callbacks with the downloaded theme collection data (or
-     * {@code null} on failure/omission). All callbacks are cleared after being invoked.
-     *
-     * @param themeCollectionData The downloaded theme collection data, or null.
+     * Returns whether the initial Android theme sync has completed and no synced theme collection
+     * image download is currently in flight.
      */
-    private void notifyDownloadCallbacks(
-            @Nullable NtpBackgroundDataThemeCollection themeCollectionData) {
-        for (Callback<@Nullable NtpBackgroundDataThemeCollection> callback : mDownloadCallbacks) {
-            callback.onResult(themeCollectionData);
-        }
-        mDownloadCallbacks.clear();
+    public boolean isSyncedThemeReady() {
+        return mNtpSyncedThemeBridge != null
+                && mNtpSyncedThemeBridge.isThemeSyncReady()
+                && !mIsSyncedImageDownloading;
     }
 
     /**
-     * Registers a one-shot callback to be invoked when the theme image download completes. If
-     * nothing is downloading, the callback is invoked immediately with {@code null}.
-     *
-     * @param callback The callback receiving the downloaded theme collection data, or null.
+     * Registers a one-shot callback to be invoked once {@link #isSyncedThemeReady()} is true. If
+     * already ready, the callback is invoked immediately.
      */
-    public void addOneShotCompletionCallback(
-            Callback<@Nullable NtpBackgroundDataThemeCollection> callback) {
-        if (!isContinuousSyncedImageDownloading()) {
-            callback.onResult(null);
+    public void addOneShotReadinessCallback(Runnable callback) {
+        if (isSyncedThemeReady()) {
+            callback.run();
             return;
         }
 
-        mDownloadCallbacks.addObserver(callback);
+        mReadinessCallbacks.addObserver(callback);
+    }
+
+    /** Removes a previously registered readiness callback. */
+    public void removeReadinessCallback(Runnable callback) {
+        mReadinessCallbacks.removeObserver(callback);
     }
 
     /**
-     * Removes a previously registered completion callback.
-     *
-     * @param callback The callback to remove.
+     * Notifies all registered readiness callbacks if the synced theme is ready, and clears the
+     * registered callbacks afterward.
      */
-    public void removeCompletionCallback(
-            Callback<@Nullable NtpBackgroundDataThemeCollection> callback) {
-        mDownloadCallbacks.removeObserver(callback);
+    private void maybeNotifyReadinessCallbacks() {
+        if (!isSyncedThemeReady()) {
+            return;
+        }
+
+        for (Runnable callback : mReadinessCallbacks) {
+            callback.run();
+        }
+        mReadinessCallbacks.clear();
     }
 
     /** Returns whether a synced theme collection image is currently downloading. */

@@ -188,7 +188,7 @@ void GridLanesGapAccumulator::CaptureEmptyOpenings(
       }
     }
   }
-  gap_geometry_->SetGridLanesEmptyOpenings(std::move(empty_openings));
+  gap_geometry_->SetEmptyOpenings(std::move(empty_openings));
 }
 
 const GapGeometry* GridLanesGapAccumulator::FinalizeGapGeometry(
@@ -211,7 +211,7 @@ const GapGeometry* GridLanesGapAccumulator::FinalizeGapGeometry(
   // Placement is skipped when the container has no in-flow items, so every
   // lane is empty.
   if (grid_lanes.empty() && HasMainGaps()) {
-    gap_geometry_->SetGridLanesEmptyOpenings(GridLanesEmptyOpenings(
+    gap_geometry_->SetEmptyOpenings(GridLanesEmptyOpenings(
         UncollapsedTrackCount(), {{/*start_position=*/LayoutUnit::Min(),
                                    /*end_position=*/LayoutUnit::Max()}}));
   }
@@ -358,19 +358,17 @@ void GridLanesGapAccumulator::BuildCrossGaps(
       ++collapsed_track_index;
       continue;
     }
-    const GridLaneData* lane_data = grid_lanes[raw_track_index];
+    const GridLaneData& lane_data = grid_lanes[raw_track_index];
     current_lane_occupants.Shrink(0);
 #if DCHECK_IS_ON()
     const wtf_size_t lane_cross_gap_start = gap_geometry_->CrossGapCount();
 #endif
-    if (lane_data) {
-      const auto& items = lane_data->item_data;
-      for (wtf_size_t item_index = 0; item_index < items.size(); ++item_index) {
-        RecordLaneItemTree(
-            *items[item_index], state.is_fill_reverse,
-            /*contains_last_item_in_lane=*/item_index == items.size() - 1,
-            compact_track_index, state, current_lane_occupants);
-      }
+    const auto& items = lane_data.item_data;
+    for (wtf_size_t item_index = 0; item_index < items.size(); ++item_index) {
+      RecordLaneItemTree(
+          *items[item_index], state.is_fill_reverse,
+          /*contains_last_item_in_lane=*/item_index == items.size() - 1,
+          compact_track_index, state, current_lane_occupants);
     }
 
 #if DCHECK_IS_ON()

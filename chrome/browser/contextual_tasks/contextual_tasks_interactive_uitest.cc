@@ -52,6 +52,7 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/contextual_search/tab_contextualization_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
@@ -67,9 +68,15 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/infobars/confirm_infobar.h"
+#include "chrome/browser/ui/views/infobars/infobar_container_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
+#include "chrome/browser/ui/views/page_info/page_info_cookies_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog.h"
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
+#include "chrome/browser/ui/views/site_data/site_data_row_view.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_test_accessor.h"
 #include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
@@ -77,8 +84,11 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/browsing_data/content/browsing_data_model.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/contextual_search/contextual_search_types.h"
 #include "components/contextual_search/mock_contextual_search_session_handle.h"
 #include "components/contextual_search/pref_names.h"
@@ -116,6 +126,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "third_party/lens_server_proto/aim_query.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_cluster_info.pb.h"
@@ -128,6 +139,7 @@
 #include "ui/base/clipboard/clipboard_monitor.h"
 #include "ui/base/clipboard/clipboard_observer.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/interaction/polling_state_observer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
@@ -136,7 +148,11 @@
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/interaction/interaction_test_util_views.h"
+#include "ui/views/window/dialog_delegate.h"
 
 using testing::_;
 
@@ -4889,8 +4905,10 @@ class ContextualTasksExtensionLensButtonInteractiveUiTest
     enabled.push_back({kContextualTasksRearchitecture, {}});
     enabled.push_back({kContextualTasksSidePanelRearchitecture, {}});
     enabled.push_back({extensions_features::kApiContextualTasksPrivate, {}});
-    feature_list_.InitWithFeaturesAndParameters(enabled,
-                                                GetDefaultDisabledFeatures());
+    std::vector<base::test::FeatureRef> disabled = GetDefaultDisabledFeatures();
+    std::erase(disabled, kContextualTasksRearchitecture);
+    std::erase(disabled, kContextualTasksSidePanelRearchitecture);
+    feature_list_.InitWithFeaturesAndParameters(enabled, disabled);
   }
 
   void SetUpOnMainThread() override {
@@ -5179,8 +5197,10 @@ class ContextualTasksExtensionTabPickerInteractiveUiTest
     enabled.push_back({kEnableContextualTasksPinButtonInToolbar, {}});
     enabled.push_back({kContextualTasksForceEntryPointEligibility, {}});
     enabled.push_back({extensions_features::kApiContextualTasksPrivate, {}});
-    feature_list_.InitWithFeaturesAndParameters(enabled,
-                                                GetDefaultDisabledFeatures());
+    std::vector<base::test::FeatureRef> disabled = GetDefaultDisabledFeatures();
+    std::erase(disabled, kContextualTasksRearchitecture);
+    std::erase(disabled, kContextualTasksSidePanelRearchitecture);
+    feature_list_.InitWithFeaturesAndParameters(enabled, disabled);
   }
 
   void SetUpOnMainThread() override {
@@ -5699,12 +5719,345 @@ IN_PROC_BROWSER_TEST_P(ContextualTasksSidePanelRearchToolbarInteractiveUiTest,
           true));
 }
 
+// This tests the following CUJ:
+//  (1) User opens the Contextual Tasks side panel on an AI Mode page.
+//  (2) User clicks the Super G logo button in the side panel toolbar to open
+//      the Page Info bubble.
+//  (3) User clicks "Cookies and site data", then clicks "Manage on-device site
+//      data".
+//  (4) The `PageSpecificSiteDataDialog` modal opens for the side panel
+//      `WebContents` without crashing, opens the site data settings subpage
+//      when clicking the subtitle link, and closes cleanly when clicking
+//      "Done".
+IN_PROC_BROWSER_TEST_P(ContextualTasksSidePanelRearchToolbarInteractiveUiTest,
+                       SuperGLogoButtonManageOnDeviceSiteDataOpensDialog) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelContentWebContentsId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelToolbarWebContentsId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSettingsTabId);
+
+  const DeepQuery kSuperGButton = {
+      "contextual-tasks-toolbar-app",
+      "#toolbar",
+      ".top-toolbar-logo-button",
+  };
+  const GURL kAimUrl("https://www.google.com/search?q=hello+world&udm=50");
+
+  RunTestSequence(
+      SubmitContextualSearchboxQueryToOpenSidePanel(kOverlayId, "hello world",
+                                                    kAimUrl),
+      NameViewRelative(kContextualTasksSidePanelWebViewElementId,
+                       "SidePanelContentWebViewName",
+                       [](ContextualTasksWebView* web_view) -> views::View* {
+                         return web_view->content_web_view();
+                       }),
+      InstrumentNonTabWebView(kSidePanelContentWebContentsId,
+                              "SidePanelContentWebViewName"),
+      WaitForWebContentsReady(kSidePanelContentWebContentsId),
+      InstrumentSidePanelToolbar(kSidePanelToolbarWebContentsId),
+      InAnyContext(WaitForShow(kContextualTasksSuperGButtonElementId)),
+      WaitForElementVisible(kSidePanelToolbarWebContentsId, kSuperGButton),
+      ClickElement(kSidePanelToolbarWebContentsId, kSuperGButton),
+      WaitForShow(PageInfoBubbleViewBase::kPageInfoBubbleElementIdentifier),
+      WaitForShow(PageInfoMainView::kCookieButtonElementId),
+      PressButton(PageInfoMainView::kCookieButtonElementId),
+      WaitForShow(PageInfoCookiesContentView::kCookieDialogButton),
+      PressButton(PageInfoCookiesContentView::kCookieDialogButton),
+      InAnyContext(WaitForShow(kPageSpecificSiteDataDialogSubtitle)),
+      Check(
+          [this]() {
+            content::WebContents* panel_contents =
+                ContextualTasksPanelController::From(browser())
+                    ->GetActiveWebContents();
+            return panel_contents &&
+                   PageSpecificSiteDataDialogController::FromWebContents(
+                       panel_contents) != nullptr;
+          },
+          "On-device site data dialog is open for the side panel WebContents."),
+      InstrumentNextTab(kSettingsTabId, AnyBrowser()),
+      InAnyContext(WithElement(kPageSpecificSiteDataDialogSubtitle,
+                               [this](ui::TrackedElement* el) {
+                                 AsView<views::StyledLabel>(el)
+                                     ->ClickFirstLinkForTesting();
+                               })
+                       .SetMustRemainVisible(false)),
+      WaitForWebContentsNavigation(
+          kSettingsTabId,
+          chrome::GetSettingsUrl(chrome::kOnDeviceSiteDataSubpage)),
+      Do([this]() { browser()->tab_strip_model()->ActivateTabAt(0); }),
+      InAnyContext(WaitForShow(kPageSpecificSiteDataDialogSubtitle)),
+      InAnyContext(WithElement(
+          kPageSpecificSiteDataDialogSubtitle,
+          [this](ui::TrackedElement* el) {
+            views::test::InteractionTestUtilSimulatorViews::PressButton(
+                AsView<views::View>(el)
+                    ->GetWidget()
+                    ->widget_delegate()
+                    ->AsDialogDelegate()
+                    ->GetOkButton());
+          })),
+      InAnyContext(WaitForHide(kPageSpecificSiteDataDialogSubtitle)),
+      Check(
+          [this]() {
+            content::WebContents* panel_contents =
+                ContextualTasksPanelController::From(browser())
+                    ->GetActiveWebContents();
+            return panel_contents &&
+                   PageSpecificSiteDataDialogController::FromWebContents(
+                       panel_contents) == nullptr;
+          },
+          "On-device site data dialog closed cleanly."));
+}
+
+// This tests the following CUJ:
+//  (1) User opens the Contextual Tasks side panel on an AI Mode page that has
+//      stored first-party site data.
+//  (2) User opens the Page Info bubble from the Super G toolbar button and
+//      clicks "Cookies and site data" -> "Manage on-device site data".
+//  (3) User deletes the site data row in the dialog (which also clears web
+//      sign-in cookies) and clicks "Done".
+//  (4) The side panel does not auto-refresh to zero state; instead, it displays
+//      the native Reload infobar banner and reloads when the user clicks
+//      "Reload".
+IN_PROC_BROWSER_TEST_P(
+    ContextualTasksSidePanelRearchToolbarInteractiveUiTest,
+    SuperGLogoButtonDeletingSiteDataShowsReloadBannerWithoutAutoRefresh) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelContentWebContentsId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelToolbarWebContentsId);
+
+  const DeepQuery kSuperGButton = {
+      "contextual-tasks-toolbar-app",
+      "#toolbar",
+      ".top-toolbar-logo-button",
+  };
+  const GURL kAimUrl("https://www.google.com/search?q=hello+world&udm=50");
+  GURL committed_url;
+
+  RunTestSequence(
+      SubmitContextualSearchboxQueryToOpenSidePanel(kOverlayId, "hello world",
+                                                    kAimUrl),
+      NameViewRelative(kContextualTasksSidePanelWebViewElementId,
+                       "SidePanelContentWebViewName",
+                       [](ContextualTasksWebView* web_view) -> views::View* {
+                         return web_view->content_web_view();
+                       }),
+      InstrumentNonTabWebView(kSidePanelContentWebContentsId,
+                              "SidePanelContentWebViewName"),
+      WaitForWebContentsReady(kSidePanelContentWebContentsId),
+      Do([this, &committed_url]() {
+        content::WebContents* panel_contents =
+            ContextualTasksPanelController::From(browser())
+                ->GetActiveWebContents();
+        ASSERT_TRUE(panel_contents);
+        committed_url = panel_contents->GetLastCommittedURL();
+        content_settings::PageSpecificContentSettings::BrowsingDataAccessed(
+            panel_contents->GetPrimaryMainFrame(),
+            blink::StorageKey::CreateFirstParty(
+                url::Origin::Create(committed_url)),
+            BrowsingDataModel::StorageType::kLocalStorage,
+            /*blocked=*/false);
+      }),
+      InstrumentSidePanelToolbar(kSidePanelToolbarWebContentsId),
+      InAnyContext(WaitForShow(kContextualTasksSuperGButtonElementId)),
+      WaitForElementVisible(kSidePanelToolbarWebContentsId, kSuperGButton),
+      ClickElement(kSidePanelToolbarWebContentsId, kSuperGButton),
+      WaitForShow(PageInfoBubbleViewBase::kPageInfoBubbleElementIdentifier),
+      WaitForShow(PageInfoMainView::kCookieButtonElementId),
+      PressButton(PageInfoMainView::kCookieButtonElementId),
+      WaitForShow(PageInfoCookiesContentView::kCookieDialogButton),
+      PressButton(PageInfoCookiesContentView::kCookieDialogButton),
+      InAnyContext(WaitForShow(kPageSpecificSiteDataDialogRow)),
+      InAnyContext(WithElement(
+          kPageSpecificSiteDataDialogRow,
+          [this](ui::TrackedElement* el) {
+            views::test::InteractionTestUtilSimulatorViews::PressButton(
+                AsView<SiteDataRowView>(el)->delete_button_for_testing());
+          })),
+      InAnyContext(WaitForHide(kPageSpecificSiteDataDialogRow)), Do([this]() {
+        if (GetParam() == UserVariation::kSignedIn) {
+          auto* coordinator = static_cast<ContextualTasksSidePanelCoordinator*>(
+              ContextualTasksPanelController::From(browser()));
+          coordinator->OnAccountsInCookieUpdated(
+              signin::AccountsInCookieJarInfo(/*accounts_are_fresh=*/true, {}),
+              GoogleServiceAuthError::AuthErrorNone());
+        }
+      }),
+      Check(
+          [this, &committed_url]() {
+            content::WebContents* panel_contents =
+                ContextualTasksPanelController::From(browser())
+                    ->GetActiveWebContents();
+            return panel_contents &&
+                   panel_contents->GetLastCommittedURL() == committed_url;
+          },
+          "Deleting cookies in the dialog does not auto-refresh the panel."),
+      InAnyContext(WithElement(
+          kPageSpecificSiteDataDialogFirstPartySection,
+          [this](ui::TrackedElement* el) {
+            views::test::InteractionTestUtilSimulatorViews::PressButton(
+                AsView<views::View>(el)
+                    ->GetWidget()
+                    ->widget_delegate()
+                    ->AsDialogDelegate()
+                    ->GetOkButton());
+          })),
+      InAnyContext(WaitForHide(kPageSpecificSiteDataDialogFirstPartySection)),
+      WaitForShow(ConfirmInfoBar::kOkButtonElementId),
+      CheckView(kContextualTasksSidePanelWebViewElementId,
+                [](ContextualTasksWebView* web_view) {
+                  return web_view->infobar_container() &&
+                         web_view->infobar_container()->GetVisible();
+                }),
+      Check(
+          [this, &committed_url]() {
+            content::WebContents* panel_contents =
+                ContextualTasksPanelController::From(browser())
+                    ->GetActiveWebContents();
+            return panel_contents &&
+                   panel_contents->GetLastCommittedURL() == committed_url;
+          },
+          "Side panel remains on the thread URL while reload banner is shown."),
+      PressButton(ConfirmInfoBar::kOkButtonElementId),
+      WaitForWebContentsNavigation(kSidePanelContentWebContentsId),
+      WaitForHide(ConfirmInfoBar::kOkButtonElementId));
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          ContextualTasksSidePanelRearchToolbarInteractiveUiTest,
                          testing::Values(UserVariation::kSignedIn,
                                          UserVariation::kSignedOut,
                                          UserVariation::kIncognito),
                          &UserVariationToString);
+
+// Enables the Pin / Unpin item in the rearchitecture side panel toolbar's
+// overflow menu, as the `ContextualTasks_EphemeralPinning_Desktop` field trial
+// does.
+class ContextualTasksSidePanelRearchToolbarPinInteractiveUiTest
+    : public ContextualTasksSidePanelRearchToolbarInteractiveUiTest {
+ public:
+  void SetUpFeatureList() override {
+    std::vector<base::test::FeatureRefAndParams> enabled;
+    for (const auto& f : GetDefaultEnabledFeatures()) {
+      if (&f.feature.get() != &kContextualTasksHideMenuOnAiPage) {
+        enabled.push_back(f);
+      }
+    }
+    enabled.push_back({kContextualTasksRearchitecture, {}});
+    enabled.push_back({kContextualTasksSidePanelRearchitecture, {}});
+    enabled.push_back({kContextualTasksEnableSpatialModelToolbarLayout, {}});
+    enabled.push_back({kEnableContextualTasksPinButtonInToolbar, {}});
+    enabled.push_back({kContextualTasksForceEntryPointEligibility, {}});
+
+    std::vector<base::test::FeatureRef> disabled = GetDefaultDisabledFeatures();
+    std::erase(disabled, kContextualTasksRearchitecture);
+    std::erase(disabled, kContextualTasksSidePanelRearchitecture);
+    std::erase(disabled, kContextualTasksEnableSpatialModelToolbarLayout);
+    disabled.push_back(kContextualTasksHideMenuOnAiPage);
+
+    feature_list_.InitWithFeaturesAndParameters(enabled, disabled);
+  }
+
+ protected:
+  // Returns whether the Contextual Tasks action is pinned in both the profile's
+  // `PinnedToolbarActionsModel` and the browser toolbar.
+  bool IsContextualTasksActionPinned() const {
+    return PinnedToolbarActionsModel::Get(browser()->GetProfile())
+               ->Contains(kActionSidePanelShowContextualTasks) &&
+           PinnedActionTestAccessor(browser(),
+                                    kActionSidePanelShowContextualTasks)
+               .IsPinned();
+  }
+};
+
+// This tests the following CUJ:
+//  (1) User opens Lens Overlay from the 3-dot App Menu on a web page.
+//  (2) User types a query into the Lens Overlay Contextual Searchbox and
+//      presses Enter to submit.
+//  (3) The Contextual Tasks side panel opens on an AI Mode page.
+//  (4) User clicks the toolbar overflow menu button; the menu shows "Pin".
+//  (5) User clicks "Pin".
+//  (6) The Contextual Tasks action is pinned to the browser toolbar.
+//  (7) User reopens the overflow menu; the menu now shows "Unpin".
+//  (8) User clicks "Unpin".
+//  (9) The Contextual Tasks action is unpinned from the browser toolbar.
+IN_PROC_BROWSER_TEST_P(
+    ContextualTasksSidePanelRearchToolbarPinInteractiveUiTest,
+    OverflowMenuPinAndUnpinSidePanel) {
+  SkipIfIncognito("Toolbar pinning is not eligible in Incognito.");
+
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelToolbarWebContentsId);
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                      kActionPinnedState);
+
+  const DeepQuery kOverflowMenuButton{
+      "contextual-tasks-toolbar-app",
+      "#toolbar",
+      "#overflowMenuButton",
+  };
+  const DeepQuery kOverflowMenu{
+      "contextual-tasks-toolbar-app",
+      "#toolbar",
+      "contextual-tasks-overflow-menu",
+  };
+  const DeepQuery kPinButton{
+      "contextual-tasks-toolbar-app",
+      "#toolbar",
+      "contextual-tasks-overflow-menu",
+      "#pinButton",
+  };
+
+  // Opens the toolbar overflow menu and waits for the open menu to show the
+  // pin item with the label for `label_id`.
+  auto open_menu_and_wait_for_pin_item = [&](int label_id) {
+    return Steps(
+        WaitForElementVisible(kSidePanelToolbarWebContentsId,
+                              kOverflowMenuButton),
+        ClickButton(kSidePanelToolbarWebContentsId, kOverflowMenuButton),
+        WaitForElementExists(kSidePanelToolbarWebContentsId, kOverflowMenu),
+        WaitForJsResultAt(
+            kSidePanelToolbarWebContentsId, kOverflowMenu,
+            content::JsReplace(
+                "el => { const pin = el.shadowRoot.querySelector('#pinButton');"
+                " return Boolean(el.shadowRoot.querySelector('#menu')?.open && "
+                "pin && !pin.hidden && pin.textContent.trim() === $1); }",
+                l10n_util::GetStringUTF8(label_id)),
+            true));
+  };
+
+  RunTestSequence(
+      // Steps 1-3: Open the Contextual Tasks side panel on an AI page from a
+      // Contextual Searchbox query, then instrument the rearchitecture toolbar.
+      SubmitContextualSearchboxQueryToOpenSidePanel(
+          kOverlayId, "hello world",
+          GURL("https://www.google.com/search?q=hello+world&udm=50")),
+      InstrumentSidePanelToolbar(kSidePanelToolbarWebContentsId),
+      PollState(kActionPinnedState,
+                [this]() { return IsContextualTasksActionPinned(); }),
+      WaitForState(kActionPinnedState, false),
+
+      // Steps 4-6: Open the overflow menu, click "Pin", and wait for the
+      // action to be pinned to the toolbar.
+      open_menu_and_wait_for_pin_item(IDS_SIDE_PANEL_HEADER_PIN_BUTTON_TOOLTIP),
+      ClickButton(kSidePanelToolbarWebContentsId, kPinButton),
+      WaitForState(kActionPinnedState, true),
+
+      // Steps 7-9: Reopen the overflow menu, click "Unpin", and wait for the
+      // action to be unpinned from the toolbar.
+      open_menu_and_wait_for_pin_item(
+          IDS_SIDE_PANEL_HEADER_UNPIN_BUTTON_TOOLTIP),
+      ClickButton(kSidePanelToolbarWebContentsId, kPinButton),
+      WaitForState(kActionPinnedState, false));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    ContextualTasksSidePanelRearchToolbarPinInteractiveUiTest,
+    testing::Values(UserVariation::kSignedIn,
+                    UserVariation::kSignedOut,
+                    UserVariation::kIncognito),
+    &UserVariationToString);
 
 INSTANTIATE_TEST_SUITE_P(All,
                          ContextualTasksEphemeralToolbarInteractiveUiTest,
@@ -5946,11 +6299,10 @@ class ContextualTasksSidePanelTabStateInteractiveUiTest
       disabled.push_back(kContextualTasksSidePanelTabState);
     }
     if (IsRearchitectureEnabled()) {
+      std::erase(disabled, kContextualTasksRearchitecture);
+      std::erase(disabled, kContextualTasksSidePanelRearchitecture);
       enabled.push_back({kContextualTasksRearchitecture, {}});
       enabled.push_back({kContextualTasksSidePanelRearchitecture, {}});
-    } else {
-      disabled.push_back(kContextualTasksRearchitecture);
-      disabled.push_back(kContextualTasksSidePanelRearchitecture);
     }
     feature_list_.InitWithFeaturesAndParameters(enabled, disabled);
   }

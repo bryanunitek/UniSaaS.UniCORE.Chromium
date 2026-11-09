@@ -27,6 +27,7 @@
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/history/core/browser/browsing_history_driver.h"
 #include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_backend.h"
@@ -882,9 +883,9 @@ void BrowsingHistoryService::QueryComplete(
   }
 
   state->local_status =
-      results.reached_beginning() ? REACHED_BEGINNING : MORE_RESULTS;
+      results.has_more_results() ? MORE_RESULTS : REACHED_BEGINNING;
 
-  if (results.reached_beginning()) {
+  if (!results.has_more_results()) {
     // Exhausted the local results; continue querying to get remote results.
     // Start querying at the point where local history ends.
     base::Time expiry_treshold =
@@ -1018,9 +1019,21 @@ void BrowsingHistoryService::RecordDuplicateVisitsCount(
   // Note: The histogram max of 150 is chosen to match `RESULTS_PER_PAGE` from
   // chrome/browser/resources/history/constants.ts and `kMaxQueryCount` from
   // chrome/browser/android/history/browsing_history_bridge.cc.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // TODO(crbug.com/574346928): Android: switch to KEEP_ALL_DUPLICATES and
+  // record DuplicateVisitsCount2.
+  // TODO(crbug.com/581328417): iOS: switch to KEEP_ALL_DUPLICATES and record
+  // DuplicateVisitsCount2. Remove DuplicateVisitsCount once both have.
   base::UmaHistogramCustomCounts(
       "History.BrowsingHistoryResult.DuplicateVisitsCount",
       duplicate_visits_count, 0, 150, 50);
+#else
+  // Desktop (chrome://history) uses `QueryOptions::KEEP_ALL_DUPLICATES`, so all
+  // duplicates are counted here rather than some being removed by the DB.
+  base::UmaHistogramCustomCounts(
+      "History.BrowsingHistoryResult.DuplicateVisitsCount2",
+      duplicate_visits_count, 0, 150, 50);
+#endif
 }
 
 void BrowsingHistoryService::WebHistoryQueryComplete(
@@ -1172,8 +1185,12 @@ BrowsingHistoryService::GetSyncedDevicesForFiltering() const {
   base::flat_map<std::pair<std::string, bool>, std::vector<std::string>>
       deduplicated_devices;
 
-  for (const syncer::DeviceInfo* device_info : synced_devices) {
-    deduplicated_devices[{syncer::GetDeviceDisplayName(device_info),
+  std::vector<std::string> device_names =
+      syncer::GetDeviceDisplayNames(synced_devices);
+
+  for (size_t i = 0; i < synced_devices.size(); ++i) {
+    const syncer::DeviceInfo* device_info = synced_devices[i];
+    deduplicated_devices[{device_names[i],
                           device_info_tracker_->IsRecentLocalCacheGuid(
                               device_info->guid())}]
         .push_back(device_info->guid());

@@ -30,7 +30,6 @@
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
@@ -55,9 +54,9 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/visibility.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/window_open_disposition.h"
 
 namespace autofill {
 
@@ -846,11 +845,6 @@ bool SaveCardBubbleControllerImpl::ShouldReshowOnTabVisible() const {
          current_bubble_type_ == PaymentsBubbleType::kUploadComplete;
 }
 
-std::optional<PageActionIconType>
-SaveCardBubbleControllerImpl::GetPageActionIconType() {
-  return PageActionIconType::kSaveCard;
-}
-
 #if !BUILDFLAG(IS_ANDROID)
 std::optional<actions::ActionId>
 SaveCardBubbleControllerImpl::GetActionIdForPageAction() {
@@ -1027,10 +1021,11 @@ void SaveCardBubbleControllerImpl::ShowIconOnly() {
 void SaveCardBubbleControllerImpl::OpenUrl(const GURL& url) {
   was_url_opened_ = true;
 
-  web_contents()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
-                              url, WindowOpenDisposition::kNewForegroundTab,
-                              ui::PAGE_TRANSITION_LINK),
-                          /*navigation_handle_callback=*/{});
+  web_contents()->OpenURL(
+      content::OpenURLParams::CreateBrowserInitiated(
+          url, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
+      /*navigation_handle_callback=*/{});
 }
 
 bool SaveCardBubbleControllerImpl::IsWebContentsActive() {

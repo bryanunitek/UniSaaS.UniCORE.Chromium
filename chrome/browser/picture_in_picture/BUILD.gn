@@ -183,6 +183,10 @@ source_set("impl") {
     sources += [ "auto_picture_in_picture_window_occlusion_helper_stub.cc" ]
   }
 
+  if (use_aura) {
+    deps += [ "//ui/aura" ]
+  }
+
   if (use_ozone) {
     deps += [ "//ui/ozone" ]
   }
@@ -238,6 +242,9 @@ source_set("unit_tests") {
       "//components/unified_consent",
       "//ui/events:test_support",
     ]
+    if (use_ozone) {
+      deps += [ "//ui/ozone" ]
+    }
   } else {
     sources +=
         [ "auto_picture_in_picture_tab_model_observer_helper_unittest.cc" ]
@@ -245,6 +252,13 @@ source_set("unit_tests") {
       "//chrome/browser/android:tabs_public",
       "//chrome/browser/ui/android/tab_model",
       "//chrome/browser/ui/android/tab_model:test_support",
+    ]
+  }
+
+  if (is_chromeos) {
+    deps += [
+      "//ui/aura",
+      "//ui/wm",
     ]
   }
 }
@@ -317,6 +331,7 @@ if (!is_android) {
       "//ui/display",
       "//ui/events:test_support",
       "//ui/gfx/codec",
+      "//ui/shell_dialogs:test_support",
       "//ui/views:test_support",
       "//url",
     ]
@@ -372,6 +387,17 @@ if (!is_android) {
       "//third_party/blink/public/common:headers",
       "//ui/views:test_support",
     ]
+
+    if (is_win || is_linux) {
+      sources += [ "document_pip_dialog_interactive_uitest.cc" ]
+      deps += [
+        "//chrome/browser/preloading:test_support",
+        "//chrome/browser/ui:ui_features",
+        "//components/javascript_dialogs",
+        "//ui/base:test_support",
+        "//ui/display",
+      ]
+    }
   }
 
   source_set("test_support_ui") {
@@ -383,7 +409,6 @@ if (!is_android) {
     public_deps = [
       "//base",
       "//chrome/test:test_support",
-      "//chrome/test:test_support_ui",
       "//ui/gfx/geometry",
     ]
     deps = [

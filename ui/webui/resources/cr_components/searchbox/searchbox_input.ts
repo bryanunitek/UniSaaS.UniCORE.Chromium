@@ -38,6 +38,16 @@ export interface Input {
 export interface InputUpdate {
   text?: string;
   inline?: string;
+  /**
+   * Text shown after `text` and `inline` (e.g. " - example.com/page" when
+   * inline autocompleting the title of that page; see
+   * `AutocompleteMatch.additionalText`). Unlike `text` and `inline`, it is
+   * cleared by any update that doesn't set it, since it only describes the
+   * default match while the input shows that match. It's only painted by the
+   * #mirror, so it's only shown if `urlEmphasisEnabled` is set (currently only
+   * by the full WebUI omnibox popup).
+   */
+  additionalText?: string;
   moveCursorToEnd?: boolean;
   isDeletingInput?: boolean;
   isMatchPreview?: boolean;
@@ -114,9 +124,14 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
   private callbackRouter_: PageCallbackRouter;
   private inputTextChangedListenerId_: number|null = null;
   private lastInput_: Input = {text: '', inline: ''};
+  // See `InputUpdate.additionalText`. Rendered by the #mirror.
+  private additionalText_: string = '';
   private lastUserInput_: string = '';
   private isDeletingInput_: boolean = false;
   private pastedInInput_: boolean = false;
+  // Whether `#input` lost focus since it last gained it, or `blur()` is
+  // blurring it.
+  private inputBlurred_: boolean = false;
   private resizeObserver_: ResizeObserver|null = null;
   private onDocumentSelectionChangeBound_ = () => this.updateEllipsisState_();
   // Bumped by each `setSelectionA11yLabel()` call, so that a deferred
@@ -208,6 +223,8 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
         this.shadowRoot.querySelector<HTMLInputElement|HTMLTextAreaElement>(
             '#input');
     assert(input);
+    // Set before blurring, since Blink ends any composition before 'blur'.
+    this.inputBlurred_ = true;
     input.blur();
   }
 
@@ -255,6 +272,19 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
 
   lastInput(): Input|null {
     return this.lastInput_;
+  }
+
+  /**
+   * Clears the additional text (see `InputUpdate.additionalText`). Called when
+   * the dropdown closes, since that can change the default match, matching
+   * the native omnibox (see `OmniboxController::OnResultChanged()`).
+   */
+  clearAdditionalText() {
+    if (!this.additionalText_) {
+      return;
+    }
+    this.additionalText_ = '';
+    this.updateMirror_();
   }
 
   /**
@@ -338,12 +368,31 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
   //============================================================================
 
   protected onInputFocus_() {
+    this.inputBlurred_ = false;
     this.updateEllipsisState_();
   }
 
   protected onInputBlur_() {
+    this.inputBlurred_ = true;
     this.setSelectionA11yLabel('');
     this.updateEllipsisState_();
+  }
+
+  protected onInputCompositionend_(e: CompositionEvent) {
+    // A composition that ends because the input loses focus isn't committed by
+    // the user.
+    if (this.inputBlurred_) {
+      return;
+    }
+    // Report the committed text again, as typed, e.g. so that it's inline
+    // autocompleted: a composition's last 'input' event is still marked as
+    // composing, and one that the browser ends (e.g. on a mouse press) has
+    // none.
+    this.fire('searchbox-input-text-updated', {
+      value: this.inputElement.value,
+      isComposing: false,
+      event: e,
+    });
   }
 
   protected onInputCopy_(e: ClipboardEvent) {
@@ -458,6 +507,8 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
       this.updateInput_({
         text: text,
         inline: this.lastInput_.inline.substr(1),
+        // The input still shows the same default match.
+        additionalText: this.additionalText_,
       });
       this.fire('searchbox-input-text-updated', {
         value: this.lastInput_.text,
@@ -591,6 +642,10 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
       this.urlEmphasis = null;
     }
     this.setLastInput_(newInput);
+    // Unlike `text` and `inline`, which `update` only overrides if it sets
+    // them, the additional text is cleared unless `update` sets it (see
+    // `InputUpdate.additionalText`).
+    this.additionalText_ = update.additionalText ?? '';
     this.updateEllipsisState_();
     this.updateMirror_();
   }
@@ -620,7 +675,7 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
     }
 
     mirror.textContent = '';
-    mirror.classList.remove('dimmed');
+    mirror.classList.remove('dimmed', 'has-additional-text');
     // Combine user-entered text with inline autocomplete.
     const fullText = this.lastInput_.text + this.lastInput_.inline;
     if (!fullText) {
@@ -648,7 +703,24 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
     mirror.dir = dir;
     this.inputElement.dir = dir;
 
-    // Helper to create and append text spans to the #mirror container.
+    // While showing additional text (e.g. the URL of a page whose title is
+    // inline autocompleted) after the text, as the native omnibox does with a
+    // separate label in the location bar (see
+    // `LocationBarView::SetOmniboxAdditionalText()`), the #mirror lays out the
+    // text and the additional text in a row, so that the additional text is
+    // elided to fit in the space left by the text (see searchbox_input.css).
+    // The text is wrapped in #mirrorText, so that it's still laid out as a
+    // whole, like the input's own text. The additional text isn't part of the
+    // input's value, so it's only painted by the #mirror.
+    let textContainer: HTMLElement = mirror;
+    if (this.additionalText_) {
+      mirror.classList.add('has-additional-text');
+      textContainer = document.createElement('div');
+      textContainer.id = 'mirrorText';
+      mirror.appendChild(textContainer);
+    }
+
+    // Helper to create and append text spans to the text container.
     // Returns the created span, or null if `content` is empty.
     const createSpan =
         (content: string, emphasize: boolean): HTMLSpanElement|null => {
@@ -660,7 +732,7 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
           if (!emphasize) {
             span.classList.add('dimmed');
           }
-          mirror.appendChild(span);
+          textContainer.appendChild(span);
           return span;
         };
 
@@ -713,9 +785,16 @@ export class SearchboxInputElement extends SearchboxInputElementBase {
     // (see searchbox_input.css) is painted in the #mirror's own color. Style it
     // like the trailing text, matching `gfx::RenderText::Elide()`. `fullText`
     // isn't empty, so there's always a trailing span.
-    const lastSpan = mirror.lastElementChild;
+    const lastSpan = textContainer.lastElementChild;
     assert(lastSpan);
     mirror.classList.toggle('dimmed', lastSpan.classList.contains('dimmed'));
+
+    if (this.additionalText_) {
+      const additionalTextSpan = document.createElement('span');
+      additionalTextSpan.id = 'additionalText';
+      additionalTextSpan.textContent = this.additionalText_;
+      mirror.appendChild(additionalTextSpan);
+    }
 
     // Synchronize horizontal scroll position between <input> and #mirror for
     // long text.

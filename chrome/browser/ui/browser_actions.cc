@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/browser_actions.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +20,7 @@
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/notreached.h"
+#include "base/strings/string_split.h"
 #include "base/types/to_address.h"
 #include "build/branding_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -68,7 +70,7 @@
 #include "content/public/common/page_zoom.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
 #include "chrome/browser/ui/browser_commands_mac.h"
@@ -144,7 +146,6 @@
 #include "chrome/browser/ui/safety_hub/safety_hub_util.h"
 #include "chrome/browser/ui/search/omnibox_utils.h"
 #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_bubble.h"
-#include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_toolbar_icon_controller.h"
 #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
@@ -153,7 +154,6 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/organizer/organizer_panel_controller.h"
 #include "chrome/browser/ui/tabs/organizer/organizer_panel_utils.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
@@ -295,6 +295,15 @@ ui::Accelerator GetAcceleratorForCommandId(int command_id) {
   return ui::Accelerator();
 }
 
+// Splits the comma-separated synonym list stored in the string resource
+// `message_id` into individual search terms. Translators may delimit the list
+// with the Arabic ('،'), ideographic ('、') or fullwidth ('，') comma instead
+// of ',', so split on all of them.
+std::vector<std::u16string> GetSynonymsForAction(int message_id) {
+  return base::SplitString(l10n_util::GetStringUTF16(message_id), u",،、，",
+                           base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+}
+
 void MaybeLogSafetyHubNotificationClicked(
     BrowserWindowInterface* bwi,
     const actions::ActionInvocationContext& context) {
@@ -430,6 +439,73 @@ void BrowserActions::InitializeBrowserActions() {
   InitializeToolbarAndMiscActions();
   InitializeNavigationActions();
   InitializeSubmenuActions();
+  PopulateSynonyms();
+}
+
+void BrowserActions::PopulateSynonyms() {
+  CHECK(root_action_item_);
+
+  // Maps an action to the string resource holding its comma-separated search
+  // synonyms. To add synonyms for an action, add a message to
+  // chrome/app/action_synonym_strings.grdp and list it here.
+  static constexpr auto kActionSynonymMessageIds = std::to_array<
+      std::pair<actions::ActionId, int>>({
+      {kActionShowPasswordManager, IDS_ACTION_SYNONYMS_SHOW_PASSWORD_MANAGER},
+      {kActionShowPaymentMethods, IDS_ACTION_SYNONYMS_SHOW_PAYMENT_METHODS},
+      {kActionShowContactInfo, IDS_ACTION_SYNONYMS_SHOW_CONTACT_INFO},
+      {kActionCustomizeChrome, IDS_ACTION_SYNONYMS_CUSTOMIZE_CHROME},
+      {kActionCloseProfile, IDS_ACTION_SYNONYMS_CLOSE_PROFILE},
+      {kActionManageGoogleAccount, IDS_ACTION_SYNONYMS_MANAGE_GOOGLE_ACCOUNT},
+      {kActionOpenGuestProfile, IDS_ACTION_SYNONYMS_OPEN_GUEST_PROFILE},
+      {kActionAddNewProfile, IDS_ACTION_SYNONYMS_ADD_NEW_PROFILE},
+      {kActionManageChromeProfiles, IDS_ACTION_SYNONYMS_MANAGE_CHROME_PROFILES},
+      {kActionShowHistory, IDS_ACTION_SYNONYMS_SHOW_HISTORY},
+      {kActionSidePanelShowHistoryCluster,
+       IDS_ACTION_SYNONYMS_SIDE_PANEL_SHOW_HISTORY_CLUSTER},
+      {kActionBookmarkThisTab, IDS_ACTION_SYNONYMS_BOOKMARK_THIS_TAB},
+      {kActionBookmarkAllTabs, IDS_ACTION_SYNONYMS_BOOKMARK_ALL_TABS},
+      {kActionShowBookmarkBar, IDS_ACTION_SYNONYMS_SHOW_BOOKMARK_BAR},
+      {kActionShowBookmarkManager, IDS_ACTION_SYNONYMS_SHOW_BOOKMARK_MANAGER},
+      {kActionImportSettings, IDS_ACTION_SYNONYMS_IMPORT_SETTINGS},
+      {kActionSidePanelShowReadingList,
+       IDS_ACTION_SYNONYMS_SIDE_PANEL_SHOW_READING_LIST},
+      {kActionExtensionsSubmenuManageExtensions,
+       IDS_ACTION_SYNONYMS_MANAGE_EXTENSIONS},
+      {kActionExtensionsSubmenuVisitChromeWebStore,
+       IDS_ACTION_SYNONYMS_VISIT_CHROME_WEB_STORE},
+      {kActionFind, IDS_ACTION_SYNONYMS_FIND},
+      {kActionSavePage, IDS_ACTION_SYNONYMS_SAVE_PAGE},
+      {kActionInstallPwa, IDS_ACTION_SYNONYMS_INSTALL_PWA},
+      {kActionCreateShortcut, IDS_ACTION_SYNONYMS_CREATE_SHORTCUT},
+      {kActionSendTabToSelf, IDS_ACTION_SYNONYMS_SEND_TAB_TO_SELF},
+      {kActionQrCodeGenerator, IDS_ACTION_SYNONYMS_QR_CODE_GENERATOR},
+      {kActionRouteMedia, IDS_ACTION_SYNONYMS_ROUTE_MEDIA},
+      {kActionTabSearch, IDS_ACTION_SYNONYMS_TAB_SEARCH},
+      {kActionNameWindow, IDS_ACTION_SYNONYMS_NAME_WINDOW},
+      {kActionToggleVerticalTabs, IDS_ACTION_SYNONYMS_TOGGLE_VERTICAL_TABS},
+      {kActionSidePanelShowCustomizeChrome,
+       IDS_ACTION_SYNONYMS_SIDE_PANEL_CUSTOMIZE_CHROME},
+      {kActionShowReadingModeSidePanel, IDS_ACTION_SYNONYMS_SHOW_READING_MODE},
+      {kActionPerformance, IDS_ACTION_SYNONYMS_PERFORMANCE},
+      {kActionTaskManagerAppMenu, IDS_ACTION_SYNONYMS_TASK_MANAGER},
+      {kActionDevTools, IDS_ACTION_SYNONYMS_DEV_TOOLS},
+      {kActionNewIncognitoWindow, IDS_ACTION_SYNONYMS_NEW_INCOGNITO_WINDOW},
+      {kActionShowLensOverlayFromAppMenu,
+       IDS_ACTION_SYNONYMS_SHOW_LENS_OVERLAY},
+      {kActionOpenGlic, IDS_ACTION_SYNONYMS_OPEN_GLIC},
+      {kActionClearBrowsingData, IDS_ACTION_SYNONYMS_CLEAR_BROWSING_DATA},
+      {kActionOptions, IDS_ACTION_SYNONYMS_OPTIONS},
+      {kActionExit, IDS_ACTION_SYNONYMS_EXIT},
+  });
+
+  // TODO(crbug.com/581423314): Each entry costs a FindAction tree walk during
+  // window creation. Verify this stays performant as the synonym table grows.
+  for (const auto& [action_id, message_id] : kActionSynonymMessageIds) {
+    if (actions::ActionItem* action = actions::ActionManager::Get().FindAction(
+            action_id, root_action_item_)) {
+      action->AddSynonyms(GetSynonymsForAction(message_id));
+    }
+  }
 }
 
 void BrowserActions::InitializeSidePanelActions() {
@@ -681,6 +757,7 @@ void BrowserActions::InitializeSidePanelActions() {
         features::IsRoundedIconsEnabled() ? omnibox::kSearchSparkIcon
                                           : omnibox::kSearchSparkOldIcon,
         ui::kColorIcon);
+    int contextual_tasks_icon_size_delta = 0;
     if (contextual_tasks::ShouldUseSuperGIconForPinButtons()) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       contextual_tasks_image = ui::ImageModel::FromImageSkia(
@@ -692,6 +769,7 @@ void BrowserActions::InitializeSidePanelActions() {
       contextual_tasks_image = ui::ImageModel::FromVectorIcon(
           vector_icons::kGoogleColorIcon, ui::kColorIcon);
 #endif
+      contextual_tasks_icon_size_delta = -2;
     } else if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       contextual_tasks_image = ui::ImageModel::FromVectorIcon(
@@ -700,7 +778,11 @@ void BrowserActions::InitializeSidePanelActions() {
       contextual_tasks_image = ui::ImageModel::FromVectorIcon(
           vector_icons::kGoogleColorIcon, ui::kColorIcon);
 #endif
+      contextual_tasks_icon_size_delta = -2;
     }
+    const std::u16string contextual_tasks_label = l10n_util::GetStringUTF16(
+        contextual_tasks::GetContextualTasksPinningStringId(
+            IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL));
     root_action_item_->AddChild(
         actions::ActionItem::Builder(
             base::BindRepeating(
@@ -809,11 +891,11 @@ void BrowserActions::InitializeSidePanelActions() {
                 },
                 bwi))
             .SetActionId(kActionSidePanelShowContextualTasks)
-            .SetText(l10n_util::GetStringUTF16(
-                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
-            .SetTooltipText(l10n_util::GetStringUTF16(
-                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
+            .SetText(contextual_tasks_label)
+            .SetTooltipText(contextual_tasks_label)
             .SetImage(contextual_tasks_image)
+            .SetProperty(chrome::kActionItemIconSizeDeltaKey,
+                         contextual_tasks_icon_size_delta)
             .SetProperty(
                 actions::kActionItemPinnableKey,
                 static_cast<
@@ -1060,9 +1142,8 @@ void BrowserActions::InitializePageActionIconActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                auto* tab_helper = bwi->GetActiveTabInterface()
-                                       ->GetTabFeatures()
-                                       ->commerce_ui_tab_helper();
+                auto* tab_helper = commerce::CommerceUiTabHelper::From(
+                    bwi->GetActiveTabInterface());
                 CHECK(tab_helper);
 
                 tab_helper->OnPriceInsightsIconClicked();
@@ -1087,17 +1168,16 @@ void BrowserActions::InitializePageActionIconActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                auto* tab_features =
-                    bwi->GetActiveTabInterface()->GetTabFeatures();
-                CHECK(tab_features);
+                auto* tab_interface = bwi->GetActiveTabInterface();
+                CHECK(tab_interface);
                 auto* page_action_controller =
                     commerce::DiscountsPageActionViewController::From(
-                        *bwi->GetActiveTabInterface());
+                        *tab_interface);
                 CHECK(page_action_controller);
                 page_action_controller->MaybeShowBubble(/*from_user=*/true);
 
                 auto* commerce_ui_tab_helper =
-                    tab_features->commerce_ui_tab_helper();
+                    commerce::CommerceUiTabHelper::From(tab_interface);
                 CHECK(commerce_ui_tab_helper);
 
                 commerce::metrics::DiscountsMetricCollector::
@@ -1317,21 +1397,6 @@ void BrowserActions::InitializeChromeMenuActions() {
                     controller->SetOrganizerVisible(
                         !controller->IsOrganizerPanelVisible());
                   }
-
-                  // Dismiss the IPH promo if it is currently showing, or abort
-                  // it if it is queued to show.
-                  if (auto* interface =
-                          BrowserUserEducationInterface::From(bwi)) {
-                    const base::Feature& iph_feature =
-                        feature_engagement::kIPHResumptionRailFeature;
-                    if (interface->IsFeaturePromoActive(iph_feature)) {
-                      interface->NotifyFeaturePromoFeatureUsed(
-                          iph_feature,
-                          FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
-                    } else if (interface->IsFeaturePromoQueued(iph_feature)) {
-                      interface->AbortFeaturePromo(iph_feature);
-                    }
-                  }
                 },
                 bwi))
             .SetActionId(kActionToggleOrganizerPanel)
@@ -1351,7 +1416,12 @@ void BrowserActions::InitializeChromeMenuActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                chrome::NewTab(bwi, NewTabTypes::kNewTabCommand);
+                const NewTabTypes new_tab_type =
+                    context.GetProperty(chrome::kActionInvocationSourceKey) ==
+                            chrome::ActionInvocationSource::kViewButton
+                        ? NewTabTypes::kNewTabButton
+                        : NewTabTypes::kNewTabCommand;
+                chrome::NewTab(bwi, new_tab_type);
               },
               bwi))
           .SetActionId(kActionNewTab)
@@ -1538,8 +1608,7 @@ void BrowserActions::InitializeChromeMenuActions() {
           .SetAccelerator(GetAcceleratorForCommandId(IDC_DEV_TOOLS))
           .Build());
 
-  if (send_tab_to_self::SendTabToSelfToolbarIconController::CanShowOnBrowser(
-          bwi)) {
+  if (bwi->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
     root_action_item_->AddChild(
         ChromeMenuAction(
             base::BindRepeating(
@@ -3813,7 +3882,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
                 chrome::ExecAskGoogleAboutThisPage(
                     bwi,
                     lens::LensOverlayInvocationSource::
-                        kContentAreaContextMenuPage,
+                        kContentAreaContextMenuPageAskGoogle,
                     omnibox::ChromeAimEntryPoint::
                         DESKTOP_CHROME_PAGE_CONTEXT_MENU_ASK_GOOGLE);
               },
@@ -4371,7 +4440,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
                   return;
                 }
                 chrome::ExecAskGoogleAboutThisPage(
-                    bwi, lens::LensOverlayInvocationSource::kAppMenu,
+                    bwi, lens::LensOverlayInvocationSource::kAppMenuAskGoogle,
                     omnibox::ChromeAimEntryPoint::
                         DESKTOP_CHROME_APP_MENU_ASK_GOOGLE);
               },
@@ -5247,7 +5316,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::GoBack(bwi, disposition);
               },
@@ -5260,7 +5329,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::Reload(bwi, disposition);
               },
@@ -5284,7 +5353,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::ClearCache(bwi);
                 chrome::ReloadBypassingCache(bwi, disposition);
@@ -5298,7 +5367,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::ReloadBypassingCache(bwi, disposition);
               },
@@ -5322,7 +5391,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::Home(bwi, disposition);
               },
@@ -5335,7 +5404,7 @@ void BrowserActions::InitializeNavigationActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                WindowOpenDisposition disposition =
+                ui::mojom::WindowOpenDisposition disposition =
                     context.GetProperty(chrome::kDispositionKey);
                 chrome::GoForward(bwi, disposition);
               },

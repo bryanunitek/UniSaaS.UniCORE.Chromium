@@ -211,7 +211,6 @@ PaymentHandlerWebFlowViewController::PaymentHandlerWebFlowViewController(
     base::WeakPtr<PaymentRequestSpec> spec,
     base::WeakPtr<PaymentRequestState> state,
     base::WeakPtr<PaymentRequestDialogView> dialog,
-    content::WebContents* payment_request_web_contents,
     Profile* profile,
     GURL target,
     PaymentHandlerOpenWindowCallback first_navigation_complete_callback)
@@ -223,7 +222,7 @@ PaymentHandlerWebFlowViewController::PaymentHandlerWebFlowViewController(
                                                  content::kMaxURLDisplayChars)),
       first_navigation_complete_callback_(
           std::move(first_navigation_complete_callback)),
-      dialog_manager_delegate_(dialog.get(), payment_request_web_contents) {}
+      dialog_manager_delegate_(dialog.get()) {}
 
 PaymentHandlerWebFlowViewController::~PaymentHandlerWebFlowViewController() {
   if (web_contents()) {
@@ -1021,8 +1020,7 @@ void PaymentHandlerWebFlowViewController::OnRequestsFinalized() {
 
 void PaymentHandlerWebFlowViewController::OnRequestDecided(
     permissions::PermissionAction action) {
-  base::UmaHistogramEnumeration("PaymentRequest.Camera.PromptAction", action,
-                                permissions::PermissionAction::NUM);
+  base::UmaHistogramEnumeration("PaymentRequest.Camera.PromptAction", action);
 
   if (!chip_model_ || !permission_dashboard_view()) {
     return;

@@ -824,14 +824,12 @@ PasswordsPrivateDelegateImpl::GetCredentialsWithReusedPassword() {
   return password_check_delegate_.GetCredentialsWithReusedPassword();
 }
 
-bool PasswordsPrivateDelegateImpl::MuteInsecureCredential(
-    const api::passwords_private::PasswordUiEntry& credential) {
-  return password_check_delegate_.MuteInsecureCredential(credential);
+bool PasswordsPrivateDelegateImpl::MuteInsecureCredential(int id) {
+  return password_check_delegate_.MuteInsecureCredential(id);
 }
 
-bool PasswordsPrivateDelegateImpl::UnmuteInsecureCredential(
-    const api::passwords_private::PasswordUiEntry& credential) {
-  return password_check_delegate_.UnmuteInsecureCredential(credential);
+bool PasswordsPrivateDelegateImpl::UnmuteInsecureCredential(int id) {
+  return password_check_delegate_.UnmuteInsecureCredential(id);
 }
 
 void PasswordsPrivateDelegateImpl::StartPasswordCheck(
@@ -923,12 +921,14 @@ void PasswordsPrivateDelegateImpl::DisconnectCloudAuthenticator(
   }
 }
 
-bool PasswordsPrivateDelegateImpl::IsConnectedToCloudAuthenticator() {
+void PasswordsPrivateDelegateImpl::IsConnectedToCloudAuthenticator(
+    base::OnceCallback<void(bool)> is_connected_callback) {
   if (!enclave_manager_) {
-    return false;
+    std::move(is_connected_callback).Run(false);
+    return;
   }
 
-  return enclave_manager_->IsRegistered();
+  enclave_manager_->LoadAndCheckIsRegistered(std::move(is_connected_callback));
 }
 
 password_manager::ActionableError

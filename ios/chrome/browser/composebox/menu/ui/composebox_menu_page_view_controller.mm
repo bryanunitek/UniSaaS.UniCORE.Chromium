@@ -67,6 +67,15 @@ const CGFloat kSeparatorHeight = 1.0f;
 // Size of the fallback globe symbol for shared tabs without a favicon.
 constexpr CGFloat kSharedTabFaviconSymbolSize = 24.0f;
 
+// Display order for tools in the full and secondary menu pages.
+constexpr ComposeboxMode kToolsMenuOrder[] = {
+    ComposeboxMode::kAIM,
+    ComposeboxMode::kPTM,
+    ComposeboxMode::kImageGeneration,
+    ComposeboxMode::kDeepSearch,
+    ComposeboxMode::kCanvas,
+};
+
 // Maps a menu item type to its corresponding attachment option.
 std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
     ComposeboxMenuItemType type) {
@@ -237,12 +246,6 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
 - (NSCollectionLayoutSection*)
     layoutSectionForIndex:(NSInteger)sectionIndex
         layoutEnvironment:(id<NSCollectionLayoutEnvironment>)layoutEnvironment {
-  //  ComposeboxMenuSectionIdentifier identifier =
-  //      ComposeboxMenuSectionIdentifier::kAttachments;
-  //  if (sectionIndex < (NSInteger)_sections.count) {
-  //    identifier = _sections[sectionIndex].identifier;
-  //  }
-
   NSString* sectionTitle = nil;
   if (sectionIndex < (NSInteger)_sections.count) {
     sectionTitle = _sections[sectionIndex].title;
@@ -632,12 +635,6 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
   cell.isAccessibilityElement = YES;
   cell.accessibilityTraits |= UIAccessibilityTraitButton;
 
-  if (IsToolType(item.type)) {
-    cell.accessibilityTraits |= UIAccessibilityTraitToggleButton;
-  } else {
-    cell.accessibilityTraits &= ~UIAccessibilityTraitToggleButton;
-  }
-
   if (item.disabled) {
     configuration.textProperties.color =
         [UIColor colorNamed:kTextSecondaryColor];
@@ -683,6 +680,8 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
   }
 
   if (item.type == ComposeboxMenuItemType::kAttachmentSharedTabs) {
+    cell.accessibilityValue =
+        [NSString stringWithFormat:@"%lu", item.favicons.count];
     [accessories addObject:[[UICellAccessoryDisclosureIndicator alloc] init]];
     // TODO(crbug.com/568743843): Update `ComposeboxFaviconsAccordionView` badge
     // background and border colors so the overflow badge contrasts with the
@@ -703,6 +702,8 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
     // disclosure indicator.
     customViewAccessory.reservedLayoutWidth = 0;
     [accessories addObject:customViewAccessory];
+  } else {
+    cell.accessibilityValue = nil;
   }
   cell.accessories = accessories;
   cell.accessibilityIdentifier =
@@ -795,23 +796,14 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
   NSMutableArray<ComposeboxMenuItem*>* toolsItems =
       [[NSMutableArray alloc] init];
 
-  ComposeboxUIConfig* uiConfig = _inputState.uiConfig;
-  for (ComposeboxMode mode : ComposeboxModeSet::All()) {
-    if (mode == ComposeboxMode::kRegularSearch) {
+  for (ComposeboxMode mode : kToolsMenuOrder) {
+    // AIM and PTM are shown on the main page in the split layout.
+    if ((mode == ComposeboxMode::kAIM || mode == ComposeboxMode::kPTM) &&
+        [self isSplitPageLayout]) {
       continue;
     }
-    // AIM is shown in a separate section.
-    if (mode == ComposeboxMode::kAIM && [self isSplitPageLayout]) {
-      continue;
-    }
-    if (![_inputState isToolHidden:mode]) {
-      [toolsItems
-          addObject:[[ComposeboxMenuItem alloc]
-                        initWithTitle:[uiConfig menuLabelForTool:mode]
-                             subtitle:[uiConfig menuSubtitleForTool:mode]
-                                image:[uiConfig iconForTool:mode]
-                                 type:MenuItemTypeForTool(mode)
-                             disabled:[_inputState isToolDisabled:mode]]];
+    if (ComposeboxMenuItem* item = [self menuItemForToolIfVisible:mode]) {
+      [toolsItems addObject:item];
     }
   }
 
@@ -860,6 +852,25 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
          identifier:ComposeboxMenuSectionIdentifier::kModels];
 }
 
+// Returns a menu item for `mode`, or `nil` when `mode` is hidden or lacks a
+// display title.
+- (ComposeboxMenuItem*)menuItemForToolIfVisible:(ComposeboxMode)mode {
+  if ([_inputState isToolHidden:mode]) {
+    return nil;
+  }
+  ComposeboxUIConfig* uiConfig = _inputState.uiConfig;
+  NSString* toolTitle = [uiConfig menuLabelForTool:mode];
+  if (!toolTitle.length) {
+    return nil;
+  }
+  return [[ComposeboxMenuItem alloc]
+      initWithTitle:toolTitle
+           subtitle:[uiConfig menuSubtitleForTool:mode]
+              image:[uiConfig iconForTool:mode]
+               type:MenuItemTypeForTool(mode)
+           disabled:[_inputState isToolDisabled:mode]];
+}
+
 - (ComposeboxMenuSection*)moreOptionsSection {
   if (_menuPageType != ComposeboxMenuPageType::kMainPage) {
     return nil;
@@ -890,6 +901,10 @@ std::optional<ComposeboxAttachmentOption> AttachmentOptionForMenuItemType(
                  type:MenuItemTypeForTool(ComposeboxMode::kAIM)
              disabled:NO];
     [moreOptionsItems addObject:aimItem];
+  }
+  if (ComposeboxMenuItem* ptmItem =
+          [self menuItemForToolIfVisible:ComposeboxMode::kPTM]) {
+    [moreOptionsItems addObject:ptmItem];
   }
 
   ComposeboxMenuItem* moreOptionsItem = [[ComposeboxMenuItem alloc]

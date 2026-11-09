@@ -17,6 +17,10 @@ class SecurityPrincipal;
 class WebContents;
 }  // namespace content
 
+namespace ui {
+struct ColorProviderKey;
+}
+
 namespace waap {
 
 // Represents the source of a new browser window creation. Used to slice the
@@ -61,10 +65,10 @@ enum class NewWindowCreationSource {
   // Created during navigation in `Navigate()` (`browser_navigator.cc`) or web
   // app navigation capturing (`navigation_capturing_process.cc`), e.g. opening
   // a link in a new window or incognito window
-  // (`WindowOpenDisposition::NEW_WINDOW` / `OFF_THE_RECORD`), Shift+Enter in
-  // the omnibox, navigating when no tabbed browser window exists for the
-  // profile, or capturing/reparenting a web app navigation into a new tabbed
-  // browser window.
+  // (`ui::mojom::WindowOpenDisposition::kNewWindow` / `kOffTheRecord`),
+  // Shift+Enter in the omnibox, navigating when no tabbed browser window exists
+  // for the profile, or capturing/reparenting a web app navigation into a new
+  // tabbed browser window.
   kNavigation = 8,
   // Created by an extension API or extension host helper opening a new normal
   // browser window, e.g. `chrome.windows.create()`, `chrome.tabs.create()`,
@@ -102,6 +106,10 @@ class PrewarmHelper {
   // user profile.
   static void ConfigureWebUIContents(content::WebContents* web_contents,
                                      Profile* profile);
+
+  // Returns the color provider key that `ConfigureWebUIContents()` gives the
+  // WebContents, which the WebUI keeps until it is attached to a window.
+  static ui::ColorProviderKey GetColorProviderKey(Profile* profile);
 
   // Prewarms the WebUI toolbar WebContents for a window of `profile`.
   // Creates the WebContents and configures it for `profile` using

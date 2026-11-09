@@ -16,7 +16,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,6 +25,7 @@
 #include "chrome/browser/readaloud/read_aloud_playback_session.h"
 #include "chrome/browser/readaloud/read_aloud_voice_catalog.h"
 #include "chrome/browser/readaloud/voice_preview_controller.h"
+#include "chrome/browser/reader_mode/reader_mode_service_factory.h"
 #include "chrome/common/readaloud/read_aloud_constants.h"
 #include "components/dom_distiller/content/browser/distiller_page_web_contents.h"
 #include "components/dom_distiller/core/distiller_page.h"
@@ -84,9 +84,11 @@ constexpr char kStandardPlaybackTimeToFirstAudioHistogram[] =
 ReadAloudService::ReadAloudService(
     Profile* profile,
     PlaybackControllerBinder controller_binder,
-    ReadAloudAudioBroker::AudioStreamFactoryBinder factory_binder)
+    ReadAloudAudioBroker::AudioStreamFactoryBinder factory_binder,
+    ReadAloudPlaybackSession::MediaSessionGetter media_session_getter)
     : profile_(profile),
       controller_binder_(controller_binder),
+      media_session_getter_(std::move(media_session_getter)),
       audio_broker_(std::make_unique<ReadAloudAudioBroker>(factory_binder)),
       speech_synthesis_broker_(std::make_unique<SpeechSynthesisBroker>()),
       overview_generation_broker_(std::make_unique<OverviewGenerationBroker>()),
@@ -331,7 +333,7 @@ void ReadAloudService::DistillPage(content::WebContents* web_contents) {
   }
 
   dom_distiller::DomDistillerService* service =
-      dom_distiller::DomDistillerServiceFactory::GetForBrowserContext(
+      reader_mode::ReaderModeServiceFactory::GetForBrowserContext(
           web_contents->GetBrowserContext());
   if (!service) {
     return;
@@ -523,8 +525,8 @@ void ReadAloudService::Initialize(content::WebContents* new_web_contents) {
   ResetVoicePreview();
   ResetPlayback();
   Observe(new_web_contents);
-  media_session_ =
-      std::make_unique<ReadAloudPlaybackSession>(new_web_contents, this);
+  media_session_ = std::make_unique<ReadAloudPlaybackSession>(
+      new_web_contents, this, media_session_getter_);
 
   ProvideInitialMetadata();
   NotifyPlaybackStateChanged(
@@ -720,8 +722,9 @@ void ReadAloudService::OnPlaybackStateChanged(
       return;
     case read_aloud::mojom::PlaybackState::kPlaying:
       MaybeRecordStartupSuccess();
-      if (media_session_) {
-        media_session_->NotifyPlaybackStarted();
+      if (media_session_ && !media_session_->NotifyPlaybackStarted()) {
+        Pause();
+        return;
       }
       NotifyPlaybackStateChanged(state);
       return;

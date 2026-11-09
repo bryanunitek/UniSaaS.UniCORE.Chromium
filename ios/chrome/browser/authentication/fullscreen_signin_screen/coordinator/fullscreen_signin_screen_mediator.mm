@@ -14,7 +14,6 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/time/time.h"
-#import "base/timer/timer.h"
 #import "components/metrics/metrics_pref_names.h"
 #import "components/metrics/metrics_reporting_choice_service.h"
 #import "components/prefs/pref_service.h"
@@ -31,6 +30,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_delegate.h"
 #import "ios/chrome/browser/authentication/ui_bundled/change_profile_continuation_provider.h"
 #import "ios/chrome/browser/authentication/ui_bundled/enterprise/enterprise_utils.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/account_preview_preference_string_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/logging/first_run_signin_logger.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/logging/user_signin_logger.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
@@ -53,6 +53,11 @@ enum class SigninScreenState {
   kFirstRunAsFirstScreen,
   // The screen is in the FRE sequence, but is not the first screen.
   kFirstRunAsOtherScreen,
+  // The screen is shown as the fullscreen sign-in promo.
+  // TODO(crbug.com/581201648): Refactor `FullscreenSigninScreen` to reduce the
+  // number of overlapping enums and avoid branching on access points in
+  // `SigninScreenState`.
+  kFullscreenSigninPromo,
   // The screen is part of deeplink flow.
   kDeeplink,
   // The screen is not part of any of the previous flow.
@@ -103,13 +108,11 @@ enum class SigninScreenState {
   std::unique_ptr<AuthenticationServiceObserverBridge>
       _authServiceObserverBridge;
 
-  // Cancelable callback and timeout timer for the FRE preferred account
-  // request.
+  // Cancelable callback for the FRE preferred account request.
   base::CancelableOnceCallback<void(
       std::optional<
           signin::AccountPreviewDataService::AccountPreviewPreference>)>
       _preferredAccountCallback;
-  base::OneShotTimer _preferredAccountTimer;
 }
 
 - (instancetype)
@@ -167,12 +170,16 @@ enum class SigninScreenState {
       }
     } else if (accessPoint == signin_metrics::AccessPoint::kDeepLinkDefault) {
       _screenState = SigninScreenState::kDeeplink;
+    } else if (accessPoint ==
+               signin_metrics::AccessPoint::kFullscreenSigninPromo) {
+      _screenState = SigninScreenState::kFullscreenSigninPromo;
     } else {
       _screenState = SigninScreenState::kOther;
     }
 
     switch (_screenState) {
       case SigninScreenState::kDeeplink:
+      case SigninScreenState::kFullscreenSigninPromo:
       case SigninScreenState::kOther:
         _logger = [[UserSigninLogger alloc]
               initWithAccessPoint:accessPoint
@@ -202,14 +209,14 @@ enum class SigninScreenState {
   CHECK(!_authenticationService);
   CHECK(!_identityManager);
   CHECK(!_accountPreviewDataService);
-  CHECK(!_preferredAccountTimer.IsRunning());
+  CHECK(_preferredAccountCallback.IsCancelled());
   CHECK(!self.localPrefService);
   CHECK(!self.prefService);
   CHECK(!self.syncService);
 }
 
 - (void)disconnect {
-  if (_preferredAccountTimer.IsRunning()) {
+  if (!_preferredAccountCallback.IsCancelled()) {
     [self stopWaitingForPreferredAccount];
   }
   _consumer = nil;
@@ -229,7 +236,7 @@ enum class SigninScreenState {
     (AuthenticationFlow*)authenticationFlow {
   CHECK(!self.signinInProgress);
   // The UI is disabled while waiting for the preferred account.
-  CHECK(!_preferredAccountTimer.IsRunning());
+  CHECK(_preferredAccountCallback.IsCancelled());
   self.signinInProgress = YES;
   [self userAttemptedToSignin];
   RecordMetricsReportingDefaultState();
@@ -317,14 +324,12 @@ enum class SigninScreenState {
       _consumer.signinStatus = SigninScreenConsumerSigninStatusDisabled;
       break;
   }
-  _consumer.syncEnabled =
-      !_syncService->HasDisableReason(
-          syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY) &&
-      !HasManagedSyncDataType(_syncService);
+  _consumer.syncEnabled = [self isSyncEnabled];
   self.consumer.hasPlatformPolicies = HasPlatformPolicies();
 
   switch (_screenState) {
     case SigninScreenState::kDeeplink:
+    case SigninScreenState::kFullscreenSigninPromo:
     case SigninScreenState::kOther:
     case SigninScreenState::kFirstRunAsOtherScreen:
       self.consumer.screenIntent = SigninScreenConsumerScreenIntentSigninOnly;
@@ -350,7 +355,11 @@ enum class SigninScreenState {
     if ([self isFirstRun]) {
       [self setUpSelectedIdentityForFRE];
     } else {
-      self.selectedIdentity = [self calculateSelectedIdentity];
+      std::optional<signin::AccountPreviewDataService::AccountPreviewPreference>
+          preference = [self selectDefaultOrPreferredAccount];
+      if (preference.has_value()) {
+        [self updateSubtitleWithPreferenceIfNeeded:*preference];
+      }
     }
   }
 }
@@ -404,26 +413,31 @@ enum class SigninScreenState {
 
 #pragma mark - Private
 
-// Synchronously returns the preferred account if one exists and is enabled for
-// the current screen, or the default identity on the device.
-- (id<SystemIdentity>)calculateSelectedIdentity {
+// Synchronously selects the preferred account if one exists and is enabled for
+// the current screen, or the default identity on the device. Returns the
+// preference if a preferred account was selected.
+- (std::optional<signin::AccountPreviewDataService::AccountPreviewPreference>)
+    selectDefaultOrPreferredAccount {
   id<SystemIdentity> defaultIdentity = signin::GetDefaultIdentityOnDevice(
       _identityManager, _accountManagerService);
   // The feature is checked only when there is an account on the device.
   if (defaultIdentity && _accountPreviewDataService &&
-      ((_screenState == SigninScreenState::kOther &&
+      (((_screenState == SigninScreenState::kFullscreenSigninPromo ||
+         _screenState == SigninScreenState::kOther) &&
         base::FeatureList::IsEnabled(
             switches::kEnableAccountPreviewPreferredAccount)) ||
        ([self isFirstRun] &&
         base::FeatureList::IsEnabled(
             switches::kEnableAccountPreviewPreferredAccountFRE)))) {
-    if (id<SystemIdentity> identity =
-            [self identityForPreference:_accountPreviewDataService
-                                            ->GetPreferredAccountForSignin()]) {
-      return identity;
+    std::optional<signin::AccountPreviewDataService::AccountPreviewPreference>
+        preference = _accountPreviewDataService->GetPreferredAccountForSignin();
+    if (id<SystemIdentity> identity = [self identityForPreference:preference]) {
+      self.selectedIdentity = identity;
+      return preference;
     }
   }
-  return defaultIdentity;
+  self.selectedIdentity = defaultIdentity;
+  return std::nullopt;
 }
 
 // Sets up `selectedIdentity` in the FRE, starting with the default identity on
@@ -431,7 +445,6 @@ enum class SigninScreenState {
 - (void)setUpSelectedIdentityForFRE {
   CHECK([self isFirstRun]);
   CHECK(_preferredAccountCallback.IsCancelled());
-  CHECK(!_preferredAccountTimer.IsRunning());
   self.selectedIdentity = signin::GetDefaultIdentityOnDevice(
       _identityManager, _accountManagerService);
   // The feature is checked only when there is an account on the device.
@@ -446,16 +459,10 @@ enum class SigninScreenState {
           preference) {
     [weakSelf onPreferredAccountForFRERetrieved:preference];
   }));
-  // TODO(crbug.com/571469358): Replace blocking UI interaction with a loading
-  // spinner while waiting for the preferred account.
-  [self.consumer setUIEnabled:NO];
-  _preferredAccountTimer.Start(
-      FROM_HERE, switches::kAccountPreviewPreferredAccountFREFetchTimeout.Get(),
-      base::BindOnce(^{
-        [weakSelf stopWaitingForPreferredAccount];
-      }));
+  [self.consumer setContentLoading:YES];
   _accountPreviewDataService->GetPreferredAccountForSigninAsync(
-      _preferredAccountCallback.callback());
+      _preferredAccountCallback.callback(),
+      switches::kAccountPreviewPreferredAccountFREFetchTimeout.Get());
 }
 
 // Handles the result of the FRE preferred account request, selecting the
@@ -466,8 +473,44 @@ enum class SigninScreenState {
         preference {
   if (id<SystemIdentity> identity = [self identityForPreference:preference]) {
     self.selectedIdentity = identity;
+    [self updateSubtitleWithPreferenceIfNeeded:*preference];
   }
   [self stopWaitingForPreferredAccount];
+}
+
+// Returns YES if sync is not disabled or managed by enterprise policy.
+- (BOOL)isSyncEnabled {
+  return !_syncService->HasDisableReason(
+             syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY) &&
+         !HasManagedSyncDataType(_syncService);
+}
+
+// Updates `self.consumer.subtitleOverride` based on `preference` if the
+// customized subtitle feature is enabled for the screen. Once set for the
+// preferred account, the subtitle override is not updated even if the selected
+// account changes later.
+- (void)updateSubtitleWithPreferenceIfNeeded:
+    (const signin::AccountPreviewDataService::AccountPreviewPreference&)
+        preference {
+  // `AccountPreviewDataService` still returns a preference when sign-in is
+  // forced by policy (`prefs::kSigninAllowed` is true) or when sync is disabled
+  // by enterprise policy on the current device. Do not override the subtitle in
+  // those cases, as the screen must display the mandatory forced sign-in
+  // subtitle or avoid promising to sync data types prevented by policy.
+  // Note: `kEnableAccountPreviewPreferredAccountFRE` intentionally gates the
+  // customized subtitle for both FRE and `kFullscreenSigninPromo`, as
+  // `kEnableAccountPreviewPreferredAccount` is already in experiment without
+  // the customized subtitle.
+  if (([self isFirstRun] ||
+       _screenState == SigninScreenState::kFullscreenSigninPromo) &&
+      _authenticationService->GetServiceStatus() ==
+          AuthenticationService::ServiceStatus::SigninAllowed &&
+      [self isSyncEnabled] &&
+      base::FeatureList::IsEnabled(
+          switches::kEnableAccountPreviewPreferredAccountFRE)) {
+    self.consumer.subtitleOverride =
+        signin::GetPromoLabelStringForDefaultFlow(preference);
+  }
 }
 
 // Returns the identity matching `preference` if present on the device.
@@ -483,13 +526,10 @@ enum class SigninScreenState {
       preference->gaia_id);
 }
 
-// Cancels any pending preferred account callback and stops the timeout timer.
+// Cancels any pending preferred account callback and hides the loading state.
 - (void)stopWaitingForPreferredAccount {
   _preferredAccountCallback.Cancel();
-  _preferredAccountTimer.Stop();
-  // TODO(crbug.com/571469358): Replace blocking UI interaction with a loading
-  // spinner while waiting for the preferred account.
-  [self.consumer setUIEnabled:YES];
+  [self.consumer setContentLoading:NO];
 }
 
 - (bool)selectedIdentityIsValid {
@@ -561,8 +601,8 @@ enum class SigninScreenState {
 
 - (void)accountsOnDeviceDidChange {
   if (![self selectedIdentityIsValid]) {
-    self.selectedIdentity = [self calculateSelectedIdentity];
-    if (!self.selectedIdentity && _preferredAccountTimer.IsRunning()) {
+    [self selectDefaultOrPreferredAccount];
+    if (!self.selectedIdentity && !_preferredAccountCallback.IsCancelled()) {
       [self stopWaitingForPreferredAccount];
     }
   }

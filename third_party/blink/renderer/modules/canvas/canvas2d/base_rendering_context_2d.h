@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/byte_size.h"
@@ -15,6 +16,8 @@
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_record.h"
+#include "components/viz/common/gpu/context_lost_observer.h"
+#include "components/viz/common/gpu/raster_context_provider.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_fill_rule.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_image_smoothing_quality.h"
@@ -32,10 +35,12 @@
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/forward.h"  // IWYU pragma: keep (blink::Visitor)
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/instrumentation/canvas_memory_dump_provider.h"
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
+#include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -66,8 +71,10 @@ class CanvasImageProvider;
 class CanvasRenderingContext2DSettings;
 class DrawElementImageOptions;
 class ExceptionState;
+class GlyphRun;
 class ImageData;
 class ImageDataSettings;
+class ShapedText;
 class TextCluster;
 class TextClusterOptions;
 class TextMetrics;
@@ -89,6 +96,8 @@ class MODULES_EXPORT BaseRenderingContext2D
       public FlushForImageObserver,
       public CanvasMemoryDumpClient,
       public WebGraphicsContext3DProviderWrapper::DestructionObserver,
+      public viz::ContextLostObserver,
+      public BitmapGpuChannelLostObserver,
       public ScopedRasterTimer::Host {
  public:
   // MemoryManagedPaintRecorder::Client implementation.
@@ -217,6 +226,7 @@ class MODULES_EXPORT BaseRenderingContext2D
   void strokeText(const String& text, double x, double y);
   void strokeText(const String& text, double x, double y, double max_width);
   TextMetrics* measureText(const String& text);
+  ShapedText* shapeText(const String& text);
   // Renders a TextCluster returned by TextMetrics::getTextClusters(). If
   // possible, the align, baseline, and font from the TextCluster will be used.
   // The x and y parameters are added to the values from the TextCluster to
@@ -231,6 +241,14 @@ class MODULES_EXPORT BaseRenderingContext2D
                          double x,
                          double y,
                          const TextClusterOptions* cluster_options);
+  void fillGlyphRun(const GlyphRun* glyph_run, double x, double y);
+  void strokeGlyphRun(const GlyphRun* glyph_run, double x, double y);
+  void fillGlyphRuns(const HeapVector<Member<GlyphRun>>& glyph_runs,
+                     double x,
+                     double y);
+  void strokeGlyphRuns(const HeapVector<Member<GlyphRun>>& glyph_runs,
+                       double x,
+                       double y);
 
   int LayerCount() const final;
   bool isContextLost() const final {
@@ -383,19 +401,26 @@ class MODULES_EXPORT BaseRenderingContext2D
   bool context_restorable_{true};
 
  private:
+  scoped_refptr<ExportedCanvasResource> CreateExportedResource(
+      scoped_refptr<CanvasResourceSharedImage> resource);
+
   void UpdateRecordingLimits(bool is_graphite);
   virtual bool IsHibernating() const { return false; }
   virtual void EnableAccelerationIfPossible() {}
-  void DrawTextInternal(const String& text,
-                        double x,
-                        double y,
-                        CanvasRenderingContext2DState::PaintType paint_type,
-                        V8CanvasTextAlign::Enum align,
-                        V8CanvasTextBaseline::Enum baseline,
-                        unsigned run_start,
-                        unsigned run_end,
-                        double* max_width = nullptr,
-                        const Font* cluster_font = nullptr);
+  // When set, `direction_override` is used instead of the context direction,
+  // and the canvas unicode-bidi override is ignored.
+  void DrawTextInternal(
+      const String& text,
+      double x,
+      double y,
+      CanvasRenderingContext2DState::PaintType paint_type,
+      V8CanvasTextAlign::Enum align,
+      V8CanvasTextBaseline::Enum baseline,
+      unsigned run_start,
+      unsigned run_end,
+      double* max_width = nullptr,
+      const Font* cluster_font = nullptr,
+      std::optional<TextDirection> direction_override = std::nullopt);
 
   void PutByteArray(const SkPixmap& source,
                     const gfx::Rect& source_rect,
@@ -412,6 +437,18 @@ class MODULES_EXPORT BaseRenderingContext2D
   // WebGraphicsContext3DProviderWrapper::DestructionObserver implementation.
   void OnContextDestroyed() override;
 
+  // viz::ContextLostObserver implementation.
+  void OnContextLost() override;
+
+  // BitmapGpuChannelLostObserver implementation.
+  void OnGpuChannelLost() override;
+
+  void NotifyGpuContextLostTask(base::WeakPtr<Canvas2DResourceProvider>);
+
+  bool ShouldReplaceTargetBuffer();
+  void EnsureResourceReadyForDraw();
+  void EnsureWriteAccess();
+  void EndWriteAccess();
   void RasterRecordToSharedImage(cc::PaintRecord last_recording);
   void RasterRecordToSoftwareSurface(cc::PaintRecord last_recording);
   void ApplyAnimatedImageFrameIndexesForId(SkCanvas* canvas, uint32_t id);
@@ -431,10 +468,27 @@ class MODULES_EXPORT BaseRenderingContext2D
   // surface may be called upon to rasterize a texture-backed resource, which
   // must be bound to a GPU context for the current thread.
   base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper_;
+  base::WeakPtr<WebGraphicsSharedImageInterfaceProvider>
+      shared_image_interface_provider_;
+  // `raster_context_provider_` holds a reference on the shared
+  // `RasterContextProvider`, to keep it alive until it notifies us after the
+  // GPU context is lost. Without this, instances of this class would not get
+  // notified after the shared `WebGraphicsContext3DProviderWrapper` instance is
+  // recreated.
+  scoped_refptr<viz::RasterContextProvider> raster_context_provider_;
   cc::PaintImage::Id sw_snapshot_paint_image_id_ = cc::PaintImage::kInvalidId;
   cc::PaintImage::ContentId sw_snapshot_paint_image_content_id_ =
       cc::PaintImage::kInvalidContentId;
-  uint32_t sw_snapshot_sk_image_id_ = 0u;
+  uint64_t sw_snapshot_sk_image_id_ = 0u;
+  cc::PaintImage::ContentId cached_content_id_ =
+      cc::PaintImage::kInvalidContentId;
+  scoped_refptr<StaticBitmapImage> cached_snapshot_;
+  // Whether the content of the current resource must be transferred to a new
+  // resource on CopyOnWrite. True by default, but can be set to false as an
+  // optimization if the current resource is known to have been cleared.
+  bool must_preserve_content_on_copy_on_write_ = true;
+  bool current_resource_has_write_access_ = false;
+  bool is_cleared_ = false;
   std::unique_ptr<MemoryManagedPaintRecorder> recorder_;
   bool clear_frame_ = true;
   size_t max_recorded_op_bytes_ = 0;

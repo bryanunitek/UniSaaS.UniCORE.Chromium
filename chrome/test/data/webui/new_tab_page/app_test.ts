@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {ActionChipsApiProxyImpl, VoiceSearchAction} from 'chrome://new-tab-page/lazy_load.js';
+import {VoiceSearchAction} from 'chrome://new-tab-page/lazy_load.js';
 import type {ActionChipClickDetail, ComposeboxFuseboxActionRequest, ComposeboxVoiceSearchElement, CustomizeButtonsElement, Module} from 'chrome://new-tab-page/lazy_load.js';
 import {ActionChipsRetrievalState, ComposeboxProxyImpl, ModuleRegistry, NtpComposeboxElement} from 'chrome://new-tab-page/lazy_load.js';
-import {ActionChipsHandlerRemote, ActionChipsPageCallbackRouter, IconType, InputSource, QueryActionOverride, SearchboxOverride} from 'chrome://new-tab-page/new_tab_page.js';
+import {ActionChipsHandlerRemote, actionChipsProxyFactory, IconType, InputSource, QueryActionOverride, SearchboxOverride} from 'chrome://new-tab-page/new_tab_page.js';
 import type {ActionChipsPageRemote, CustomizeButtonsDocumentRemote, FuseboxAction, TabInfo} from 'chrome://new-tab-page/new_tab_page.js';
 import {$$, BackgroundManager, browserCommandProxyFactory, CONTEXTUAL_ENTRYPOINT_ELEMENT_ID, CUSTOMIZE_CHROME_BUTTON_ELEMENT_ID, CustomizeButtonsHandlerRemote, customizeButtonsProxyFactory, CustomizeChromeSection, CustomizeDialogPage, GlifAnimationState, newTabPageProxyFactory, NtpCustomizeChromeEntryPoint, NtpElement, SearchboxBrowserProxy, SidePanelOpenTrigger, VoiceAction, WindowProxy} from 'chrome://new-tab-page/new_tab_page.js';
 import type {AppElement, NtpSearchboxElement, PageRemote} from 'chrome://new-tab-page/new_tab_page.js';
@@ -48,6 +48,11 @@ suite('NewTabPageAppTest', () => {
 
   suiteSetup(() => {
     Object.assign(window, {webkitSpeechRecognition: MockSpeechRecognition});
+    loadTimeData.overrideValues({
+      composeboxPersistentAimButton: false,
+      composeboxPersistentAimButtonWithX: false,
+      composeboxRealboxOutsideClick: false,
+    });
   });
   let app: AppElement;
   let customizeButtons: CustomizeButtonsElement;
@@ -875,7 +880,6 @@ suite('NewTabPageAppTest', () => {
   function modulesCommonTests(modulesElementTag: string) {
     test('modules loaded', async () => {
       // Arrange.
-      loadTimeData.overrideValues({navigationStartTime: 0.0});
       windowProxy.setResultFor('now', 123.0);
       const modules = $$(app, modulesElementTag)!;
       assertTrue(!!modules);
@@ -3486,7 +3490,6 @@ suite('NewTabPageAppTest', () => {
 
   suite('ActionChips', () => {
     let actionChipsPageRemote: ActionChipsPageRemote;
-    let actionChipsCallbackRouter: ActionChipsPageCallbackRouter;
 
     setup(async () => {
       loadTimeData.overrideValues({
@@ -3501,21 +3504,17 @@ suite('NewTabPageAppTest', () => {
       await actionChipsPageRemote.$.flushForTesting();
     });
     suiteSetup(() => {
-      actionChipsCallbackRouter = new ActionChipsPageCallbackRouter();
-      const actionChipshandler = installMock(
-          ActionChipsHandlerRemote,
-          mock => ActionChipsApiProxyImpl.setInstance({
-            getHandler: () => mock,
-            getCallbackRouter: () => actionChipsCallbackRouter,
-          }));
+      const actionChipshandler = installMock(ActionChipsHandlerRemote, mock => {
+        const {instance, remote} = actionChipsProxyFactory.createForTest(mock);
+        actionChipsProxyFactory.setInstance(instance);
+        actionChipsPageRemote = remote;
+      });
       const fakeTab: TabInfo = {
         tabId: 1,
         title: 'Test Title',
         url: 'https://example.com/test',
         lastActiveTime: {internalValue: BigInt(12345)},
       };
-      actionChipsPageRemote =
-          actionChipsCallbackRouter.$.bindNewPipeAndPassRemote();
       actionChipshandler.setResultMapperFor('startActionChipsRetrieval', () => {
         actionChipsPageRemote.onActionChipsChanged([
           {
@@ -4621,8 +4620,8 @@ suite('NewTabPageAppTest', () => {
                 'open-composebox', {detail: {text: '', files: []}}));
             await microtasksFinished();
 
-            const composebox = app.shadowRoot.querySelector<HTMLElement>(
-                'ntp-composebox, cr-composebox');
+            const composebox =
+                app.shadowRoot.querySelector<HTMLElement>('ntp-composebox');
             assertTrue(!!composebox);
             composebox.toggleAttribute('in-voice-search-mode', true);
             await microtasksFinished();
@@ -6011,8 +6010,7 @@ suite('NewTabPageAppTest', () => {
           }));
           await microtasksFinished();
 
-          const composebox =
-              app.shadowRoot.querySelector('ntp-composebox, cr-composebox');
+          const composebox = app.shadowRoot.querySelector('ntp-composebox');
           assertTrue(!!composebox);
           composebox.dispatchEvent(new CustomEvent(
               'voice-search-action',
@@ -6047,8 +6045,7 @@ suite('NewTabPageAppTest', () => {
           }));
           await microtasksFinished();
 
-          const composebox =
-              app.shadowRoot.querySelector('ntp-composebox, cr-composebox');
+          const composebox = app.shadowRoot.querySelector('ntp-composebox');
           assertTrue(!!composebox);
           composebox.dispatchEvent(new CustomEvent(
               'voice-search-action',
@@ -6117,7 +6114,7 @@ suite('NewTabPageAppReducedMotionTest', () => {
     windowProxy.setResultFor('waitForLazyRender', Promise.resolve());
     windowProxy.setResultFor('ensureLazyLoaded', Promise.resolve());
     windowProxy.setResultFor('createIframeSrc', '');
-    windowProxy.setResultFor('now', new Date());
+    windowProxy.setResultFor('now', 0);
     windowProxy.setResultFor('url', url);
     windowProxy.setResultFor('matchMedia', {
       matches: false,
@@ -6187,10 +6184,9 @@ suite('NewTabPageAppReducedMotionTest', () => {
         'resetSmartTabSharing', Promise.resolve({active: false}));
     // </if>
     installMock(
-        ActionChipsHandlerRemote, mock => ActionChipsApiProxyImpl.setInstance({
-          getHandler: () => mock,
-          getCallbackRouter: () => new ActionChipsPageCallbackRouter(),
-        }));
+        ActionChipsHandlerRemote,
+        mock => actionChipsProxyFactory.setInstance(
+            actionChipsProxyFactory.createForTest(mock).instance));
   }
 
   async function createAndAppendApp() {
@@ -6301,7 +6297,7 @@ suite('NewTabPageAppContextMenuAnimationTest', () => {
     windowProxy.setResultFor('waitForLazyRender', Promise.resolve());
     windowProxy.setResultFor('ensureLazyLoaded', Promise.resolve());
     windowProxy.setResultFor('createIframeSrc', '');
-    windowProxy.setResultFor('now', new Date());
+    windowProxy.setResultFor('now', 0);
     windowProxy.setResultFor('url', new URL(location.href));
     windowProxy.setResultFor('matchMedia', {
       matches: false,
@@ -6369,10 +6365,9 @@ suite('NewTabPageAppContextMenuAnimationTest', () => {
         'resetSmartTabSharing', Promise.resolve({active: false}));
     // </if>
     installMock(
-        ActionChipsHandlerRemote, mock => ActionChipsApiProxyImpl.setInstance({
-          getHandler: () => mock,
-          getCallbackRouter: () => new ActionChipsPageCallbackRouter(),
-        }));
+        ActionChipsHandlerRemote,
+        mock => actionChipsProxyFactory.setInstance(
+            actionChipsProxyFactory.createForTest(mock).instance));
   }
 
   async function createAndAppendApp() {

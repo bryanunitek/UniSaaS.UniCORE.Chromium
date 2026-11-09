@@ -53,6 +53,64 @@ CHROMIUM_PLUGIN_TESTONLY_WARNINGS_TO_DISABLE = [
     'NoStreams',
 ]
 
+# Checks that apply only to test code. Disabled for non-testonly targets.
+TESTONLY_ERRORPRONE_WARNINGS = [
+    # Checks for JUnit and Truth usage (test runners and assertions).
+    'AssertEqualsArgumentOrderChecker',
+    'AssertSameIncompatible',
+    'AssertThrowsMinimizer',
+    'AssertThrowsMultipleStatements',
+    'AssertionFailureIgnored',
+    'CatchFail',
+    'ChainedAssertionLosesContext',
+    'ExtendingJUnitAssert',
+    'FloatingPointAssertionWithinEpsilon',
+    'JUnit3FloatingPointComparisonWithoutDelta',
+    'JUnit3TestNotRun',
+    'JUnit4ClassAnnotationNonStatic',
+    'JUnit4ClassUsedInJUnit3',
+    'JUnit4EmptyMethods',
+    'JUnit4SetUpNotRun',
+    'JUnit4TearDownNotRun',
+    'JUnit4TestNotRun',
+    'JUnit4TestsNotRunWithinEnclosed',
+    'JUnitAmbiguousTestClass',
+    'JUnitAssertSameCheck',
+    'JUnitIncompatibleType',
+    'JUnitMethodInvoked',
+    'JUnitParameterMethodNotFound',
+    'MissingFail',
+    'ParametersButNotParameterized',
+    'RuleNotRun',
+    'SelfAssertion',
+    'ShouldHaveEvenArgs',
+    'TheoryButNoTheories',
+    'TruthAssertExpected',
+    'TruthConstantAsserts',
+    'TruthGetOrDefault',
+    'TruthIncompatibleType',
+    'TryFailThrowable',
+    # Checks for Mockito usage.
+    'DirectInvocationOnMock',
+    'DoNotMock',
+    'MisleadingEmptyVarargs',
+    'MockIllegalThrows',
+    'MockNotUsedInProduction',
+    'MockitoUsage',
+    # Checks for other test libraries (Robolectric, Guava testlib, Error Prone
+    # test helpers).
+    'MisformattedTestData',
+    'MissingTestCall',
+    'RobolectricShadowDirectlyOn',
+    # Checks for Streams (banned in non-test code by NoStreams).
+    'CollectorShouldNotUseState',
+    'ModifySourceCollectionInStream',
+    'MultipleParallelOrSequentialCalls',
+    'StreamResourceLeak',
+    'StreamToIterable',
+    'StreamToString',
+]
+
 # Full list of checks: https://errorprone.info/bugpatterns
 ERRORPRONE_WARNINGS_TO_DISABLE = [
     # High priority to enable in non-tests:
@@ -164,8 +222,6 @@ ERRORPRONE_WARNINGS_TO_DISABLE = [
     'DefaultCharset',
     # If google-java-format is not going to do this, it's not worth our time.
     'StringConcatToTextBlock',
-    # We don't use Dagger.
-    'RefersToDaggerCodegen',
     # Only has false positives (would not want to enable this).
     'UnicodeEscape',
     # Does not apply to Android because it assumes no desugaring.
@@ -214,6 +270,79 @@ ERRORPRONE_WARNINGS_TO_DISABLE = [
     'NotJavadoc',
     'UnescapedEntity',
     'UnrecognisedJavadocTag',
+    # Checks for libraries that Chromium does not use (AutoValue, Dagger,
+    # Flogger, Guice, GWT, javax.inject, Joda-Time, RxJava, SWIG,
+    # TestParameterInjector, full-runtime protobuf), or for JDK APIs that
+    # Chromium does not use (Optional) or that are not available on Android.
+    'AndroidInjectionBeforeSuper',
+    'AssistedInjectAndInjectOnSameConstructor',
+    'AutoValueBoxedValues',
+    'AutoValueBuilderDefaultsInConstructor',
+    'AutoValueConstructorOrderChecker',
+    'AutoValueFinalMethods',
+    'AutoValueImmutableFields',
+    'AutoValueSubclassLeaked',
+    'BanJNDI',
+    'CloseableProvides',
+    'DaggerProvidesNull',
+    'DoNotMockAutoValue',
+    'EmptySetMultibindingContributions',
+    'FloggerArgumentToString',
+    'FloggerFormatString',
+    'FloggerLogString',
+    'FloggerLogVarargs',
+    'FloggerPerWithoutRateLimit',
+    'FloggerSplitLogStatement',
+    'FloggerStringConcatenation',
+    'GuiceAssistedInjectScoping',
+    'GuiceAssistedParameters',
+    'GuiceInjectOnFinalField',
+    'GuiceNestedCombine',
+    'ICCProfileGetInstance',
+    'InjectInvalidTargetingOnScopingAnnotation',
+    'InjectMoreThanOneScopeAnnotationOnClass',
+    'InjectOnConstructorOfAbstractClass',
+    'InjectOnMemberAndConstructor',
+    'InjectScopeAnnotationOnInterfaceOrAbstractClass',
+    'InjectedConstructorAnnotations',
+    'JavaxInjectOnAbstractMethod',
+    'JavaxInjectOnFinalField',
+    'JodaConstructors',
+    'JodaDateTimeConstants',
+    'JodaDurationWithMillis',
+    'JodaInstantWithMillis',
+    'JodaNewPeriod',
+    'JodaPlusMinusLong',
+    'JodaTimeConverterManager',
+    'JodaToSelf',
+    'JodaWithDurationAddedLong',
+    'MemorySegmentReferenceEquality',
+    'MisplacedScopeAnnotations',
+    'MixedDescriptors',
+    'MoreThanOneInjectableConstructor',
+    'NewFileSystem',
+    'NullOptional',
+    'NullableOptional',
+    'OptionalEquality',
+    'OptionalMapToOptional',
+    'OptionalMapUnusedValue',
+    'OptionalNotPresent',
+    'OptionalOfRedundantMethod',
+    'OutlineNone',
+    'OverlappingQualifierAndScopeAnnotation',
+    'OverridesGuiceInjectableMethod',
+    'OverridesJavaxInjectableMethod',
+    'PrivateSecurityContractProtoAccess',
+    'ProtoTruthMixedDescriptors',
+    'ProvidesMethodOutsideOfModule',
+    'QualifierOrScopeOnInjectMethod',
+    'RefersToDaggerCodegen',
+    'RxReturnValueIgnored',
+    'SwigMemoryLeak',
+    'SystemConsoleNull',
+    'TestParametersNotInitialized',
+    'ThreadBuilderNameWithPlaceholder',
+    'UnnecessaryQualifier',
 ]
 
 # Full list of checks: https://errorprone.info/bugpatterns
@@ -223,7 +352,6 @@ ERRORPRONE_WARNINGS_TO_ENABLE = [
     'BinderIdentityRestoredDangerously',
     'EmptyIf',
     'EqualsBrokenForNull',
-    'FieldCanBeFinal',
     'FieldCanBeLocal',
     'FieldCanBeStatic',
     'InvalidThrows',
@@ -232,7 +360,6 @@ ERRORPRONE_WARNINGS_TO_ENABLE = [
     'RedundantOverride',
     'StaticQualifiedUsingExpression',
     'UnnecessaryStaticImport',
-    'UseBinds',
     'WildcardImport',
 ]
 
@@ -357,6 +484,14 @@ def main():
     errorprone_flags.extend(
         '-Xep:{}:WARN'.format(x) for x in ERRORPRONE_WARNINGS_TO_ENABLE
     )
+    if options.has_chromium_plugin:
+        # A faster copy of FieldCanBeFinal (which is off by default, since it is
+        # experimental). It does nothing without this flag.
+        # Do not pass FieldCanBeFinal via -Xep (to enable or disable). Enabling
+        # it turns on the slow built-in check, and since Error Prone applies
+        # -Xep flags to every check whose name or altNames match, disabling it
+        # also disables FieldCanBeFinalFast.
+        errorprone_flags += ['-XepOpt:FieldCanBeFinalFast:Enabled=true']
     if options.testonly:
         errorprone_flags.extend(
             '-Xep:{}:OFF'.format(x)
@@ -368,6 +503,10 @@ def main():
                 for x in CHROMIUM_PLUGIN_TESTONLY_WARNINGS_TO_DISABLE
             )
         errorprone_flags += ['-XepCompilingTestOnlyCode']
+    else:
+        errorprone_flags.extend(
+            '-Xep:{}:OFF'.format(x) for x in TESTONLY_ERRORPRONE_WARNINGS
+        )
 
     # To enable CheckReturnValue to be opt-out rather than opt-in:
     # packages = 'org.chromium,com.google,java.util.regex'

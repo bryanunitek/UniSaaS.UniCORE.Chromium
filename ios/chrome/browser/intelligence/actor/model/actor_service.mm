@@ -21,6 +21,7 @@
 #import "components/actor/core/task_source_info.h"
 #import "components/actor/public/mojom/actor_types.mojom.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/model/actor_engine.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_enterprise_policy_checker_ios.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_task.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_task_background_worker.h"
@@ -44,7 +45,9 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/browser_util.h"
 #import "ios/web/public/web_state.h"
+#import "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #import "url/gurl.h"
+#import "url/origin.h"
 
 namespace actor {
 
@@ -68,7 +71,8 @@ mojom::ActionResultCode GetFirstFailedActionResultCode(
 void LogActionsProto(
     AggregatedJournal* journal,
     ActorTaskId task_id,
-    const std::vector<optimization_guide::proto::Action>& actions) {
+    const std::vector<optimization_guide::proto::Action>& actions,
+    const absl::flat_hash_set<url::Origin>& added_writable_mainframe_origins) {
   if (!journal) {
     return;
   }
@@ -77,6 +81,15 @@ void LogActionsProto(
   actions_proto.mutable_actions()->Reserve(actions.size());
   for (const auto& action : actions) {
     *actions_proto.add_actions() = action;
+  }
+  if (!added_writable_mainframe_origins.empty()) {
+    auto* origins_proto = actions_proto.mutable_task_metadata()
+                              ->mutable_security()
+                              ->mutable_added_writable_mainframe_origins();
+    origins_proto->Reserve(added_writable_mainframe_origins.size());
+    for (const url::Origin& origin : added_writable_mainframe_origins) {
+      origins_proto->Add(origin.Serialize());
+    }
   }
   journal->LogProto(GURL(), task_id, "PerformActions", /*details=*/{},
                     actions_proto,
@@ -88,6 +101,18 @@ PerformActionsResult MakePerformActionsResult(mojom::ActionResultCode code) {
   PerformActionsResult result;
   result.action_results = MakeActionResults(code);
   return result;
+}
+
+// Returns the first live WebState controlled by `task`, or null.
+// TODO(crbug.com/505080093): Remove once acts and interrupts observe every
+// controlled WebState.
+web::WebState* GetFirstLiveControlledWebState(const ActorTask& task) {
+  for (const auto& weak_web_state : task.controlled_web_states()) {
+    if (web::WebState* web_state = weak_web_state.get()) {
+      return web_state;
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace
@@ -192,27 +217,20 @@ void ActorService::PerformActions(
     ActorTaskId task_id,
     std::vector<optimization_guide::proto::Action> actions,
     std::string task_update,
+    absl::flat_hash_set<url::Origin> added_writable_mainframe_origins,
     PerformActionsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(IsActorEnabled());
 
   EnqueueCommand(&ActorService::DoPerformActions, task_id, std::move(actions),
-                 std::move(task_update), std::move(callback));
-}
-
-void ActorService::RequestTabObservation(ActorTaskId task_id,
-                                         web::WebState* web_state,
-                                         TabObservationCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  EnqueueCommand(
-      &ActorService::DoRequestTabObservation, task_id,
-      web_state ? web_state->GetWeakPtr() : base::WeakPtr<web::WebState>(),
-      std::move(callback));
+                 std::move(task_update),
+                 std::move(added_writable_mainframe_origins),
+                 std::move(callback));
 }
 
 void ActorService::PauseTask(ActorTaskId task_id, bool from_actor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // TODO(crbug.com/496163986): Implement and test. Must be enqueued as a
+  // TODO(crbug.com/567039302): Implement and test. Must be enqueued as a
   // command.
 }
 
@@ -225,12 +243,13 @@ void ActorService::SetTaskInterventionDelegate(
   }
 }
 
-void ActorService::InterruptTask(ActorTaskId task_id,
-                                 ActorTaskInterruptReason reason,
-                                 std::string_view message) {
+void ActorService::InterruptTask(
+    ActorTaskId task_id,
+    InterruptRequest request,
+    ActorTaskResultCallback<InterruptTaskResult> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  EnqueueCommand(&ActorService::DoInterruptTask, task_id, reason,
-                 std::string(message));
+  EnqueueCommand(&ActorService::DoInterruptTask, task_id, std::move(request),
+                 std::move(callback));
 }
 
 void ActorService::StopTask(ActorTaskId task_id,
@@ -371,9 +390,11 @@ void ActorService::DoPerformActions(
     ActorTaskId task_id,
     std::vector<optimization_guide::proto::Action> actions,
     std::string task_update,
+    const absl::flat_hash_set<url::Origin>& added_writable_mainframe_origins,
     PerformActionsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  LogActionsProto(journal_.get(), task_id, actions);
+  LogActionsProto(journal_.get(), task_id, actions,
+                  added_writable_mainframe_origins);
 
   ActorTask* task = FindActiveTask(task_id);
   if (!task) {
@@ -397,7 +418,7 @@ void ActorService::DoPerformActions(
   // leave its target WebStates controlled by the task.
   // TODO(crbug.com/568338837): Rely on the `ActorTask::Act()` check once the
   // task registers its controlled WebStates.
-  if (task->HasPendingAct()) {
+  if (task->HasPendingOperation()) {
     constexpr mojom::ActionResultCode kRejectionCode =
         mojom::ActionResultCode::kExecutionEngineExistingAction;
     LogActRejection(*journal_, task_id, "ActorService::PerformActions",
@@ -416,31 +437,11 @@ void ActorService::DoPerformActions(
   // Resolve and register target WebStates from requests before execution.
   AddControlledWebStates(task, tool_requests);
 
+  task->engine().AddWritableMainframeOrigins(added_writable_mainframe_origins);
+
   task->Act(std::move(tool_requests), task_update,
             base::BindOnce(&ActorService::OnActCompleted, weak_this_, task_id,
                            std::move(callback)));
-}
-
-void ActorService::DoRequestTabObservation(
-    ActorTaskId task_id,
-    base::WeakPtr<web::WebState> weak_web_state,
-    TabObservationCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  web::WebState* web_state = weak_web_state.get();
-  if (!FindActiveTask(task_id) || !web_state) {
-    // TODO(crbug.com/578549018): Reply a dedicated error when the WebState
-    // went away, matching Desktop's `kWebContentsWentAway`.
-    PostReply(base::BindOnce(
-        std::move(callback),
-        base::unexpected(PageContextWrapperError::kGenericError)));
-    return;
-  }
-
-  // The extraction may complete synchronously; its reply is still posted, like
-  // the early reply above, so that every reply runs as its own task.
-  StartTabObservation(task_id, web_state,
-                      base::BindOnce(&ActorService::PostTabObservationReply,
-                                     weak_this_, std::move(callback)));
 }
 
 void ActorService::StartTabObservation(ActorTaskId task_id,
@@ -480,13 +481,68 @@ void ActorService::StartTabObservation(ActorTaskId task_id,
                             GetActorTabObservationPageContextTimeout()];
 }
 
-void ActorService::DoInterruptTask(ActorTaskId task_id,
-                                   ActorTaskInterruptReason reason,
-                                   std::string message) {
+void ActorService::DoInterruptTask(
+    ActorTaskId task_id,
+    InterruptRequest request,
+    ActorTaskResultCallback<InterruptTaskResult> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (ActorTask* task = FindActiveTask(task_id)) {
-    task->Interrupt(reason, message);
+  ActorTask* task = FindActiveTask(task_id);
+  if (!task) {
+    PostReply(
+        base::BindOnce(std::move(callback),
+                       ActorTaskResult<InterruptTaskResult>(
+                           base::unexpected(ActorTaskError::kTaskWentAway))));
+    return;
   }
+  task->Interrupt(
+      request, base::BindOnce(&ActorService::OnInterruptCompleted, weak_this_,
+                              task_id, std::move(callback)));
+}
+
+void ActorService::OnInterruptCompleted(
+    ActorTaskId task_id,
+    ActorTaskResultCallback<InterruptTaskResult> callback,
+    ActorTaskResult<InterruptResponse> result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // `ActorTask` already posted `result`, so reply without `PostReply()`.
+  if (!result.has_value()) {
+    std::move(callback).Run(base::unexpected(result.error()));
+    return;
+  }
+  // The task may have stopped since the user answered.
+  ActorTask* task = FindActiveTask(task_id);
+  if (!task) {
+    std::move(callback).Run(base::unexpected(ActorTaskError::kTaskWentAway));
+    return;
+  }
+  web::WebState* web_state = GetFirstLiveControlledWebState(*task);
+  if (!web_state) {
+    std::move(callback).Run(
+        InterruptTaskResult(result.value(), /*observation=*/nullptr));
+    return;
+  }
+  StartTabObservation(
+      task_id, web_state,
+      base::BindOnce(&ActorService::OnInterruptObservationComplete, weak_this_,
+                     task_id, web_state->GetUniqueIdentifier(), result.value(),
+                     std::move(callback)));
+}
+
+void ActorService::OnInterruptObservationComplete(
+    ActorTaskId task_id,
+    web::WebStateID web_state_id,
+    InterruptResponse response,
+    ActorTaskResultCallback<InterruptTaskResult> callback,
+    PageContextWrapperCallbackResponse page_context_response) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!FindActiveTask(task_id)) {
+    std::move(callback).Run(base::unexpected(ActorTaskError::kTaskWentAway));
+    return;
+  }
+  std::move(callback).Run(InterruptTaskResult(
+      response, std::make_unique<TabObservationResponse>(
+                    web_state_id, std::move(page_context_response),
+                    /*web_state_exists=*/true)));
 }
 
 void ActorService::DoStopTask(ActorTaskId task_id,
@@ -550,14 +606,10 @@ void ActorService::OnPageContextExtractionComplete(
     }
   }
 
+  // TODO(crbug.com/578549018): Reply a dedicated error, matching Desktop's
+  // `kWebContentsWentAway`, when the WebState is destroyed during the
+  // extraction.
   std::move(callback).Run(std::move(response));
-}
-
-void ActorService::PostTabObservationReply(
-    TabObservationCallback callback,
-    PageContextWrapperCallbackResponse response) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  PostReply(base::BindOnce(std::move(callback), std::move(response)));
 }
 
 void ActorService::OnTaskStopped(ActorTaskId task_id) {
@@ -619,15 +671,8 @@ void ActorService::OnActCompleted(ActorTaskId task_id,
   perform_actions_result.action_results = std::move(results);
 
   std::vector<web::WebState*> web_states_to_extract;
-
-  // TODO(crbug.com/505080093): Extract PageContext for *all* of the controlled
-  // WebStates when this is supported, instead of just one. Right now there
-  // should only be one, we iterate until the first valid one.
-  for (const auto& weak_web_state : task->controlled_web_states()) {
-    if (web::WebState* web_state = weak_web_state.get()) {
-      web_states_to_extract.push_back(web_state);
-      break;
-    }
+  if (web::WebState* web_state = GetFirstLiveControlledWebState(*task)) {
+    web_states_to_extract.push_back(web_state);
   }
 
   if (web_states_to_extract.empty()) {

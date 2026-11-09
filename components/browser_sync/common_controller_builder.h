@@ -32,7 +32,7 @@ class AccountSettingService;
 namespace autofill {
 class AddressDataManager;
 class AutofillWebDataService;
-class EntitySuppressionManager;
+class PersonalContextEntityMetadataManager;
 }  // namespace autofill
 
 namespace bookmarks {
@@ -157,8 +157,8 @@ class CommonControllerBuilder {
           web_data_service_on_disk,
       const scoped_refptr<autofill::AutofillWebDataService>&
           web_data_service_in_memory);
-  void SetEntitySuppressionManager(
-      autofill::EntitySuppressionManager* entity_suppression_manager);
+  void SetPersonalContextEntityMetadataManager(
+      autofill::PersonalContextEntityMetadataManager* entity_metadata_manager);
   void SetAimEligibilityService(AimEligibilityService* aim_eligibility_service);
   void SetBookmarkModel(bookmarks::BookmarkModel* bookmark_model);
   void SetBookmarkSyncService(
@@ -434,8 +434,8 @@ class CommonControllerBuilder {
   SafeOptional<raw_ptr<TemplateURLService>> template_url_service_;
   SafeOptional<raw_ptr<skills::SkillsService>> skills_service_;
   SafeOptional<raw_ptr<notebooks::NotebooksService>> notebooks_service_;
-  SafeOptional<raw_ptr<autofill::EntitySuppressionManager>>
-      entity_suppression_manager_;
+  SafeOptional<raw_ptr<autofill::PersonalContextEntityMetadataManager>>
+      entity_metadata_manager_;
 };
 
 }  // namespace browser_sync

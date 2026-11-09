@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "base/check.h"
@@ -105,7 +106,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) InterfacePtrStateBase {
       bool passes_associated_kinds,
       bool has_sync_methods,
       bool has_uninterruptable_methods,
-      std::unique_ptr<MessageReceiver> payload_validator,
+      MessageValidatorFunc payload_validator,
       const char* interface_name,
       MessageToMethodInfoCallback method_info_callback,
       MessageToMethodNameCallback method_name_callback);
@@ -259,11 +260,15 @@ class InterfacePtrState : public InterfacePtrStateBase {
       return;
     }
 
+    MessageValidatorFunc payload_validator = nullptr;
+    if constexpr (!std::is_same_v<typename Interface::ResponseValidator_,
+                                  PassThroughFilter>) {
+      payload_validator = &Interface::ResponseValidator_::Accept;
+    }
     if (MessageReceiverWithResponder* endpoint = InitializeEndpointClient(
             Interface::PassesAssociatedKinds_,
             !SyncMethodTraits<Interface>::GetOrdinals().empty(),
-            Interface::HasUninterruptableMethods_,
-            std::make_unique<typename Interface::ResponseValidator_>(),
+            Interface::HasUninterruptableMethods_, payload_validator,
             Interface::Name_, Interface::MessageToMethodInfo_,
             Interface::MessageToMethodName_)) {
       proxy_ = std::make_unique<Proxy>(endpoint);

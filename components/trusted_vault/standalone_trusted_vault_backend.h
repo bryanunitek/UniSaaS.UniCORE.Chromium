@@ -20,6 +20,7 @@
 #include "components/trusted_vault/local_recovery_factor.h"
 #include "components/trusted_vault/proto/local_trusted_vault.pb.h"
 #include "components/trusted_vault/standalone_trusted_vault_storage.h"
+#include "components/trusted_vault/trusted_vault_client.h"
 #include "components/trusted_vault/trusted_vault_degraded_recoverability_handler.h"
 #include "components/trusted_vault/trusted_vault_histograms.h"
 #include "components/trusted_vault/trusted_vault_server_constants.h"
@@ -31,6 +32,8 @@ class AccountsInCookieJarInfo;
 }  // namespace signin
 
 namespace trusted_vault {
+
+class ChromeSyncEnrollmentHandler;
 
 // Provides interfaces to store/remove keys to/from file storage.
 // This class performs expensive operations and expected to be run from
@@ -50,6 +53,9 @@ class StandaloneTrustedVaultBackend
 
     Delegate& operator=(const Delegate&) = delete;
 
+    virtual void NotifyVaultKeysChanged(
+        SecurityDomainId security_domain,
+        std::optional<TrustedVaultUserActionTriggerForUMA> trigger) = 0;
     virtual void NotifyRecoverabilityDegradedChanged(
         SecurityDomainId security_domain) = 0;
   };
@@ -114,11 +120,14 @@ class StandaloneTrustedVaultBackend
                  SecurityDomainId security_domain,
                  FetchKeysCallback callback);
 
-  // Replaces keys for given |gaia_id| both in memory and on disk.
+  // Replaces keys for given `gaia_id` both in memory and on disk and notifies
+  // the delegate if the vault keys have changed.
   void StoreKeys(const GaiaId& gaia_id,
                  SecurityDomainId security_domain,
                  const std::vector<std::vector<uint8_t>>& keys,
-                 int last_key_version);
+                 int last_key_version,
+                 std::optional<TrustedVaultUserActionTriggerForUMA> trigger =
+                     std::nullopt);
 
   // Marks vault keys as stale.  Afterwards, the next FetchKeys() call for this
   // |account_info| will trigger a key download attempt.
@@ -149,6 +158,12 @@ class StandaloneTrustedVaultBackend
                                 const std::vector<uint8_t>& public_key,
                                 int method_type_hint,
                                 base::OnceCallback<void(bool)> cb);
+
+  // Checks whether `account_info` can be enrolled in `security_domain` without
+  // user interaction.
+  void CanEnroll(const CoreAccountInfo& account_info,
+                 SecurityDomainId security_domain,
+                 base::OnceCallback<void(bool)> cb);
 
   void ClearLocalDataForAccount(const CoreAccountInfo& account_info);
 
@@ -317,6 +332,10 @@ class StandaloneTrustedVaultBackend
   base::flat_map<SecurityDomainId,
                  std::unique_ptr<TrustedVaultConnection::Request>>
       ongoing_add_recovery_method_requests_;
+
+  // Handles enrollment into the `kChromeSync` security domain for
+  // `primary_account_`. Instance changes whenever `primary_account_` changes.
+  std::unique_ptr<ChromeSyncEnrollmentHandler> chrome_sync_enrollment_handler_;
 
   // Used to take care of polling the degraded recoverability state from the
   // server for the |primary_account|. Instance changes whenever

@@ -9,6 +9,7 @@
 #include "base/bits.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/strings/stringprintf.h"
+#include "media/base/video_color_space.h"
 #include "media/gpu/gpu_video_encode_accelerator_helpers.h"
 #include "media/gpu/h264_builder.h"
 #include "media/gpu/h264_rate_control_util.h"
@@ -69,6 +70,46 @@ D3D12_VIDEO_ENCODER_LEVELS_H264 H264LevelIDCToD3D12VideoEncoderLevelsH264(
     }
   }
   NOTREACHED();
+}
+
+// Fills the VUI video signal type of |sps| from |color_space|.
+void FillSPSVideoSignalType(const gfx::ColorSpace& color_space, H264SPS& sps) {
+  const VideoColorSpace video_color_space =
+      VideoColorSpace::FromGfxColorSpace(color_space);
+
+  VideoColorSpace::PrimaryID primaries = video_color_space.primaries();
+  if (primaries == VideoColorSpace::PrimaryID::INVALID) {
+    primaries = VideoColorSpace::PrimaryID::UNSPECIFIED;
+  }
+  VideoColorSpace::TransferID transfer = video_color_space.transfer();
+  if (transfer == VideoColorSpace::TransferID::INVALID) {
+    transfer = VideoColorSpace::TransferID::UNSPECIFIED;
+  }
+  // H.264 E.2.1 only allows matrix_coefficients 0 (RGB) for 4:4:4. D3D12 H.264
+  // encoder supports 4:2:0 only.
+  VideoColorSpace::MatrixID matrix = video_color_space.matrix();
+  if (matrix == VideoColorSpace::MatrixID::INVALID ||
+      matrix == VideoColorSpace::MatrixID::RGB) {
+    matrix = VideoColorSpace::MatrixID::UNSPECIFIED;
+  }
+
+  sps.colour_primaries = static_cast<int>(primaries);
+  sps.transfer_characteristics = static_cast<int>(transfer);
+  sps.matrix_coefficients = static_cast<int>(matrix);
+  sps.colour_description_present_flag =
+      primaries != VideoColorSpace::PrimaryID::UNSPECIFIED ||
+      transfer != VideoColorSpace::TransferID::UNSPECIFIED ||
+      matrix != VideoColorSpace::MatrixID::UNSPECIFIED;
+  sps.video_full_range_flag =
+      color_space.GetRangeID() == gfx::ColorSpace::RangeID::FULL;
+  // Without the video signal type, a decoder infers limited range and an
+  // unspecified colour description, so only emit it when the frame differs.
+  sps.video_signal_type_present_flag =
+      sps.colour_description_present_flag || sps.video_full_range_flag;
+  if (sps.video_signal_type_present_flag) {
+    sps.video_format = 5;  // Unspecified, per H.264 Table E-2.
+    sps.vui_parameters_present_flag = true;
+  }
 }
 
 }  // namespace
@@ -455,6 +496,7 @@ EncoderStatus D3D12VideoEncodeH264Delegate::EncodeImpl(
       mmco;
   if (is_keyframe) {
     H264SPS sps = ToSPS();
+    FillSPSVideoSignalType(input_color_space, sps);
     H264PPS pps = ToPPS(sps);
     packed_header_.Reset();
     BuildPackedH264SPS(packed_header_, sps);
@@ -516,11 +558,18 @@ EncoderStatus D3D12VideoEncodeH264Delegate::EncodeImpl(
                     .long_term_pic_num = destroy_buffer.value()});
   }
   if (update_buffer.has_value()) {
-    if (update_buffer.value() >=
-        reference_frame_manager_.GetMaxLongTermFrameIndexPlus1()) {
-      mmco.push_back({.memory_management_control_operation = 4,
-                      .max_long_term_frame_idx_plus1 =
-                          static_cast<UINT>(update_buffer.value()) + 1});
+    if (!is_keyframe) {
+      // Always pair MMCO 4 with MMCO 6 so that every frame assigning a
+      // long-term frame index also (re)establishes MaxLongTermFrameIdx in the
+      // same slice header. Previously for typical L1T2 encoding, we will be
+      // signaling MMCO 4 right after the first T1 frame after IDR. If that T1
+      // frame get lost, subsequent MMCO 6 on decoding side will fail because
+      // the MaxLongTermFrameIdx would not have been updated correctly.
+      mmco.push_back(
+          {.memory_management_control_operation = 4,
+           .max_long_term_frame_idx_plus1 = static_cast<UINT>(std::max(
+               static_cast<uint32_t>(update_buffer.value()) + 1u,
+               reference_frame_manager_.GetMaxLongTermFrameIndexPlus1()))});
     }
     mmco.push_back({.memory_management_control_operation = 6,
                     .long_term_frame_idx = update_buffer.value()});

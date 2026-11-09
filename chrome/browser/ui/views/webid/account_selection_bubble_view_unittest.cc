@@ -41,6 +41,7 @@
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -451,6 +452,10 @@ class AccountSelectionBubbleViewTest : public ChromeViewsTestBase,
     ASSERT_TRUE(button);
     EXPECT_EQ(button->GetText(),
               l10n_util::GetStringUTF16(IDS_SIGNIN_CONTINUE));
+    EXPECT_EQ(
+        button->GetViewAccessibility().GetCachedName(),
+        l10n_util::GetStringUTF16(IDS_SIGNIN_CONTINUE) + u", " +
+            l10n_util::GetStringUTF16(IDS_ACCOUNT_SELECTION_OPENS_IN_NEW_TAB));
   }
 
   void TestErrorDialog(const std::u16string expected_title,
@@ -1148,10 +1153,6 @@ TEST_F(AccountSelectionBubbleViewTest, MultipleReturningAccounts) {
 
 TEST_F(AccountSelectionBubbleViewTest,
        MultipleReturningAccountsWithTimestamps) {
-  const std::vector<std::string> kAccountSuffixes1 = {"new1", "returning1",
-                                                      "returning2"};
-  const std::vector<std::string> kAccountSuffixes2 = {"new2", "returning3",
-                                                      "returning4"};
   std::vector<IdentityProviderDataPtr> idp_list = {
       base::MakeRefCounted<content::IdentityProviderData>(
           kIdpForDisplay, content::IdentityProviderMetadata(),

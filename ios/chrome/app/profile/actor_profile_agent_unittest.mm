@@ -6,10 +6,10 @@
 
 #import <memory>
 #import <optional>
-#import <set>
 #import <string>
 #import <vector>
 
+#import "base/functional/callback_helpers.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/metrics/histogram_tester.h"
@@ -28,8 +28,8 @@
 #import "ios/chrome/browser/intelligence/actor/model/actor_service.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_service_factory.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_task_background_worker.h"
-#import "ios/chrome/browser/intelligence/actor/public/actor_task_intervention_delegate.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
+#import "ios/chrome/browser/intelligence/actor/test/fake_actor_task_intervention_delegate.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
@@ -44,32 +44,6 @@
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
-
-// Intervention delegate that lets a task be interrupted without resolving the
-// confirmation, so that it stays waiting on the user.
-@interface FakeActorProfileAgentInterventionDelegate
-    : NSObject <ActorTaskInterventionDelegate>
-// Returns whether a user intervention was requested for the task `taskID`.
-- (BOOL)wasInterventionRequestedForTaskID:(actor::ActorTaskId)taskID;
-@end
-
-@implementation FakeActorProfileAgentInterventionDelegate {
-  std::set<actor::ActorTaskId> _requestedTaskIDs;
-}
-
-- (BOOL)wasInterventionRequestedForTaskID:(actor::ActorTaskId)taskID {
-  return _requestedTaskIDs.contains(taskID);
-}
-
-- (void)actorTask:(actor::ActorTaskId)taskID
-    requestUserInterventionWithTitle:(NSString*)title
-                            subtitle:(NSString*)subtitle
-                          buttonText:(NSString*)buttonText
-                   completionHandler:(void (^)(void))completionHandler {
-  _requestedTaskIDs.insert(taskID);
-}
-
-@end
 
 namespace {
 
@@ -151,12 +125,13 @@ class ActorProfileAgentTest : public PlatformTest {
   // and waits until the interrupt requested the user's confirmation.
   void InterruptTask(actor::ActorTaskId task_id) {
     service()->SetTaskInterventionDelegate(task_id, intervention_delegate_);
-    service()->InterruptTask(
-        task_id, actor::ActorTaskInterruptReason::kWaitingUserConfirmation,
-        "Please confirm");
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return [intervention_delegate_ wasInterventionRequestedForTaskID:task_id];
-    }));
+    actor::ConfirmationInterrupt confirmation;
+    confirmation.title = "Please confirm";
+    confirmation.button_text = "Continue";
+    service()->InterruptTask(task_id, std::move(confirmation),
+                             base::DoNothing());
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return intervention_delegate_.requestConfirmationCalled; }));
   }
 
   // Returns the background worker of the task identified by `task_id`, or
@@ -205,8 +180,10 @@ class ActorProfileAgentTest : public PlatformTest {
   id mock_app_agent_;
   ProfileState* profile_state_;
   ActorProfileAgent* agent_;
-  FakeActorProfileAgentInterventionDelegate* intervention_delegate_ =
-      [[FakeActorProfileAgentInterventionDelegate alloc] init];
+  // Leaves the confirmation unresolved, so an interrupted task stays waiting on
+  // the user.
+  FakeActorTaskInterventionDelegate* intervention_delegate_ =
+      [[FakeActorTaskInterventionDelegate alloc] init];
   std::vector<std::unique_ptr<web::FakeWebState>> owned_web_states_;
 };
 

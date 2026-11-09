@@ -255,10 +255,12 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   void SetExternallySourcedComposition(
       const std::u16string& text,
       const std::vector<ui::ImeTextSpan>& ime_text_spans,
+      const gfx::Range& replacement_range,
       const GlobalDOMNodeId& target_dom_node_id,
-      base::OnceClosure on_complete) override;
+      base::OnceCallback<void(const gfx::Range&)> on_complete) override;
   void CommitExternallySourcedComposition(
       const std::u16string& text,
+      const gfx::Range& replacement_range,
       const GlobalDOMNodeId& target_dom_node_id,
       base::OnceClosure on_complete) override;
   void PasteIntoNode(const std::u16string& text,
@@ -1169,8 +1171,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl
                            DoNotAcceptPopupBoundsUntilScreenRectsAcked);
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest,
                            DontPostponeInputEventAckTimeout);
-  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest,
-                           PopupBoundsAreClampedToTheDisplay);
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest, RendererExitedNoDrag);
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest,
                            StopAndStartInputEventAckTimeout);
@@ -1380,6 +1380,26 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // selected input events, and also sets a timer that allows a renderer to
   // "claim" the expected activation notification within a limited time
   // (`kUserActivationVerificationTimeout`).
+  //
+  // This deliberately tracks the earliest event in a touch sequence (to be
+  // precise, touch start instead of touch end as per the user activation spec)
+  // to support long-press and also a legacy notification call from a
+  // gesture-tap-down handler. This would cause a false notification rejection
+  // after a very-long press lasting beyond
+  // `kUserActivationVerificationTimeout`, which is a corner case we can ignore.
+  //
+  // Because of the above, we need to call this even for the events that are not
+  // dispatched to the renderer. The browser may not dispatch the earliest event
+  // in the sequence as an optimization (e.g. because there is no event
+  // listener), but a notification call from a latter event could still be
+  // expected.
+  //
+  // TODO(https://crbug.com/40091540): WebContentsImpl has a "parallel" user
+  // activation tracker through HandleUserInteractionForInputEvent which is
+  // primarily used for OS clipboard messages. We need to consolidate that
+  // tracker into RenderWidgetHostImpl. Not sure why gesture scroll begin events
+  // are included there, this is incompatible with the web exposed user
+  // activation state here.
   void AddExpectedUserActivationNotification(const blink::WebInputEvent& event);
 
   // Clears `expected_user_activation_notifications_`. This is called after

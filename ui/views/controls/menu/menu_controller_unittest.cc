@@ -39,6 +39,9 @@
 #include "ui/base/owned_window_anchor.h"
 #include "ui/base/ozone_buildflags.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
+#include "ui/display/screen_base.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_handler.h"
@@ -85,7 +88,9 @@
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
+#include "ui/events/gesture_detection/gesture_configuration.h"
 #include "ui/views/controls/menu/menu_pre_target_handler.h"
+#include "ui/views/rect_based_targeting_utils.h"
 #endif
 
 
@@ -541,6 +546,9 @@ class MenuControllerTest : public ViewsTestBase,
   MenuController* menu_controller() { return menu_controller_; }
   const MenuItemView* pending_state_item() const {
     return menu_controller_->pending_state_.item;
+  }
+  const gfx::Rect& state_monitor_bounds() const {
+    return menu_controller_->state_.monitor_bounds;
   }
   MenuController::ExitType menu_exit_type() const {
     return menu_controller_->exit_type_;
@@ -1259,6 +1267,89 @@ TEST_F(MenuControllerTest, InitialSelectedItem) {
   check_has_command(FindInitialSelectableMenuItemDown(menu_item()), 2);
   // The last selectable item should be item "Two".
   check_has_command(FindInitialSelectableMenuItemUp(menu_item()), 2);
+}
+
+// Tests that disabled titles (section headers) are only traversable by
+// keyboard when a screen reader is active, whereas other disabled items are
+// traversable whenever native accessibility APIs are in use.
+TEST_F(MenuControllerTest, DisabledTitleTraversableOnlyWithScreenReader) {
+  CreateMenu();
+  // The title is appended after item "Four".
+  MenuItemView* const title = menu_item()->AppendTitle(u"Title");
+  title->SetEnabled(false);
+  MenuItemView* const disabled_item =
+      menu_item()->GetSubmenu()->GetMenuItemAt(0);
+  disabled_item->SetEnabled(false);
+
+  // Without assistive technology, neither is traversable.
+  EXPECT_FALSE(title->IsTraversableByKeyboard());
+  EXPECT_FALSE(disabled_item->IsTraversableByKeyboard());
+  EXPECT_EQ(4, FindInitialSelectableMenuItemUp(menu_item())->GetCommand());
+
+  {
+    // With native accessibility APIs but no screen reader (common on Windows),
+    // the disabled item is traversable but the title is not.
+    const ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
+    EXPECT_FALSE(title->IsTraversableByKeyboard());
+    EXPECT_TRUE(disabled_item->IsTraversableByKeyboard());
+    EXPECT_EQ(4, FindInitialSelectableMenuItemUp(menu_item())->GetCommand());
+  }
+
+  {
+    // With a screen reader, both are traversable.
+    const ui::ScopedAXModeSetter ax_mode_setter(
+        ui::AXMode(ui::AXMode::kNativeAPIs | ui::AXMode::kScreenReader));
+    EXPECT_TRUE(title->IsTraversableByKeyboard());
+    EXPECT_TRUE(disabled_item->IsTraversableByKeyboard());
+    EXPECT_EQ(title, FindInitialSelectableMenuItemUp(menu_item()));
+  }
+
+  {
+    // ChromeOS can set kScreenReader without kNativeAPIs. The title is
+    // traversable, while other disabled items still depend on kNativeAPIs.
+    const ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kScreenReader);
+    EXPECT_TRUE(title->IsTraversableByKeyboard());
+    EXPECT_FALSE(disabled_item->IsTraversableByKeyboard());
+  }
+}
+
+// Tests that accessibility indices of a disabled title match its keyboard
+// traversability, i.e. it is only counted when a screen reader is active.
+TEST_F(MenuControllerTest, AccessibilityDisabledTitleIndices) {
+  CreateMenu();
+  MenuItemView* const title = menu_item()->AppendTitle(u"Title");
+  title->SetEnabled(false);
+  const MenuItemView* const first_item =
+      menu_item()->GetSubmenu()->GetMenuItemAt(0);
+  ui::AXNodeData data;
+
+  {
+    const ui::ScopedAXModeSetter ax_mode_setter(ui::AXMode::kNativeAPIs);
+    OpenMenu(menu_item());
+
+    title->GetViewAccessibility().GetAccessibleNodeData(&data);
+    EXPECT_FALSE(data.HasIntAttribute(ax::mojom::IntAttribute::kPosInSet));
+    data = ui::AXNodeData();
+    first_item->GetViewAccessibility().GetAccessibleNodeData(&data);
+    EXPECT_EQ(1, data.GetIntAttribute(ax::mojom::IntAttribute::kPosInSet));
+    EXPECT_EQ(4, data.GetIntAttribute(ax::mojom::IntAttribute::kSetSize));
+  }
+
+  {
+    const ui::ScopedAXModeSetter ax_mode_setter(
+        ui::AXMode(ui::AXMode::kNativeAPIs | ui::AXMode::kScreenReader));
+    // Recompute the indices under the new mode.
+    MenuChildrenChanged(menu_item());
+
+    data = ui::AXNodeData();
+    title->GetViewAccessibility().GetAccessibleNodeData(&data);
+    EXPECT_EQ(5, data.GetIntAttribute(ax::mojom::IntAttribute::kPosInSet));
+    EXPECT_EQ(5, data.GetIntAttribute(ax::mojom::IntAttribute::kSetSize));
+    data = ui::AXNodeData();
+    first_item->GetViewAccessibility().GetAccessibleNodeData(&data);
+    EXPECT_EQ(1, data.GetIntAttribute(ax::mojom::IntAttribute::kPosInSet));
+    EXPECT_EQ(5, data.GetIntAttribute(ax::mojom::IntAttribute::kSetSize));
+  }
 }
 
 // Verifies that the scroll arrow is shown when the menu content
@@ -3315,6 +3406,176 @@ TEST_F(MenuControllerTest, RegisterClickWithChildViews) {
   DestroyMenuControllerDelegate();
 }
 
+// Gesture twin of RegisterClickWithChildViews: a tap on an item with child
+// views activates it only when the item opts in, exactly like a click.
+TEST_F(MenuControllerTest, RegisterGestureTapWithChildViews) {
+  CreateMenu();
+  DestroyMenuControllerOnMenuClosed(menu_controller_delegate());
+  ShowSubmenu();
+  SubmenuView* submenu = menu_item()->GetSubmenu();
+  MenuItemView* first_menu_item = submenu->GetMenuItemAt(0);
+  first_menu_item->AddChildView(std::make_unique<View>());
+  const gfx::Point location = first_menu_item->bounds().CenterPoint();
+
+  ProcessGestureEvent(
+      submenu,
+      ui::GestureEvent(location.x(), location.y(), 0, ui::EventTimeForNow(),
+                       ui::GestureEventDetails(ui::EventType::kGestureTap)));
+  EXPECT_EQ(menu_controller_delegate()->on_menu_closed_called(), 0);
+
+  first_menu_item->SetTriggerActionWithNonIconChildViews(true);
+  ProcessGestureEvent(
+      submenu,
+      ui::GestureEvent(location.x(), location.y(), 0, ui::EventTimeForNow(),
+                       ui::GestureEventDetails(ui::EventType::kGestureTap)));
+  EXPECT_EQ(menu_controller_delegate()->on_menu_closed_called(), 1);
+  DestroyMenuControllerDelegate();
+}
+
+namespace {
+
+// A small row decoration, such as an icon: targetable, but ignores gestures.
+class GestureCountingView : public View {
+  METADATA_HEADER(GestureCountingView, View)
+
+ public:
+  int gesture_count() const { return gesture_count_; }
+
+  // View:
+  void OnGestureEvent(ui::GestureEvent* event) override { ++gesture_count_; }
+
+ private:
+  int gesture_count_ = 0;
+};
+
+BEGIN_METADATA(GestureCountingView)
+END_METADATA
+
+struct DecorationAboveButton {
+  raw_ptr<GestureCountingView> decoration;
+  raw_ptr<LabelButton> button;
+};
+
+// Puts a 16x16 decoration at the bottom edge of `upper` and a button that fills
+// `lower`, the item right below it. Each press of the button increments
+// `clicks`.
+DecorationAboveButton AddDecorationAboveButton(MenuItemView* upper,
+                                               MenuItemView* lower,
+                                               int* clicks) {
+  upper->SetTitle(std::u16string());
+  View* upper_row = upper->AddChildView(std::make_unique<View>());
+  upper_row->SetPreferredSize(gfx::Size(200, 30));
+  auto* decoration =
+      upper_row->AddChildView(std::make_unique<GestureCountingView>());
+  decoration->SetBounds(10, 14, 16, 16);
+
+  lower->SetTitle(std::u16string());
+  View* lower_row = lower->AddChildView(std::make_unique<View>());
+  lower_row->SetPreferredSize(gfx::Size(200, 30));
+  auto* button = lower_row->AddChildView(std::make_unique<LabelButton>(
+      base::BindRepeating([](int* clicks) { ++*clicks; }, clicks), u"Button"));
+  button->SetBounds(0, 0, 200, 30);
+  return {decoration, button};
+}
+
+// A point inside `button`, just below its top edge, under `decoration`'s
+// column.
+gfx::Point PointNearTopOfButton(const DecorationAboveButton& views) {
+  return gfx::Point(views.decoration->bounds().CenterPoint().x(), 2);
+}
+
+// A 50x50 finger box centered on `point` in root view coordinates, the size
+// Aura gives a touch without a radius.
+gfx::Rect FingerBoxAt(const gfx::Point& point) {
+  gfx::Rect box(point, gfx::Size());
+  box.Outset(25);
+  return box;
+}
+
+}  // namespace
+
+// A finger tap goes to the view under the tap point, like a mouse click, even
+// when the finger box covers a small view in the row above. Otherwise that
+// view, which ignores the tap, steals it, and the controller only sees the
+// container row of the button.
+TEST_F(MenuControllerTest, GestureTapWithFingerBoxTargetsViewUnderPoint) {
+  CreateMenu();
+  SubmenuView* const submenu = menu_item()->GetSubmenu();
+  int clicks = 0;
+  const DecorationAboveButton views = AddDecorationAboveButton(
+      submenu->GetMenuItemAt(0), submenu->GetMenuItemAt(1), &clicks);
+  ShowSubmenu();
+  Widget* const widget = submenu->GetWidget();
+  widget->LayoutRootViewIfNecessary();
+
+  const gfx::Point point = View::ConvertPointToTarget(
+      views.button, widget->GetRootView(), PointNearTopOfButton(views));
+  const gfx::Rect finger_box = FingerBoxAt(point);
+  // The decoration is mostly inside the finger box, which makes it a
+  // candidate for rect-based targeting.
+  ASSERT_GE(PercentCoveredBy(views.decoration->ConvertRectToWidget(
+                                 views.decoration->GetLocalBounds()),
+                             finger_box),
+            0.6f);
+
+  for (const ui::EventType type :
+       {ui::EventType::kGestureTapDown, ui::EventType::kGestureTap}) {
+    ui::GestureEventDetails details(type);
+    details.set_bounding_box(gfx::RectF(finger_box));
+    ui::GestureEvent event(point.x(), point.y(), ui::EF_NONE,
+                           ui::EventTimeForNow(), details);
+    widget->OnGestureEvent(&event);
+  }
+
+  EXPECT_EQ(clicks, 1);
+  EXPECT_EQ(views.decoration->gesture_count(), 0);
+}
+
+// Same as GestureTapWithFingerBoxTargetsViewUnderPoint, but with real touch
+// events and a touch radius, through the gesture recognizer.
+TEST_F(MenuControllerTest, TouchTapWithRadiusTargetsViewUnderPoint) {
+  CreateMenu();
+  SubmenuView* const submenu = menu_item()->GetSubmenu();
+  int clicks = 0;
+  const DecorationAboveButton views = AddDecorationAboveButton(
+      submenu->GetMenuItemAt(0), submenu->GetMenuItemAt(1), &clicks);
+  ShowSubmenu();
+  submenu->GetWidget()->LayoutRootViewIfNecessary();
+  ui::GestureConfiguration* const gesture_config =
+      ui::GestureConfiguration::GetInstance();
+  const float old_default_radius = gesture_config->default_radius();
+  gesture_config->set_default_radius(25);
+
+  gfx::Point point = PointNearTopOfButton(views);
+  View::ConvertPointToScreen(views.button, &point);
+  event_generator()->SetTouchRadius(25, 25);
+  event_generator()->PressTouch(point);
+  event_generator()->ReleaseTouch();
+  gesture_config->set_default_radius(old_default_radius);
+
+  EXPECT_EQ(clicks, 1);
+  EXPECT_EQ(views.decoration->gesture_count(), 0);
+}
+
+// Mouse twin of the tests above. Mouse targeting is point-based, so this
+// passes with or without rect-based gesture targeting.
+TEST_F(MenuControllerTest, ClickNearTopOfButtonUnderDecorationPressesButton) {
+  CreateMenu();
+  SubmenuView* const submenu = menu_item()->GetSubmenu();
+  int clicks = 0;
+  const DecorationAboveButton views = AddDecorationAboveButton(
+      submenu->GetMenuItemAt(0), submenu->GetMenuItemAt(1), &clicks);
+  ShowSubmenu();
+  submenu->GetWidget()->LayoutRootViewIfNecessary();
+
+  gfx::Point point = PointNearTopOfButton(views);
+  View::ConvertPointToScreen(views.button, &point);
+  event_generator()->MoveMouseTo(point);
+  event_generator()->ClickLeftButton();
+
+  EXPECT_EQ(clicks, 1);
+}
+
 #endif  // defined(USE_AURA)
 
 // Tests that having the MenuController deleted during OnMousePressed does not
@@ -5318,6 +5579,105 @@ TEST_F(MenuControllerTest, MenuHostedTextfieldYieldsToOwnerFocusChange) {
   owner->GetFocusManager()->ClearFocus();
   EXPECT_FALSE(textfield->HasFocus());
   EXPECT_FALSE(input_method->GetTextInputClient());
+}
+
+namespace {
+
+class MultiDisplayTestScreen : public display::ScreenBase {
+ public:
+  MultiDisplayTestScreen(const display::Display& primary_display,
+                         const display::Display& window_display,
+                         gfx::NativeWindow target_window)
+      : window_display_id_(window_display.id()),
+        target_window_(target_window),
+        previous_screen_(display::Screen::SetScreenInstance(nullptr)) {
+    display::Screen::SetScreenInstance(this);
+    ProcessDisplayChanged(primary_display, /*is_primary=*/true);
+    ProcessDisplayChanged(window_display, /*is_primary=*/false);
+  }
+
+  MultiDisplayTestScreen(const MultiDisplayTestScreen&) = delete;
+  MultiDisplayTestScreen& operator=(const MultiDisplayTestScreen&) = delete;
+
+  ~MultiDisplayTestScreen() override {
+    display::Screen::SetScreenInstance(nullptr);
+    display::Screen::SetScreenInstance(previous_screen_);
+  }
+
+  display::Display GetDisplayNearestWindow(
+      gfx::NativeWindow window) const override {
+    if (window && window == target_window_) {
+      display::Display display;
+      if (GetDisplayWithDisplayId(window_display_id_, &display)) {
+        return display;
+      }
+    }
+    return GetPrimaryDisplay();
+  }
+
+ private:
+  const int64_t window_display_id_;
+  const gfx::NativeWindow target_window_;
+  const raw_ptr<display::Screen> previous_screen_;
+};
+
+}  // namespace
+
+// Regression test for crbug.com/331956476: When the owning widget is on a
+// larger offset secondary display and global screen coordinates are not
+// supported (e.g. Ozone/Wayland), UpdateInitialLocation() must query the
+// display from the owning widget and normalize monitor_bounds to a (0, 0)
+// origin so tall menus are not clamped to the smaller primary display or
+// miscalculated against an offset work-area origin.
+TEST_F(MenuControllerTest,
+       UpdateInitialLocationUsesOwnerDisplayOnOffsetDisplays) {
+  display::Display primary_display(/*id=*/1, gfx::Rect(0, 0, 2048, 1152));
+  primary_display.set_work_area(gfx::Rect(0, 32, 2048, 1120));
+
+  constexpr gfx::Point kSecondaryOrigins[] = {
+      gfx::Point(2048, 0),
+      gfx::Point(0, -1440),
+  };
+
+  for (const gfx::Point& secondary_origin : kSecondaryOrigins) {
+    SCOPED_TRACE(secondary_origin.ToString());
+    display::Display secondary_display(
+        /*id=*/2, gfx::Rect(secondary_origin, gfx::Size(2560, 1440)));
+    secondary_display.set_work_area(gfx::Rect(
+        secondary_origin + gfx::Vector2d(0, 32), gfx::Size(2560, 1408)));
+
+    CreateMenu({.show = false});
+    constexpr gfx::Size kTallMenuSize(220, 1250);
+    menu_item()->GetSubmenu()->GetScrollViewContainer()->SetPreferredSize(
+        kTallMenuSize);
+
+    {
+      MultiDisplayTestScreen test_screen(primary_display, secondary_display,
+                                         owner()->GetNativeWindow());
+      const gfx::Rect anchor_bounds =
+          ShouldIgnoreScreenBoundsForMenus()
+              ? gfx::Rect(100, 85, 90, 28)
+              : gfx::Rect(secondary_display.work_area().origin() +
+                              gfx::Vector2d(100, 85),
+                          gfx::Size(90, 28));
+
+      menu_controller()->Run(
+          owner(), /*button_controller=*/nullptr, menu_item(), anchor_bounds,
+          MenuAnchorPosition::kTopLeft, ui::mojom::MenuSourceType::kNone);
+
+      const gfx::Rect expected_monitor_bounds =
+          ShouldIgnoreScreenBoundsForMenus()
+              ? gfx::Rect(gfx::Point(0, 0),
+                          secondary_display.work_area().size())
+              : secondary_display.work_area();
+      EXPECT_EQ(expected_monitor_bounds, state_monitor_bounds());
+      EXPECT_EQ(kTallMenuSize.height(),
+                menu_item()->GetSubmenu()->GetScrollViewContainer()->height());
+
+      ExitMenuRun();
+    }
+    DestroyMenuController();
+  }
 }
 
 }  // namespace views

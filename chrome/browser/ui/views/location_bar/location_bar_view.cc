@@ -53,7 +53,6 @@
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/page_action/page_action_properties_provider.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -63,7 +62,6 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_layout.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_util.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_state_helper.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/location_bar/omnibox_popup_file_selector.h"
@@ -104,8 +102,10 @@
 #include "components/omnibox/browser/omnibox_client.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
+#include "components/omnibox/browser/omnibox_text_util.h"
 #include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/vector_icons.h"
+#include "components/omnibox/common/composebox_features.h"
 #include "components/omnibox/common/input_state.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/permissions/permission_request_manager.h"
@@ -113,6 +113,7 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/security_state/core/security_state.h"
 #include "components/startup_metric_utils/common/startup_metric_utils.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -250,9 +251,20 @@ LocationBarView::LocationBarView(BrowserWindowInterface* browser,
 
           // Show focus ring when the Omnibox is visibly focused and either the
           // popup is closed or it's the full WebUI popup, which keeps the
-          // focused look (see `ShouldUsePopupOpenAppearance()`).
+          // focused look (see `ShouldUsePopupOpenAppearance()`). Under the full
+          // popup, the native ring only fills in until the popup's web content
+          // completes its first paint, since the popup is see-through until
+          // then. From then on the popup shows focus itself.
+          const bool full_popup_completed_first_paint =
+              v->is_full_webui_omnibox_ &&
+              v->GetOmniboxController()->popup_state_manager()->popup_state() ==
+                  OmniboxPopupState::kFull &&
+              v->omnibox_popup_view_ && v->omnibox_popup_view_->presenter() &&
+              v->omnibox_popup_view_->presenter()
+                  ->CompletedFirstVisuallyNonEmptyPaint();
           return v->GetOmniboxController()->edit_model()->is_caret_visible() &&
-                 !v->ShouldUsePopupOpenAppearance();
+                 !v->ShouldUsePopupOpenAppearance() &&
+                 !full_popup_completed_first_paint;
         }));
     views::FocusRing::Get(this)->SetOutsetFocusRingDisabled(true);
     views::InstallPillHighlightPathGenerator(this);
@@ -458,14 +470,12 @@ void LocationBarView::Init() {
   selected_keyword_view_ = AddChildView(std::make_unique<SelectedKeywordView>(
       this, profile_, omnibox_controller_.get(), font_list));
 
-  SkColor icon_color = color_provider->GetColor(kColorOmniboxResultsIcon);
-
   std::vector<std::unique_ptr<ContentSettingImageModel>> models =
       ContentSettingImageModel::GenerateContentSettingImageModels();
   for (auto& model : models) {
     auto image_view = std::make_unique<ContentSettingImageView>(
         std::move(model), this, this, browser_, page_action_font_list);
-    image_view->SetIconColor(icon_color);
+    image_view->SetIconColor(kColorOmniboxActionIcon);
     image_view->SetVisible(false);
     content_setting_views_.push_back(AddChildView(std::move(image_view)));
   }
@@ -489,6 +499,13 @@ void LocationBarView::Init() {
       AddChildView(std::make_unique<page_actions::PageActionContainerView>(
           page_action_items, page_actions::PageActionPropertiesProvider(),
           page_action_params));
+  if (base::FeatureList::IsEnabled(
+          omnibox::kComposeboxPersistentAimButtonOmnibox)) {
+    if (auto* ai_mode_page_action_view =
+            page_action_container_->GetPageActionView(kActionAiMode)) {
+      ai_mode_page_action_view->SetFontList(omnibox_chip_font_list);
+    }
+  }
 
   auto clear_all_button = views::CreateVectorImageButton(base::BindRepeating(
       static_cast<void (OmniboxView::*)(const std::u16string&)>(
@@ -566,7 +583,7 @@ std::u16string_view LocationBarView::GetImeInlineAutocompletion() const {
 
 void LocationBarView::SetOmniboxAdditionalText(std::u16string_view text) {
   DCHECK(OmniboxFieldTrial::IsRichAutocompletionEnabled() || text.empty());
-  std::u16string adjusted_text = FormatOmniboxAdditionalText(text);
+  std::u16string adjusted_text = omnibox::FormatAdditionalText(text);
   SetOmniboxAdjacentText(omnibox_additional_text_view_,
                          std::move(adjusted_text));
 }
@@ -805,8 +822,10 @@ void LocationBarView::Layout(PassKey) {
   } else if (ShouldShowKeywordBubble()) {
     // Otherwise, if in keyword mode, adjust indentation to align the icon and
     // the text with the suggestion icons & texts.
-    icon_left += 9;  /*icon_indent_keyword_mode*/
-    text_left += -9; /*text_indent_keyword_mode*/
+    icon_left +=
+        GetLayoutConstant(LayoutConstant::kLocationBarKeywordInputIconIndent);
+    text_left +=
+        GetLayoutConstant(LayoutConstant::kLocationBarKeywordInputTextIndent);
   }
 
   LocationBarLayout leading_decorations(LocationBarLayout::Position::kLeftEdge,
@@ -1015,12 +1034,6 @@ void LocationBarView::OnThemeChanged() {
   // which will trigger an early theme change.
   if (!IsInitialized()) {
     return;
-  }
-
-  const SkColor icon_color =
-      GetColorProvider()->GetColor(kColorOmniboxActionIcon);
-  for (ContentSettingImageView* image_view : content_setting_views_) {
-    image_view->SetIconColor(icon_color);
   }
 
   RefreshBackground();
@@ -1244,6 +1257,13 @@ OmniboxPopupFileSelector* LocationBarView::GetOmniboxPopupFileSelector() const {
 
 OmniboxPopupAimPresenter* LocationBarView::GetOmniboxPopupAimPresenter() const {
   return omnibox_popup_aim_presenter_.get();
+}
+
+void LocationBarView::OnPopupFirstVisuallyNonEmptyPaint() {
+  // The focus ring reads its predicate only when refreshed.
+  if (auto* focus_ring = views::FocusRing::Get(this)) {
+    focus_ring->Refresh();
+  }
 }
 
 views::View* LocationBarView::GetLocationBarFocusRestoreView() {
@@ -2151,6 +2171,13 @@ void LocationBarView::OnOmniboxFocused() {
   // The AI mode page action should only be visible when the omnibox
   // is focused, so if there is a change in focus, refresh the icon.
   RefreshAiModePageAction();
+
+  // Lets a popup that creates its content on demand start loading it.
+  if (OmniboxPopupView* popup_view = GetOmniboxPopupView()) {
+    if (OmniboxPopupPresenterBase* presenter = popup_view->presenter()) {
+      presenter->OnOmniboxFocused();
+    }
+  }
 }
 
 void LocationBarView::OpenOmniboxPopup(bool query_zps) {
@@ -2485,13 +2512,7 @@ page_actions::PageActionController* LocationBarView::GetPageActionController() {
     return nullptr;
   }
 
-  // Tab features may be null while the tab is being destroyed.
-  tabs::TabFeatures* tab_features = active_tab->GetTabFeatures();
-  if (!tab_features) {
-    return nullptr;
-  }
-
-  return tab_features->page_action_controller();
+  return page_actions::PageActionController::From(active_tab);
 }
 
 #if BUILDFLAG(IS_MAC)

@@ -158,6 +158,16 @@ const base::FeatureParam<bool> kCsdEnforceIos{&kClientSideDetectionEnabledIos,
 BASE_FEATURE(kClientSideDetectionForcedLlamaRedirectChainKillswitch,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kClientSideDetectionIframeInnerText,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+constexpr base::FeatureParam<int> kClientSideDetectionMaxIframesToExtract{
+    &kClientSideDetectionIframeInnerText, "MaxIframesToExtract",
+    /*default_value=*/10};
+constexpr base::FeatureParam<base::TimeDelta>
+    kClientSideDetectionIframeInnerTextTimeout{
+        &kClientSideDetectionIframeInnerText, "Timeout",
+        /*default_value=*/base::Milliseconds(100)};
+
 BASE_FEATURE(kClientSideDetectionImageEmbeddingMatch,
 #if BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -167,6 +177,21 @@ BASE_FEATURE(kClientSideDetectionImageEmbeddingMatch,
 const base::FeatureParam<bool> kCsdImageEmbeddingMatchWithIntelligentScan{
     &kClientSideDetectionImageEmbeddingMatch,
     "CsdImageEmbeddingMatchWithIntelligentScan", /*default_value=*/true};
+
+BASE_FEATURE(kClientSideDetectionIncludeTitleInInnerText,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kClientSideDetectionKeyboardLockUniformPageDelay,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+constexpr base::FeatureParam<int> kCsdKeyboardLockUniformPageDelayDurationMs{
+    &kClientSideDetectionKeyboardLockUniformPageDelay, "DelayDurationMs",
+    /*default_value=*/500};
+constexpr base::FeatureParam<int> kCsdKeyboardLockUniformPageMaxRetries{
+    &kClientSideDetectionKeyboardLockUniformPageDelay, "MaxRetries",
+    /*default_value=*/3};
+constexpr base::FeatureParam<int> kCsdKeyboardLockUniformPageMaxColorRange{
+    &kClientSideDetectionKeyboardLockUniformPageDelay, "MaxColorRange",
+    /*default_value=*/10};
 
 BASE_FEATURE(kClientSideDetectionKillswitch, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -193,6 +218,11 @@ BASE_FEATURE(kClientSideDetectionScamDetectionRequestWithUrl,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kClientSideDetectionScamScore, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kClientSideDetectionSecondForceRequestWithDelay,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+constexpr base::FeatureParam<int> kCsdForceRequestDelayMs{
+    &kClientSideDetectionSecondForceRequestWithDelay, "RequestDelayMs", 2000};
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 BASE_FEATURE(kClientSideDetectionServerModelForScamDetectionDesktop,
@@ -427,9 +457,6 @@ constexpr base::FeatureParam<std::string>
                                                  /*default_value=*/""};
 #endif
 
-BASE_FEATURE(kMigrateEnhancedSbUserToEnhancedBundle,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kMigrateToBlockV8OptimizerOnUnfamiliarSites,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -606,10 +633,14 @@ base::ListValue GetFeatureStatusList() {
       &kClientSideDetectionCopyFromSurface,
       &kClientSideDetectionEnabledIos,
       &kClientSideDetectionForcedLlamaRedirectChainKillswitch,
+      &kClientSideDetectionIframeInnerText,
       &kClientSideDetectionImageEmbeddingMatch,
+      &kClientSideDetectionIncludeTitleInInnerText,
+      &kClientSideDetectionKeyboardLockUniformPageDelay,
       &kClientSideDetectionKillswitch,
       &kClientSideDetectionLocalResourceCheckFix,
       &kClientSideDetectionRedirectChainKillswitch,
+      &kClientSideDetectionSecondForceRequestWithDelay,
       &kCreateNotificationsAcceptedClientSafeBrowsingReports,
       &kDelayedWarnings,
       &kDlpRegionalizedEndpoints,
@@ -621,7 +652,6 @@ base::ListValue GetFeatureStatusList() {
       &kExtensionBlocklistSkipNetworkQuery,
       &kHashPrefixRealTimeLookups,
       &kLocalListsUseSBv5,
-      &kMigrateEnhancedSbUserToEnhancedBundle,
       &kProactivePasswordProtection,
       &kReportNotificationContentDetectionData,
       &kRustPhishingModelSetter,

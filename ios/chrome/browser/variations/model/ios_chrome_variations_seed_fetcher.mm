@@ -53,8 +53,8 @@ static BOOL g_seed_fetching_in_progress = NO;
 std::string GetOsName(const std::string& forced_platform) {
   if (!forced_platform.empty()) {
     static constexpr auto kPlatforms = base::MakeFixedFlatSet<std::string_view>(
-        {"android", "android_webview", "chromeos", "fuchsia", "ios", "linux",
-         "mac", "win"});
+        {"android", "android_desktop", "android_webview", "chromeos", "fuchsia",
+         "ios", "linux", "mac", "win"});
     if (kPlatforms.contains(forced_platform)) {
       return forced_platform;
     } else {
@@ -281,6 +281,7 @@ BASE_FEATURE(kVariationsRestrictDogfood, base::FEATURE_DISABLED_BY_DEFAULT);
   NSString* signature =
       [httpResponse valueForHTTPHeaderField:@"X-Seed-Signature"];
   NSString* country = [httpResponse valueForHTTPHeaderField:@"X-Country"];
+  NSString* geoLevel1 = [httpResponse valueForHTTPHeaderField:@"X-Geo-Level-1"];
   NSString* dateString = [httpResponse valueForHTTPHeaderField:@"Date"];
   base::Time date;
   BOOL dateParsed = base::Time::FromUTCString(
@@ -319,6 +320,7 @@ BASE_FEATURE(kVariationsRestrictDogfood, base::FEATURE_DISABLED_BY_DEFAULT);
     }
     seed->signature = base::SysNSStringToUTF8(signature);
     seed->country = base::SysNSStringToUTF8(country);
+    seed->geo_level1 = base::SysNSStringToUTF8(geoLevel1);
     seed->is_gzip_compressed = YES;
     return seed;
   }

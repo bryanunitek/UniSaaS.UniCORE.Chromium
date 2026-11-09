@@ -91,8 +91,6 @@ import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
 import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
-import org.chromium.chrome.browser.dom_distiller.ReaderModeBottomSheetManager;
-import org.chromium.chrome.browser.dom_distiller.ReaderModeIphController;
 import org.chromium.chrome.browser.download.DownloadMetrics.OpenWithExternalAppsSource;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
@@ -150,6 +148,8 @@ import org.chromium.chrome.browser.quick_delete.QuickDeleteController;
 import org.chromium.chrome.browser.quick_delete.QuickDeleteDelegateImpl;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
 import org.chromium.chrome.browser.readaloud.ReadAloudControllerSupplier;
+import org.chromium.chrome.browser.reader_mode.ReaderModeBottomSheetManager;
+import org.chromium.chrome.browser.reader_mode.ReaderModeIphController;
 import org.chromium.chrome.browser.recent_tabs.RestoreTabsFeatureHelper;
 import org.chromium.chrome.browser.searchwidget.SearchActivityUtils;
 import org.chromium.chrome.browser.share.ShareDelegate;
@@ -1991,6 +1991,8 @@ public class RootUiCoordinator
             TrackerFactory.getTrackerForProfile(tab.getProfile())
                     .notifyEvent(EventConstants.PAGE_ZOOM_OPENED);
             mPageZoomBarCoordinator.show(tab.getWebContents());
+        } else if (id == R.id.fullscreen_button) {
+            mPageZoomManager.enterImmersiveMode();
         } else if (id == R.id.open_with_id) {
             Tab tab = mActivityTabProvider.get();
             assert tab != null && tab.isNativePage() && tab.getNativePage() instanceof PdfPage;
@@ -3068,6 +3070,10 @@ public class RootUiCoordinator
         return mAdaptiveToolbarUiCoordinator;
     }
 
+    public @Nullable ActionRegistry getActionRegistryForTesting() {
+        return mActionRegistry;
+    }
+
     public @Nullable DataSharingTabManager getDataSharingTabManager() {
         // TabbedRootUiCoordinator returns non-null.
         return null;
@@ -3118,5 +3124,9 @@ public class RootUiCoordinator
      */
     protected @Nullable OneshotSupplier<HubManager> getHubManagerSupplier() {
         return null;
+    }
+
+    public void setScrimManagerForTesting(ScrimManager scrimManager) {
+        mScrimManagerSupplier.set(scrimManager);
     }
 }

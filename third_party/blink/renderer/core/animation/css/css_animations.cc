@@ -2073,7 +2073,8 @@ void CSSAnimations::CalculateAnimationUpdate(
         const Member<const StyleTriggerAttachmentVector>
             existing_trigger_attachments = animation->GetTriggerAttachments();
         Member<const StyleTriggerAttachmentVector> trigger_attachments;
-        if (RuntimeEnabledFeatures::AnimationTriggerEnabled()) {
+        if (RuntimeEnabledFeatures::AnimationTriggerEnabled() &&
+            !animation->GetIgnoreCSSTrigger()) {
           trigger_attachments = animation_data->GetTriggerAttachments(i);
         }
         DCHECK(!trigger_attachments || !trigger_attachments->empty());
@@ -3312,6 +3313,13 @@ const ComputedStyle& CSSAnimations::CalculateBeforeChangeStyle(
         active_interpolations.push_back(interpolation);
       }
     }
+  }
+
+  // With no transitions to sample, the before-change style is the base style.
+  // Avoid resolving a copy of it.
+  if (interpolations_map.empty()) {
+    state.before_change_style = base_style;
+    return *base_style;
   }
 
   state.before_change_style =

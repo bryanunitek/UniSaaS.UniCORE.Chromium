@@ -252,6 +252,7 @@ class Resource;
 class ResourceFetcher;
 class RootScrollerController;
 class SVGDocumentExtensions;
+class SVGTreeScopeResources;
 class SVGUseElement;
 class ScriptElementBase;
 class ScriptRegexp;
@@ -740,9 +741,13 @@ class CORE_EXPORT Document : public ContainerNode,
 
   void ScheduleUseShadowTreeUpdate(SVGUseElement&);
   void UnscheduleUseShadowTreeUpdate(SVGUseElement&);
+  void UpdateUseShadowTreesIfNeeded();
 
   void ScheduleSVGResourceInvalidation(LocalSVGResource&);
   void InvalidatePendingSVGResources();
+  void RegisterSVGTreeScopeResources(SVGTreeScopeResources&);
+  void UnregisterSVGTreeScopeResources(SVGTreeScopeResources&);
+  void NotifyDisplayLockChangedForSVGResources(const Element& element);
 
   void EvaluateMediaQueryList();
 
@@ -2064,6 +2069,9 @@ class CORE_EXPORT Document : public ContainerNode,
   // This flag is immutable once set.
   // https://drafts.csswg.org/css-sizing-4/#document-responsive-embedded-sizing-flag
   void SetResponsiveEmbeddedSizing() { responsive_embedded_sizing_ = true; }
+  bool HasResponsiveEmbeddedSizing() const {
+    return responsive_embedded_sizing_;
+  }
 
   // A META element with name=text-scale was added, removed, or
   // modified. Re-collect the META values.
@@ -2570,7 +2578,6 @@ class CORE_EXPORT Document : public ContainerNode,
   StyleAndLayoutTreeUpdate CalculateStyleAndLayoutTreeUpdateForParentFrame()
       const;
 
-  void UpdateUseShadowTreesIfNeeded();
   void EvaluateMediaQueryListIfNeeded();
 
   void UpdateStyleInvalidationIfNeeded();
@@ -3158,6 +3165,10 @@ class CORE_EXPORT Document : public ContainerNode,
   // state. Should be populated during layout detach or style recalc, and be
   // empty before and after those operations.
   HeapHashSet<Member<LocalSVGResource>> svg_resources_needing_invalidation_;
+  // Per-TreeScope SVG resource maps belonging to this Document (including
+  // ShadowRoots), tracked so LocalSVGResource clients can be invalidated when
+  // display-lock state changes.
+  HeapHashSet<WeakMember<SVGTreeScopeResources>> svg_tree_scope_resources_;
 
   ParserSynchronizationPolicy parser_sync_policy_ = kAllowDeferredParsing;
 

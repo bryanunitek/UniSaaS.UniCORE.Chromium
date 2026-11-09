@@ -90,6 +90,9 @@ void LayoutEmbeddedObject::PaintReplaced(
     const PaintInfo& paint_info,
     const PhysicalOffset& paint_offset) const {
   NOT_DESTROYED();
+  if (ChildPaintBlockedByDisplayLock()) {
+    return;
+  }
   CountSvgFilterPaint();
   EmbeddedObjectPainter(*this).PaintReplaced(paint_info, paint_offset);
 }
@@ -99,6 +102,28 @@ void LayoutEmbeddedObject::UpdateAfterLayout() {
   LayoutEmbeddedContent::UpdateAfterLayout();
   if (!GetEmbeddedContentView() && GetFrameView())
     GetFrameView()->AddPartToUpdate(*this);
+}
+
+void LayoutEmbeddedObject::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
+    const StyleChangeContext& style_change_context) {
+  NOT_DESTROYED();
+  LayoutEmbeddedContent::StyleDidChange(diff, old_style, new_style,
+                                        style_change_context);
+
+  // object-fit and object-position change the replaced content rect where the
+  // frame of an embedded object is laid out and painted.
+  if (RuntimeEnabledFeatures::SVGEmbeddedAsReplacedElementEnabled() &&
+      old_style &&
+      (old_style->GetObjectFit() != new_style.GetObjectFit() ||
+       old_style->ObjectPosition() != new_style.ObjectPosition())) {
+    GetFrameView()->SetNeedsUpdateGeometries();
+    if (LayoutView* child_view = ChildLayoutView()) {
+      child_view->SetNeedsPaintPropertyUpdate();
+    }
+  }
 }
 
 PhysicalNaturalSizingInfo LayoutEmbeddedObject::GetNaturalDimensions() const {

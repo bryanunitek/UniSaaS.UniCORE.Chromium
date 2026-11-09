@@ -1145,6 +1145,9 @@ void DiceWebSigninInterceptor::MaybeShowSigninInterceptionBubble(
     case WebSigninInterceptor::SigninInterceptionType::kProfileSwitchForced:
     case WebSigninInterceptor::SigninInterceptionType::kChromeSignin:
       break;
+    case WebSigninInterceptor::SigninInterceptionType::
+        kChromeSigninNonIntercept:
+      NOTREACHED() << "This interception type is not used by the interceptor";
   }
   state_->interception_bubble_handle_ = delegate_->ShowSigninInterceptionBubble(
       state_->web_contents_.get(), bubble_parameters, std::move(callback));
@@ -1440,6 +1443,8 @@ void DiceWebSigninInterceptor::OnInterceptionReadyToBeProcessed(
                                 base::Unretained(this), info);
       break;
     case WebSigninInterceptor::SigninInterceptionType::kEnterpriseOIDC:
+    case WebSigninInterceptor::SigninInterceptionType::
+        kChromeSigninNonIntercept:
       NOTREACHED() << "This interception type should not happen in DICE";
   }
 
@@ -1449,7 +1454,9 @@ void DiceWebSigninInterceptor::OnInterceptionReadyToBeProcessed(
       case WebSigninInterceptor::SigninInterceptionType::kMultiUser:
       case WebSigninInterceptor::SigninInterceptionType::kChromeSignin: {
         if (!base::FeatureList::IsEnabled(
-                switches::kEnableAccountPreviewPreferredAccount)) {
+                switches::kEnableAccountPreviewPreferredAccount) ||
+            !base::FeatureList::IsEnabled(
+                switches::kEnableAccountPreviewPreferredAccountIntercept)) {
           break;
         }
 
@@ -1469,9 +1476,8 @@ void DiceWebSigninInterceptor::OnInterceptionReadyToBeProcessed(
         state_->interception_bubble_callback_ = std::move(callback);
         state_->account_preview_timeout_timer_.Start(
             FROM_HERE,
-            switches::
-                kAccountPreviewPreferredAccountSingleAccountPromoFetchTimeout
-                    .Get(),
+            switches::kAccountPreviewPreferredAccountInterceptFetchTimeout
+                .Get(),
             base::BindOnce(
                 &DiceWebSigninInterceptor::OnAccountPreviewPreferenceReceived,
                 weak_factory_.GetWeakPtr(), bubble_parameters,
@@ -1492,6 +1498,8 @@ void DiceWebSigninInterceptor::OnInterceptionReadyToBeProcessed(
       case WebSigninInterceptor::SigninInterceptionType::kEnterprise:
         break;
       case WebSigninInterceptor::SigninInterceptionType::kEnterpriseOIDC:
+      case WebSigninInterceptor::SigninInterceptionType::
+          kChromeSigninNonIntercept:
         NOTREACHED() << "This interception type should not happen in DICE";
     }
   }
@@ -1527,6 +1535,7 @@ void DiceWebSigninInterceptor::OnAccountPreviewPreferenceReceived(
                           elapsed_time);
 
   bubble_parameters.account_preview_preference = std::move(preference);
+  bubble_parameters.account_preview_fetch_duration = elapsed_time;
   MaybeShowSigninInterceptionBubble(
       bubble_parameters, std::move(state_->interception_bubble_callback_));
 }

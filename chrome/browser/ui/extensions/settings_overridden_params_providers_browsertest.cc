@@ -6,10 +6,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
+#include "base/check.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
@@ -48,6 +52,7 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "url/gurl.h"
 
 namespace {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
@@ -311,7 +316,7 @@ IN_PROC_BROWSER_TEST_P(SearchOverriddenParamsProvidersBrowserTest,
   ASSERT_TRUE(params);
   if (IsExplicitChoiceDialog()) {
     ASSERT_TRUE(params->content.previous_setting);
-    EXPECT_EQ(u"testfoo", params->content.previous_setting->text);
+    EXPECT_EQ(u"testname", params->content.previous_setting->text);
   } else {
     EXPECT_EQ("Did you mean to change your search provider?",
               base::UTF16ToUTF8(params->content.dialog_title));
@@ -891,8 +896,66 @@ class ExtensionControllingSearchExplicitChoiceParamsBrowserTest
         extensions_features::kSearchEngineExplicitChoiceDialog);
   }
 
+  // Returns the first non-Google prepopulated search engine from the
+  // TemplateURLService default list.
+  const TemplateURL* FindPrepopulatedTemplateURL() {
+    TemplateURLService* const template_url_service = GetTemplateURLService();
+    TemplateURLService::TemplateURLVector template_urls =
+        template_url_service->GetTemplateURLs();
+    auto iter = std::ranges::find_if(
+        template_urls, [template_url_service](const TemplateURL* turl) {
+          return !turl->HasGoogleBaseURLs(
+                     template_url_service->search_terms_data()) &&
+                 template_url_service->ShowInDefaultList(turl) &&
+                 turl->prepopulate_id() > 0;
+        });
+    CHECK(iter != template_urls.end());
+    return *iter;
+  }
+
+  // Creates and installs a test extension that overrides the default search
+  // provider with the given parameters.
+  const extensions::Extension* InstallCustomSearchExtension(
+      const std::string& name,
+      const std::string& keyword,
+      const std::string& search_url,
+      std::optional<int> prepopulated_id,
+      std::optional<GURL> favicon_url) {
+    auto search_provider =
+        base::DictValue()
+            .Set("name", name)
+            .Set("keyword", keyword)
+            .Set("search_url", search_url)
+            .Set("encoding", "UTF-8")
+            .Set("favicon_url", favicon_url ? favicon_url->spec()
+                                            : "https://example.com/favicon.ico")
+            .Set("is_default", true);
+    if (prepopulated_id) {
+      search_provider.Set("prepopulated_id", *prepopulated_id);
+    }
+
+    auto manifest =
+        base::DictValue()
+            .Set("name", name)
+            .Set("version", "0.1")
+            .Set("manifest_version", 3)
+            .Set("chrome_settings_overrides",
+                 base::DictValue().Set("search_provider",
+                                       std::move(search_provider)))
+            .Set("permissions", base::ListValue().Append("storage"));
+
+    auto test_dir = std::make_unique<extensions::TestExtensionDir>();
+    test_dir->WriteManifest(manifest);
+    const extensions::Extension* extension =
+        InstallExtensionWithPermissionsGranted(test_dir->UnpackedPath(),
+                                               /*expected_change=*/1);
+    test_dirs_.push_back(std::move(test_dir));
+    return extension;
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
+  std::vector<std::unique_ptr<extensions::TestExtensionDir>> test_dirs_;
 };
 
 // The chrome_settings_overrides API that allows extensions to override the
@@ -901,7 +964,7 @@ class ExtensionControllingSearchExplicitChoiceParamsBrowserTest
 
 IN_PROC_BROWSER_TEST_F(
     ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
-    NewExtensionOrPreviousGoogleSearch) {
+    PrimarySearchIsExtensionNotInPrepopulatedList) {
   base::HistogramTester histogram_tester;
   const extensions::Extension* extension = AddExtensionControllingSearch();
   ASSERT_TRUE(extension);
@@ -915,17 +978,12 @@ IN_PROC_BROWSER_TEST_F(
       base::StrCat({u"The extension \"", kSearchOverrideExtensionName,
                     u"\" changed your settings"})));
 
-  auto previous_setting = params->content.previous_setting;
-  ASSERT_TRUE(previous_setting.has_value());
-  EXPECT_FALSE(previous_setting.value().image.IsEmpty());
-  EXPECT_EQ(u"Google", previous_setting.value().text);
-  EXPECT_EQ(u"Your previous choice", previous_setting.value().description);
-
   auto new_setting = params->content.new_setting;
   ASSERT_TRUE(new_setting.has_value());
   EXPECT_TRUE(new_setting.value().image.IsVectorIcon());
-  EXPECT_EQ(new_setting.value().text, u"example.com");
-  EXPECT_EQ(new_setting.value().description, u"Changed to this by extension");
+  EXPECT_EQ(u"example.com", new_setting.value().text);
+  EXPECT_TRUE(new_setting.value().favicon_url.is_empty());
+  EXPECT_EQ(u"Changed to this by extension", new_setting.value().description);
 
   // Ensure that a fully-populated dialog was logged.
   histogram_tester.ExpectUniqueSample(
@@ -935,15 +993,50 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(
     ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
-    NewExtensionOrPreviousNonPrepopulatedSearch) {
-  // Create and set a custom (non-prepopulated) search provider.
+    PrimarySearchIsExtensionInPrepopulatedList) {
+  const TemplateURL* extension_turl = FindPrepopulatedTemplateURL();
+  const GURL expected_favicon_url = extension_turl->favicon_url();
+  EXPECT_FALSE(expected_favicon_url.is_empty());
+
+  // Use a name and favicon URL in the extension manifest that differ from the
+  // prepopulated engine's values to verify that the dialog uses the
+  // authoritative prepopulated values rather than those from the manifest.
+  constexpr char kManifestName[] = "PrimaryPrepopulatedExtension";
+  const GURL manifest_favicon_url("https://example.com/manifest_favicon.ico");
+  ASSERT_NE(kManifestName, base::UTF16ToUTF8(extension_turl->short_name()));
+  ASSERT_NE(manifest_favicon_url, expected_favicon_url);
+
+  const extensions::Extension* extension = InstallCustomSearchExtension(
+      kManifestName, base::UTF16ToUTF8(extension_turl->keyword()),
+      extension_turl->url(), /*prepopulated_id=*/std::nullopt,
+      manifest_favicon_url);
+  ASSERT_TRUE(extension);
+
+  std::optional<ExtensionSettingsOverriddenDialog::Params> params =
+      GetSearchOverriddenParamsSync(web_contents());
+  ASSERT_TRUE(params);
+
+  auto new_setting = params->content.new_setting;
+  ASSERT_TRUE(new_setting.has_value());
+  EXPECT_EQ(extension_turl->short_name(), new_setting.value().text);
+  EXPECT_EQ(expected_favicon_url, new_setting.value().favicon_url);
+  // TODO(http://crbug.com/562972276): Use a mock image fetcher to assert that
+  // the correct image was fetched.
+  EXPECT_TRUE(new_setting.value().image.IsVectorIcon());
+  EXPECT_EQ(u"Changed to this by extension", new_setting.value().description);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
+    SecondarySearchIsPrepopulatedNonExtension) {
   TemplateURLService* const template_url_service = GetTemplateURLService();
-  std::unique_ptr<TemplateURLData> data =
-      GenerateDummyTemplateURLData("custom");
-  data->SetURL("https://customsearch.com/search?q={searchTerms}");
-  TemplateURL* custom_turl =
-      template_url_service->Add(std::make_unique<TemplateURL>(*data));
-  template_url_service->SetUserSelectedDefaultSearchProvider(custom_turl);
+  const TemplateURL* const default_provider =
+      template_url_service->GetDefaultSearchProvider();
+  ASSERT_TRUE(default_provider);
+  const GURL expected_favicon_url = default_provider->favicon_url();
+  EXPECT_FALSE(expected_favicon_url.is_empty());
+
+  // Initially, default search is Google (non-extension, prepopulated).
   const extensions::Extension* extension = AddExtensionControllingSearch();
   ASSERT_TRUE(extension);
 
@@ -953,62 +1046,24 @@ IN_PROC_BROWSER_TEST_F(
 
   auto previous_setting = params->content.previous_setting;
   ASSERT_TRUE(previous_setting.has_value());
-  // For a non-prepopulated search engine, the vector icon should be used,
-  // and the text should be the formatted URL rather than the short name.
-  EXPECT_TRUE(previous_setting.value().image.IsVectorIcon());
-  EXPECT_EQ(u"customsearch.com", previous_setting.value().text);
-
-  auto new_setting = params->content.new_setting;
-  ASSERT_TRUE(new_setting.has_value());
-  // The new setting (from the extension) is also non-prepopulated.
-  EXPECT_TRUE(new_setting.value().image.IsVectorIcon());
-  EXPECT_EQ(u"example.com", new_setting.value().text);
+  EXPECT_EQ(u"Google", previous_setting.value().text);
+  EXPECT_EQ(expected_favicon_url, previous_setting.value().favicon_url);
+  EXPECT_EQ(u"Your previous choice", previous_setting.value().description);
 }
 
 IN_PROC_BROWSER_TEST_F(
     ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
-    PrepopulatedSearches) {
-  // The default search engine initially is Google (prepopulated).
-  // Find another prepopulated search engine for the extension to use.
+    SecondarySearchIsNonPrepopulatedNonExtension) {
+  // Create and set a custom (non-prepopulated) search provider.
   TemplateURLService* const template_url_service = GetTemplateURLService();
-  TemplateURLService::TemplateURLVector template_urls =
-      template_url_service->GetTemplateURLs();
-  auto iter = std::ranges::find_if(
-      template_urls, [template_url_service](const TemplateURL* turl) {
-        return !turl->HasGoogleBaseURLs(
-                   template_url_service->search_terms_data()) &&
-               template_url_service->ShowInDefaultList(turl) &&
-               turl->prepopulate_id() > 0;
-      });
-  ASSERT_NE(template_urls.end(), iter);
-  const TemplateURL* extension_turl = *iter;
+  std::unique_ptr<TemplateURLData> data =
+      GenerateDummyTemplateURLData("custom");
+  data->SetURL("https://customsearch.com/search?q={searchTerms}");
+  TemplateURL* custom_turl =
+      template_url_service->Add(std::make_unique<TemplateURL>(*data));
+  template_url_service->SetUserSelectedDefaultSearchProvider(custom_turl);
 
-  constexpr char kManifestTemplate[] =
-      R"({
-           "name": "Search Override Extension",
-           "version": "0.1",
-           "manifest_version": 2,
-           "chrome_settings_overrides": {
-             "search_provider": {
-               "name": "%s",
-               "keyword": "%s",
-               "search_url": "%s",
-               "prepopulated_id": %d,
-               "is_default": true
-             }
-           },
-           "permissions": ["storage"]
-         })";
-
-  extensions::TestExtensionDir test_dir;
-  test_dir.WriteManifest(base::StringPrintf(
-      kManifestTemplate,
-      base::UTF16ToUTF8(extension_turl->short_name()).c_str(),
-      base::UTF16ToUTF8(extension_turl->keyword()).c_str(),
-      extension_turl->url().c_str(), extension_turl->prepopulate_id()));
-
-  const extensions::Extension* extension =
-      InstallExtensionWithPermissionsGranted(test_dir.UnpackedPath(), 1);
+  const extensions::Extension* extension = AddExtensionControllingSearch();
   ASSERT_TRUE(extension);
 
   std::optional<ExtensionSettingsOverriddenDialog::Params> params =
@@ -1017,16 +1072,81 @@ IN_PROC_BROWSER_TEST_F(
 
   auto previous_setting = params->content.previous_setting;
   ASSERT_TRUE(previous_setting.has_value());
-  // Prepopulated -> Should have an icon (either a fetched favicon or a
-  // prepopulated vector icon like the Google logo). We assert it is not empty.
-  EXPECT_FALSE(previous_setting.value().image.IsEmpty());
-  EXPECT_EQ(u"Google", previous_setting.value().text);
+  // For a non-extension custom search engine, the user's configured short name
+  // and favicon URL should be preserved.
+  EXPECT_TRUE(previous_setting.value().image.IsVectorIcon());
+  EXPECT_EQ(custom_turl->short_name(), previous_setting.value().text);
+  EXPECT_EQ(custom_turl->favicon_url(), previous_setting.value().favicon_url);
+  EXPECT_EQ(u"Your previous choice", previous_setting.value().description);
+}
 
-  auto new_setting = params->content.new_setting;
-  ASSERT_TRUE(new_setting.has_value());
-  // Prepopulated -> Should have an icon.
-  EXPECT_FALSE(new_setting.value().image.IsEmpty());
-  EXPECT_EQ(extension_turl->short_name(), new_setting.value().text);
+IN_PROC_BROWSER_TEST_F(
+    ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
+    SecondarySearchIsExtensionInPrepopulatedList) {
+  const TemplateURL* extension_turl = FindPrepopulatedTemplateURL();
+  const GURL expected_favicon_url = extension_turl->favicon_url();
+  EXPECT_FALSE(expected_favicon_url.is_empty());
+
+  // Use a name and favicon URL in the extension manifest that differ from the
+  // prepopulated engine's values to verify that the dialog uses the
+  // authoritative prepopulated values rather than those from the manifest.
+  constexpr char kManifestName[] = "FirstPrepopulatedExtension";
+  const GURL manifest_favicon_url("https://example.com/manifest_favicon.ico");
+  ASSERT_NE(kManifestName, base::UTF16ToUTF8(extension_turl->short_name()));
+  ASSERT_NE(manifest_favicon_url, expected_favicon_url);
+
+  // Install the first extension overriding search with a prepopulated search
+  // URL.
+  const extensions::Extension* first_extension = InstallCustomSearchExtension(
+      kManifestName, base::UTF16ToUTF8(extension_turl->keyword()),
+      extension_turl->url(), /*prepopulated_id=*/std::nullopt,
+      manifest_favicon_url);
+  ASSERT_TRUE(first_extension);
+
+  // Install a second extension, which becomes the primary controlling
+  // extension. The first extension becomes the secondary search.
+  const extensions::Extension* second_extension =
+      AddExtensionControllingSearch();
+  ASSERT_TRUE(second_extension);
+
+  std::optional<ExtensionSettingsOverriddenDialog::Params> params =
+      GetSearchOverriddenParamsSync(web_contents());
+  ASSERT_TRUE(params);
+
+  auto previous_setting = params->content.previous_setting;
+  ASSERT_TRUE(previous_setting.has_value());
+  EXPECT_EQ(extension_turl->short_name(), previous_setting.value().text);
+  EXPECT_EQ(expected_favicon_url, previous_setting.value().favicon_url);
+  EXPECT_TRUE(previous_setting.value().image.IsVectorIcon());
+  EXPECT_EQ(u"Your previous choice", previous_setting.value().description);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ExtensionControllingSearchExplicitChoiceParamsBrowserTest,
+    SecondarySearchIsExtensionNotInPrepopulatedList) {
+  // Install the first extension with a non-prepopulated search URL.
+  const extensions::Extension* first_extension = InstallCustomSearchExtension(
+      "FirstNonPrepopulatedExtension", "first_keyword",
+      "https://first-override.com/search?q={searchTerms}",
+      /*prepopulated_id=*/std::nullopt, /*favicon_url=*/std::nullopt);
+  ASSERT_TRUE(first_extension);
+
+  // Install a second extension, which becomes the primary controlling
+  // extension. The first extension becomes the secondary search.
+  const extensions::Extension* second_extension =
+      AddExtensionControllingSearch();
+  ASSERT_TRUE(second_extension);
+
+  std::optional<ExtensionSettingsOverriddenDialog::Params> params =
+      GetSearchOverriddenParamsSync(web_contents());
+  ASSERT_TRUE(params);
+
+  auto previous_setting = params->content.previous_setting;
+  ASSERT_TRUE(previous_setting.has_value());
+  EXPECT_TRUE(previous_setting.value().image.IsVectorIcon());
+  EXPECT_EQ(u"first-override.com", previous_setting.value().text);
+  EXPECT_TRUE(previous_setting.value().favicon_url.is_empty());
+  EXPECT_EQ(u"Your previous choice", previous_setting.value().description);
 }
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)

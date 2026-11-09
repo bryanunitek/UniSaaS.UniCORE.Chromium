@@ -110,12 +110,12 @@
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
 #include "components/page_load_metrics/renderer/metrics_render_frame_observer.h"
 #include "components/paint_preview/buildflags/buildflags.h"
-#include "components/password_manager/core/common/password_manager_features.h"
+#include "components/password_manager/core/common/remote_actor/remote_actor_features.h"
 #include "components/pdf/common/constants.h"
 #include "components/pdf/common/pdf_util.h"
 #include "components/permissions/features.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/content/renderer/threat_dom_details.h"
+#include "components/safe_browsing/content/renderer/threat_details/threat_dom_details.h"
 #include "components/sampling_profiler/process_type.h"
 #include "components/sampling_profiler/thread_profiler.h"
 #include "components/security_interstitials/content/renderer/security_interstitial_page_controller_delegate_impl.h"
@@ -751,15 +751,27 @@ void ChromeContentRendererClient::RenderFrameCreated(
   blink::AssociatedInterfaceRegistry* associated_interfaces =
       render_frame_observer->associated_interfaces();
 
-  if (!render_frame->IsInFencedFrameTree() ||
-      base::FeatureList::IsEnabled(blink::features::kFencedFramesAPIChanges)) {
+  const bool is_pdf_renderer =
+#if BUILDFLAG(ENABLE_PDF)
+      pdf::IsPdfRenderer();
+#else
+      false;
+#endif
+  if (!is_pdf_renderer && (!render_frame->IsInFencedFrameTree() ||
+                           base::FeatureList::IsEnabled(
+                               blink::features::kFencedFramesAPIChanges))) {
     auto password_autofill_agent = std::make_unique<PasswordAutofillAgent>(
         render_frame, associated_interfaces);
     auto password_generation_agent = std::make_unique<PasswordGenerationAgent>(
         render_frame, password_autofill_agent.get(), associated_interfaces);
-    new AutofillAgent(render_frame, std::move(password_autofill_agent),
-                      std::move(password_generation_agent),
-                      associated_interfaces);
+    auto* autofill_agent = new AutofillAgent(
+        render_frame, std::move(password_autofill_agent),
+        std::move(password_generation_agent), associated_interfaces);
+    if (base::FeatureList::IsEnabled(
+            autofill::features::kAutofillCustomFormControlScripts)) {
+      autofill_agent->EnableCustomFormControlScripts(
+          ISOLATED_WORLD_ID_AUTOFILL_CUSTOM_FORM_CONTROLS);
+    }
   }
 
 #if !BUILDFLAG(IS_ANDROID)

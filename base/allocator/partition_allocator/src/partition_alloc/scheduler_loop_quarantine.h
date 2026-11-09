@@ -93,13 +93,16 @@ struct SchedulerLoopQuarantineConfig {
   // Leak quarantined allocations at exit.
   bool leak_on_destruction = false;
   bool enable_quarantine = false;
-  bool enable_zapping = false;
   bool enable_task_controlled_purge = false;
   bool pause_in_between_tasks = false;
   bool exclude_non_ipc_tasks = false;
+  bool capacity_unlimited = false;
   // Accepts allocations up to this bucket size. If the given number does not
   // match bucket size, it is rounded up to next bucket size.
   size_t max_quarantine_size = BucketIndexLookup::kMaxBucketSize;
+  // Upper bound for the zapped region in bytes. If an object's usable size
+  // exceeds this value, only the first `zap_max` bytes are zapped.
+  size_t zap_max = BucketIndexLookup::kMaxBucketSize;
   // When the branch is full, dequarantine enough entries to free up this
   // percentage of the capacity (in addition to the space needed by the
   // incoming entry), instead of just enough to fit the incoming entry. This
@@ -192,7 +195,10 @@ class SchedulerLoopQuarantineBranch {
 
   bool IsQuarantineTarget(internal::BucketSizeDetails size_details) const;
 
-  size_t GetCapacityInBytes() {
+  size_t GetCapacityInBytes() const {
+    if (capacity_unlimited_) {
+      return std::numeric_limits<size_t>::max();
+    }
     return branch_capacity_in_bytes_.load(std::memory_order_relaxed);
   }
   // After shrinking the capacity, this branch may need to `Purge()` to meet the
@@ -296,6 +302,7 @@ class SchedulerLoopQuarantineBranch {
   static void DangerouslyDisablePurge();
 
   bool IsQuarantineEnabledForTesting() const { return enable_quarantine_; }
+  bool IsCapacityUnlimitedForTesting() const { return capacity_unlimited_; }
 
   class ScopedQuarantineExclusion {
     SchedulerLoopQuarantineBranch& branch_;
@@ -347,17 +354,21 @@ class SchedulerLoopQuarantineBranch {
   base::InsecureRandomGenerator random_ PA_GUARDED_BY(lock_);
 
   bool enable_quarantine_ = false;
-  bool enable_zapping_ = false;
   bool leak_on_destruction_ = false;
   bool enable_task_controlled_purge_ = false;
   bool pause_in_between_tasks_ = false;
   bool exclude_non_ipc_tasks_ = false;
+  bool capacity_unlimited_ = false;
+#if PA_BUILDFLAG(DCHECKS_ARE_ON)
+  std::atomic_bool being_destructed_ = false;
+#endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
   int task_nesting_depth_ = 0;
   bool is_outermost_task_mojo_ipc_ = false;
   // See `SchedulerLoopQuarantineConfig::purge_headroom_percent`.
   uint8_t purge_headroom_percent_ = 0;
 
   uint16_t largest_bucket_index_ = BucketIndexLookup::kNumBuckets - 1;
+  size_t zap_max_ = BucketIndexLookup::kMaxBucketSize;
 
   // When non-zero, this branch temporarily stops accepting incoming quarantine
   // requests.
@@ -398,11 +409,6 @@ class SchedulerLoopQuarantineBranch {
     size_t dequarantined_size_in_bytes = 0;
   };
   UnpublishedStats unpublished_stats_ PA_GUARDED_BY(lock_);
-
-  // Debug and testing data.
-#if PA_BUILDFLAG(DCHECKS_ARE_ON)
-  std::atomic_bool being_destructed_ = false;
-#endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
 };
 
 using SanitizedObjectSchedulerLoopQuarantineBranch =

@@ -4,6 +4,7 @@
 
 import("//chrome/common/features.gni")
 import("//crypto/features.gni")
+import("//third_party/blink/public/public_features.gni")
 import("//ui/webui/resources/tools/build_webui.gni")
 
 assert(!is_android, "Android does not use these settings")
@@ -117,7 +118,7 @@ build_webui("build") {
     "site_settings/window_management_page.ts",
   ]
 
-  if (is_chromeos) {
+  if (enable_smart_card) {
     web_component_files += [ "site_settings/smart_card_readers_page.ts" ]
   }
 
@@ -308,6 +309,7 @@ build_webui("build") {
     "performance_page/performance_page_index.ts",
     "performance_page/speed_page.html.ts",
     "performance_page/speed_page.ts",
+    "performance_page/speed_page_cpu_performance.html.ts",
     "performance_page/tab_discard/exception_add_input.html.ts",
     "performance_page/tab_discard/exception_add_input.ts",
     "performance_page/tab_discard/exception_current_sites_list.html.ts",
@@ -423,6 +425,9 @@ build_webui("build") {
     "safety_hub/safety_hub_page.ts",
     "safety_hub/unused_site_permissions_module.html.ts",
     "safety_hub/unused_site_permissions_module.ts",
+    "search/settings_search_dropdown.html.ts",
+    "search/settings_search_dropdown.ts",
+    "search/settings_search_manager.ts",
     "search_metrics_recorder.ts",
     "search_page/extension_controlled_message.html.ts",
     "search_page/extension_controlled_message.ts",
@@ -731,6 +736,7 @@ build_webui("build") {
     "safety_hub/safety_hub_module.css",
     "safety_hub/safety_hub_page.css",
     "safety_hub/unused_site_permissions_module.css",
+    "search/settings_search_dropdown.css",
     "search_page/extension_controlled_message.css",
     "search_page/feature_shortcuts_page.css",
     "search_page/keyboard_shortcut_page.css",
@@ -757,19 +763,28 @@ build_webui("build") {
     "site_settings/action_link.css",
     "site_settings/add_site_dialog.css",
     "site_settings/category_setting_exceptions.css",
+    "site_settings/chooser_exception_list.css",
     "site_settings/chooser_exception_list_entry.css",
     "site_settings/clear_storage_dialog_shared.css",
     "site_settings/media_picker.css",
     "site_settings/search_highlight_style.css",
     "site_settings/settings_category_default_radio_group.css",
+    "site_settings/site_list_entry.css",
     "site_settings/site_settings_shared.css",
     "site_settings/site_settings_shared_lit.css",
     "site_settings/zoom_levels.css",
     "system_page/system_page.css",
   ]
 
-  mojo_files_deps = [ "//components/autofill/core/browser/data_model/autofill_ai:mojo_bindings_ts__generator" ]
-  mojo_files = [ "$root_gen_dir/components/autofill/core/browser/data_model/autofill_ai/autofill_ai_enums.mojom-webui.ts" ]
+  mojo_files_deps = [
+    "//chrome/browser/ui/webui/settings/search/mojom:mojom_ts__generator",
+    "//components/autofill/core/browser/data_model/autofill_ai:mojo_bindings_ts__generator",
+  ]
+  mojo_files = [
+    "$root_gen_dir/chrome/browser/ui/webui/settings/search/mojom/setting_id.mojom-webui.ts",
+    "$root_gen_dir/chrome/browser/ui/webui/settings/search/mojom/settings_search.mojom-webui.ts",
+    "$root_gen_dir/components/autofill/core/browser/data_model/autofill_ai/autofill_ai_enums.mojom-webui.ts",
+  ]
   if (!is_chromeos) {
     mojo_files_deps +=
         [ "//chrome/browser/accessibility:mojo_bindings_ts__generator" ]

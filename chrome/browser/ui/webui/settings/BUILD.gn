@@ -9,6 +9,18 @@ import("//third_party/blink/public/public_features.gni")
 
 assert(is_win || is_mac || is_linux || is_chromeos)
 
+source_set("element_ids") {
+  sources = [
+    "settings_element_ids.cc",
+    "settings_element_ids.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//ui/base/interaction",
+  ]
+}
+
 source_set("settings") {
   sources = [
     "about_handler.h",
@@ -40,7 +52,6 @@ source_set("settings") {
     "search_engines_handler.h",
     "security_settings_provider.h",
     "settings_clear_browsing_data_handler.h",
-    "settings_element_ids.h",
     "settings_localized_strings_provider.h",
     "settings_media_devices_selection_handler.h",
     "settings_page_ui_handler.h",
@@ -56,6 +67,7 @@ source_set("settings") {
   ]
 
   public_deps = [
+    ":element_ids",
     "//base",
     "//chrome/browser:shell_integration",
     "//chrome/browser/engagement",
@@ -94,6 +106,7 @@ source_set("settings") {
     "//components/soda",
     "//components/soda:constants",
     "//components/sync/service",
+    "//components/sync_sessions",
     "//components/user_education/webui",
     "//components/user_manager",
     "//components/wallet/core/browser",
@@ -173,7 +186,6 @@ source_set("impl") {
     "search_engines_handler.cc",
     "security_settings_provider.cc",
     "settings_clear_browsing_data_handler.cc",
-    "settings_element_ids.cc",
     "settings_localized_strings_privacy_sandbox_provider.cc",
     "settings_localized_strings_provider.cc",
     "settings_media_devices_selection_handler.cc",
@@ -217,6 +229,7 @@ source_set("impl") {
     "//chrome/browser/custom_handlers",
     "//chrome/browser/dictation",
     "//chrome/browser/engagement",
+    "//chrome/browser/enterprise/browser_management:management_identity",
     "//chrome/browser/extensions",
     "//chrome/browser/feedback",
     "//chrome/browser/file_system_access",
@@ -570,6 +583,7 @@ if (!is_android) {
       "safety_hub_handler_unittest.cc",
       "saved_info_handler_unittest.cc",
       "search_engines_handler_unittest.cc",
+      "settings_localized_strings_provider_unittest.cc",
       "settings_media_devices_selection_handler_unittest.cc",
       "settings_security_key_handler_unittest.cc",
       "settings_utils_unittest.cc",

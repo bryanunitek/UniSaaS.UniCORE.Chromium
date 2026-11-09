@@ -594,6 +594,38 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/Snackbar.java:SnackbarIdentifier) -->
 
+<!-- LINT.IfChange(UiaElementLocationOutcome) -->
+
+<enum name="UiaElementLocationOutcome">
+  <summary>
+    Outcome of one request to locate an element in another app's window via UI
+    Automation in a utility process (SettingsRowLocatorWin::Outcome).
+  </summary>
+  <int value="0" label="Located; measurement usable"/>
+  <int value="1" label="No element found"/>
+  <int value="2"
+      label="Measurement unusable (element outside the window, or a derived
+             value out of range)"/>
+  <int value="3" label="Timed out (target process not answering)"/>
+  <int value="4" label="Service process disconnected mid-request"/>
+  <int value="5" label="Superseded by a newer request before it answered"/>
+  <int value="6" label="Target window was already gone; nothing was asked"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/default_browser/win/settings_row_locator_win.h:UiaElementLocationOutcome) -->
+
+<!-- LINT.IfChange(WebUIContentsPrerenderTakeResult) -->
+
+<enum name="WebUIContentsPrerenderTakeResult">
+  <int value="0" label="Adopted"/>
+  <int value="1" label="No spare"/>
+  <int value="2" label="Dropped: stale"/>
+  <int value="3" label="Dropped: renderer gone"/>
+  <int value="4" label="Dropped: already painted"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/webui/top_chrome/webui_contents_prerenderer.h:WebUIContentsPrerenderTakeResult) -->
+
 <enum name="WebUIPreloadReason">
   <int value="0" label="BrowserWarmup"/>
   <int value="1" label="WebUIDestroyed"/>
@@ -1188,6 +1220,7 @@ chromium-metrics-reviews@google.com.
   <int value="2040878656" label="chrome://bluetooth-internals/"/>
   <int value="2052019697" label="chrome://userimage/"/>
   <int value="2065809529" label="chrome://feature-showcase/"/>
+  <int value="2086238623" label="chrome://craft/"/>
   <int value="2108016874" label="chrome-untrusted://projector/"/>
   <int value="2110022659" label="chrome-untrusted://ntp-microsoft-auth/"/>
   <int value="2111953935" label="chrome://topics-internals/"/>
@@ -1326,6 +1359,7 @@ chromium-metrics-reviews@google.com.
   <int value="124" label="Manage skills"/>
   <int value="125" label="Show skills and extensions"/>
   <int value="126" label="Scheduled restart dialog"/>
+  <int value="127" label="Other device tab"/>
 </enum>
 
 <!-- LINT.ThenChange(/chrome/browser/ui/toolbar/app_menu_model.h:AppMenuAction) -->

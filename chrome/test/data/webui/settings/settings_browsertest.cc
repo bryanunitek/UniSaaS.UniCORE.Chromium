@@ -50,6 +50,7 @@
 #include "crypto/crypto_buildflags.h"
 #include "device/fido/public/features.h"
 #include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/public_buildflags.h"
 #include "ui/compositor/compositor_switches.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -555,6 +556,11 @@ IN_PROC_BROWSER_TEST_F(SettingsTest, WebuiRefresh2026) {
 IN_PROC_BROWSER_TEST_F(SettingsTest, SettingsRefresh2026) {
   RunTest("settings/settings_ui_test.js",
           "runMochaSuite('SettingsRefresh2026')");
+}
+
+IN_PROC_BROWSER_TEST_F(SettingsTest, SettingsSearch2026) {
+  RunTest("settings/settings_ui_test.js",
+          "runMochaSuite('SettingsSearch2026')");
 }
 
 IN_PROC_BROWSER_TEST_F(SettingsTest, ActiveTimer) {
@@ -1253,6 +1259,14 @@ IN_PROC_BROWSER_TEST_F(SettingsTest, SettingsRadioGroup) {
   RunTest("settings/settings_radio_group_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(SettingsTest, SettingsSearchDropdown) {
+  RunTest("settings/settings_search_dropdown_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(SettingsTest, SettingsSearchManager) {
+  RunTest("settings/settings_search_manager_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(SettingsTest, SimpleConfirmationDialog) {
   RunTest("settings/simple_confirmation_dialog_test.js", "mocha.run()");
 }
@@ -1305,11 +1319,11 @@ IN_PROC_BROWSER_TEST_F(SettingsTest, Slider) {
   RunTest("settings/settings_slider_test.js", "mocha.run()");
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(ENABLE_SMART_CARD)
 IN_PROC_BROWSER_TEST_F(SettingsTest, SmartCardReadersPage) {
   RunTest("settings/smart_card_readers_page_test.js", "mocha.run()");
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(ENABLE_SMART_CARD)
 
 IN_PROC_BROWSER_TEST_F(SettingsTest, SpeedPage) {
   RunTest("settings/speed_page_test.js", "runMochaSuite('SpeedPage')");

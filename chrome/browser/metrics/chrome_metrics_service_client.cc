@@ -68,6 +68,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/component_updater/component_updater_service.h"
+#include "components/crash/core/app/crashpad.h"
 #include "components/crash/core/common/crash_keys.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/language/core/browser/locale_util.h"
@@ -181,6 +182,7 @@
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/webui/ash/settings/services/metrics/os_settings_metrics_provider.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "components/session_manager/core/session_manager.h"  // nogncheck
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -697,7 +699,8 @@ void ChromeMetricsServiceClient::OnEnvironmentUpdate(std::string* environment) {
   // will not have an environment set.
   if (base::FeatureList::IsEnabled(
           metrics::features::kSharedMemorySystemProfileMinidump)) {
-    metrics::SystemProfileUserStream::Get().WritePayload(*environment);
+    metrics::WriteSystemProfileUserStream(*environment,
+                                          &crash_reporter::WriteUserStreamData);
     return;
   }
 
@@ -1012,7 +1015,8 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
       std::make_unique<ChromeShelfMetricsProvider>());
 
   metrics_service_->RegisterMetricsProvider(
-      std::make_unique<UpdateEngineMetricsProvider>());
+      std::make_unique<UpdateEngineMetricsProvider>(
+          session_manager::SessionManager::Get()));
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<UserTypeByDeviceTypeMetricsProvider>());

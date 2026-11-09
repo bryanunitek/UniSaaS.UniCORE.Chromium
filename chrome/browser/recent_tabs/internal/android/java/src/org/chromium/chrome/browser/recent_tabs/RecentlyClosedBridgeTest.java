@@ -8,6 +8,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.when;
 
@@ -42,10 +43,12 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tab.TabStateExtractor;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -367,7 +370,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[3];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[2] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
                     titles[0] = tabC.getTitle();
@@ -433,7 +439,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[0] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
                     closeTabs(
@@ -503,7 +512,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titleB = new String[1];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titleA[0] = tabA.getTitle();
                     titleB[0] = tabB.getTitle();
                     closeTabs(TabClosureParams.closeTab(tabB).build());
@@ -573,7 +585,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[1] = tabA.getTitle();
                     titles[0] = tabB.getTitle();
                     closeTabs(
@@ -629,7 +644,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[1] = tabA.getTitle();
                     titles[0] = tabB.getTitle();
                     closeTabs(
@@ -684,7 +702,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Bar");
                     titles[1] = tabA.getTitle();
                     titles[0] = tabB.getTitle();
@@ -749,8 +770,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
-                    mTabModel.mergeTabsToGroup(tabC.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB, tabC),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Bar");
                     titles[1] = tabA.getTitle();
                     titles[0] = tabC.getTitle();
@@ -809,8 +832,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
-                    mTabModel.mergeTabsToGroup(tabC.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB, tabC),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Bar");
                     titles[1] = tabA.getTitle();
                     titles[0] = tabC.getTitle();
@@ -869,7 +894,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[1];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Bar");
                     titles[0] = tabA.getTitle();
                     closeTabs(
@@ -1080,8 +1108,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[3];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
-                    mTabModel.mergeTabsToGroup(tabC.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB, tabC),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Bar");
                     titles[2] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
@@ -1182,7 +1212,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[3];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[2] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
                     titles[0] = tabC.getTitle();
@@ -1239,7 +1272,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[3];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Foo");
                     titles[2] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
@@ -1309,7 +1345,10 @@ public class RecentlyClosedBridgeTest {
         final String[] title = new String[1];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabC.getId(), tabB.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabC),
+                            tabB,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     title[0] = tabA.getTitle();
                     groupTitles[1] = tabB.getTitle();
                     groupTitles[0] = tabC.getTitle();
@@ -1401,7 +1440,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[3];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[2] = tabA.getTitle();
                     titles[1] = tabB.getTitle();
                     titles[0] = tabC.getTitle();
@@ -1526,7 +1568,10 @@ public class RecentlyClosedBridgeTest {
         final String[] titles = new String[2];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabB.getId(), tabA.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabB),
+                            tabA,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     titles[1] = tabA.getTitle();
                     titles[0] = tabB.getTitle();
                     closeTabs(
@@ -1676,7 +1721,10 @@ public class RecentlyClosedBridgeTest {
         final String[] group2Titles = new String[1];
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabModel.mergeTabsToGroup(tabC.getId(), tabB.getId());
+                    mTabModel.mergeListOfTabsToGroup(
+                            List.of(tabC),
+                            tabB,
+                            TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
                     mTabModel.setTabGroupTitle(tabB.getTabGroupId(), "Group 1");
                     mTabModel.createSingleTabGroup(tabA);
                     mTabModel.setTabGroupTitle(tabA.getTabGroupId(), "Group 2");
@@ -1733,6 +1781,322 @@ public class RecentlyClosedBridgeTest {
 
     // TODO(crbug.com/40218713): Add a test a case where bulk closures remain in the native service,
     // but the flag state is flipped.
+
+    /**
+     * Proves that a bulk closure with markers is fully restored into the requested placement
+     * indices, and that a second call with the same entry id returns an empty array.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.UNDOABLE_TAB_CLOSURE_REWORK)
+    public void testRestoreForUndo_Bulk_RestoresByMarkerAndConsumesEntry() {
+        final String urlA = getUrl(TEST_PAGE_A);
+        final String urlB = getUrl(TEST_PAGE_B);
+        final String urlC = getUrl(TEST_PAGE_C);
+
+        final Tab activeTab = mActivityTestRule.getActivityTab();
+        final Tab tab1 = mActivityTestRule.loadUrlInNewTab(urlA, /* incognito= */ false);
+        final Tab tab2 = mActivityTestRule.loadUrlInNewTab(urlB, /* incognito= */ false);
+        final Tab tab3 = mActivityTestRule.loadUrlInNewTab(urlC, /* incognito= */ false);
+
+        final int id1 = tab1.getId();
+        final int id2 = tab2.getId();
+        final int id3 = tab3.getId();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTabModel.pinTab(id1, /* showUngroupDialog= */ false);
+                    mTabModel.pinTab(id3, /* showUngroupDialog= */ false);
+                    assertEquals(0, mTabModel.indexOf(tab1));
+                    assertEquals(1, mTabModel.indexOf(tab3));
+                    assertEquals(2, mTabModel.indexOf(activeTab));
+                    assertEquals(3, mTabModel.indexOf(tab2));
+                    closeTabs(
+                            TabClosureParams.closeTabs(List.of(tab1, tab2, tab3))
+                                    .allowUndo(false)
+                                    .build());
+                });
+
+        final List<RecentlyClosedEntry> entries = new ArrayList<>();
+        getRecentEntriesAndReturnActiveTabCount(entries);
+        assertEquals(1, entries.size());
+
+        final RecentlyClosedBulkEvent event = (RecentlyClosedBulkEvent) entries.get(0);
+        final int entryId = event.getSessionId();
+
+        final int[] tabIds = new int[] {id1, id2, id3};
+        final int[] indices = new int[] {0, 3, 1};
+        final boolean[] pinned = new boolean[] {true, false, true};
+
+        final int[][] result = new int[1][];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    result[0] =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, entryId, tabIds, indices, pinned);
+                });
+
+        assertEquals(3, result[0].length);
+        assertNotEquals(-1, result[0][0]);
+        assertNotEquals(-1, result[0][1]);
+        assertNotEquals(-1, result[0][2]);
+
+        final List<Tab> tabs = getAllTabs();
+        Tab restored1 = findTabWithUrl(tabs, urlA);
+        Tab restored2 = findTabWithUrl(tabs, urlB);
+        Tab restored3 = findTabWithUrl(tabs, urlC);
+
+        assertEquals(result[0][0], restored1.getId());
+        assertEquals(result[0][1], restored2.getId());
+        assertEquals(result[0][2], restored3.getId());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(0, mTabModel.indexOf(restored1));
+                    assertEquals(3, mTabModel.indexOf(restored2));
+                    assertEquals(1, mTabModel.indexOf(restored3));
+                    assertEquals(2, mTabModel.indexOf(activeTab));
+
+                    assertTrue(restored1.getIsPinned());
+                    assertFalse(restored2.getIsPinned());
+                    assertTrue(restored3.getIsPinned());
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(activeTab, mTabModelSelector.getCurrentTab());
+                });
+
+        entries.clear();
+        getRecentEntriesAndReturnActiveTabCount(entries);
+        assertEquals(0, entries.size());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    int[] emptyResult =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, entryId, tabIds, indices, pinned);
+                    assertEquals(0, emptyResult.length);
+                });
+    }
+
+    /** Proves that an invalid entry id returns an empty array. */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.UNDOABLE_TAB_CLOSURE_REWORK)
+    public void testRestoreForUndo_MissingKey_EmptyArray() {
+        final int[] tabIds = new int[] {123};
+        final int[] indices = new int[] {1};
+        final boolean[] pinned = new boolean[] {false};
+        final int[] tabCount = new int[1];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tabCount[0] = mTabModel.getCount();
+                    int[] result =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, 999999, tabIds, indices, pinned);
+                    assertEquals(0, result.length);
+                    assertEquals(tabCount[0], mTabModel.getCount());
+                });
+    }
+
+    /**
+     * Proves that if a tab was dropped at save time, its placement index receives -1 while others
+     * are placed.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.UNDOABLE_TAB_CLOSURE_REWORK)
+    public void testRestoreForUndo_DroppedTabAtSave_PlacementIndexMinusOneOthersPlaced() {
+        final Tab keepAlive1 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_B), /* incognito= */ false);
+        // Unvisited lazy background tab has no committed URL or saved WebContentsState, so
+        // HistoricalTabSaver drops it at save time.
+        final Tab droppedTab =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                mActivity
+                                        .getTabCreator(/* incognito= */ false)
+                                        .launchUrl(
+                                                getUrl(TEST_PAGE_C),
+                                                TabLaunchType.FROM_SYNC_BACKGROUND));
+        final String urlA = getUrl(TEST_PAGE_A);
+        final Tab tab1 = mActivityTestRule.loadUrlInNewTab(urlA, /* incognito= */ false);
+        final Tab keepAlive2 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_C), /* incognito= */ false);
+
+        final int idDropped = droppedTab.getId();
+        final int id1 = tab1.getId();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(
+                            TabClosureParams.closeTabs(List.of(droppedTab, tab1))
+                                    .allowUndo(false)
+                                    .build());
+                });
+
+        final List<RecentlyClosedEntry> entries = new ArrayList<>();
+        getRecentEntriesAndReturnActiveTabCount(entries);
+        assertEquals(1, entries.size());
+
+        assertTrue(entries.get(0) instanceof RecentlyClosedTab);
+        final RecentlyClosedTab event = (RecentlyClosedTab) entries.get(0);
+        final int entryId = event.getSessionId();
+
+        final int[] tabIds = new int[] {idDropped, id1};
+        final int[] indices = new int[] {1, 2};
+        final boolean[] pinned = new boolean[] {false, false};
+
+        final int[][] result = new int[1][];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    result[0] =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, entryId, tabIds, indices, pinned);
+                });
+
+        assertEquals(2, result[0].length);
+        assertEquals(-1, result[0][0]);
+        assertNotEquals(-1, result[0][1]);
+
+        final List<Tab> tabs = getAllTabs();
+        Tab restored1 = findTabWithUrl(tabs, urlA);
+
+        assertEquals(result[0][1], restored1.getId());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(1, mTabModel.indexOf(keepAlive1));
+                    assertEquals(2, mTabModel.indexOf(restored1));
+                    assertEquals(3, mTabModel.indexOf(keepAlive2));
+                });
+    }
+
+    /**
+     * Proves that tabs are placed in their own placement indices even if restored in a different
+     * order.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.UNDOABLE_TAB_CLOSURE_REWORK)
+    public void testRestoreForUndo_PermutedOrder_LandsInOwnPlacementIndex() {
+        final Tab keepAliveTab =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_C), /* incognito= */ false);
+        final Tab tab1 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_A), /* incognito= */ false);
+        final Tab tab2 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_B), /* incognito= */ false);
+
+        final int id1 = tab1.getId();
+        final int id2 = tab2.getId();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(
+                            TabClosureParams.closeTabs(List.of(tab1, tab2))
+                                    .allowUndo(false)
+                                    .build());
+                });
+
+        final List<RecentlyClosedEntry> entries = new ArrayList<>();
+        getRecentEntriesAndReturnActiveTabCount(entries);
+        assertEquals(1, entries.size());
+
+        final RecentlyClosedBulkEvent event = (RecentlyClosedBulkEvent) entries.get(0);
+        final int entryId = event.getSessionId();
+
+        final int[] tabIds = new int[] {id2, id1};
+        final int[] indices = new int[] {3, 1};
+        final boolean[] pinned = new boolean[] {false, false};
+
+        final int[][] result = new int[1][];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    result[0] =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, entryId, tabIds, indices, pinned);
+                });
+
+        assertEquals(2, result[0].length);
+        assertNotEquals(-1, result[0][0]);
+        assertNotEquals(-1, result[0][1]);
+
+        final List<Tab> tabs = getAllTabs();
+        Tab restored2 = findTabWithUrl(tabs, getUrl(TEST_PAGE_B));
+        Tab restored1 = findTabWithUrl(tabs, getUrl(TEST_PAGE_A));
+
+        assertEquals(result[0][0], restored2.getId());
+        assertEquals(result[0][1], restored1.getId());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(3, mTabModel.indexOf(restored2));
+                    assertEquals(1, mTabModel.indexOf(restored1));
+                });
+    }
+
+    /**
+     * Proves that if an old tab ID in the placement request is not found in the restored entry, the
+     * tabs are appended to the model instead of placed, and the returned array contains -1 for the
+     * missing IDs.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.UNDOABLE_TAB_CLOSURE_REWORK)
+    public void testRestoreForUndo_UnknownOldIdInPlacement_AppendedPlacementIndicesMinusOne() {
+        final Tab keepAliveTab =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_C), /* incognito= */ false);
+        final Tab tab1 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_A), /* incognito= */ false);
+        final Tab tab2 =
+                mActivityTestRule.loadUrlInNewTab(getUrl(TEST_PAGE_B), /* incognito= */ false);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(
+                            TabClosureParams.closeTabs(List.of(tab1, tab2))
+                                    .allowUndo(false)
+                                    .build());
+                });
+
+        final List<RecentlyClosedEntry> entries = new ArrayList<>();
+        getRecentEntriesAndReturnActiveTabCount(entries);
+        assertEquals(1, entries.size());
+
+        final RecentlyClosedBulkEvent event = (RecentlyClosedBulkEvent) entries.get(0);
+        final int entryId = event.getSessionId();
+
+        final int[] tabIds = new int[] {999, 888};
+        final int[] indices = new int[] {1, 2};
+        final boolean[] pinned = new boolean[] {true, true};
+
+        final int[][] result = new int[1][];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    result[0] =
+                            mRecentlyClosedBridge.restoreForUndo(
+                                    mTabModel, entryId, tabIds, indices, pinned);
+                });
+
+        assertEquals(2, result[0].length);
+        assertEquals(-1, result[0][0]);
+        assertEquals(-1, result[0][1]);
+
+        final List<Tab> tabs = getAllTabs();
+        Tab restoredA = findTabWithUrl(tabs, getUrl(TEST_PAGE_A));
+        Tab restoredB = findTabWithUrl(tabs, getUrl(TEST_PAGE_B));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertFalse(restoredA.getIsPinned());
+                    assertFalse(restoredB.getIsPinned());
+
+                    int indexA = mTabModel.indexOf(restoredA);
+                    int indexB = mTabModel.indexOf(restoredB);
+                    assertTrue(indexA >= tabs.size() - 2);
+                    assertTrue(indexB >= tabs.size() - 2);
+                });
+    }
 
     private String getUrl(String relativeUrl) {
         return mActivityTestRule.getTestServer().getURL(relativeUrl);

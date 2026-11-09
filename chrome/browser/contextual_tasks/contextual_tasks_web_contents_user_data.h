@@ -84,6 +84,22 @@ class ContextualTasksWebContentsUserData
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/contextual_tasks/enums.xml:ContextualTasksThreadContextLibraryUpdateOutcome)
 
+  // Whether the AI Mode page is in the zero state or mid-thread, as far as the
+  // browser knows. These values are persisted to logs. Entries should not be
+  // renumbered and numeric values should never be reused.
+  // LINT.IfChange(ContextualTasksPageState)
+  enum class PageState {
+    // The page has not reported its state since it connected or since the
+    // input plate was last cleared (e.g. on a task change).
+    kUnknown = 0,
+    // The page reported that it is in the zero state.
+    kZeroState = 1,
+    // The page reported that it is mid-thread, or a query was submitted.
+    kThread = 2,
+    kMaxValue = kThread,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/contextual_tasks/enums.xml:ContextualTasksPageState)
+
   enum class ContextState {
     kNone,
     kUploading,
@@ -178,6 +194,13 @@ class ContextualTasksWebContentsUserData
   const std::string& GetConnectedDocumentIdForTesting() const;
   PageSearchDebugState GetPageSearchDebugState() const;
 
+  // Returns the zero-state/mid-thread state of the AI Mode page in the primary
+  // page. This is `kZeroState` or `kThread` once the page reports its state via
+  // `OnPageChanged()`, and `kThread` after a query is submitted. It is
+  // `kUnknown` after the page connects and after the input plate is cleared
+  // (e.g. via `OnTaskChanged()`), until the page next reports its state.
+  PageState GetPageState() const;
+
   // Parses and handles an incoming SearchToClientMessage. Returns true if the
   // message was a valid SearchToClientMessage with a recognized payload, or
   // false if the caller should fall back to legacy AimToClientMessage parsing.
@@ -257,7 +280,11 @@ class ContextualTasksWebContentsUserData
   const base::flat_set<base::UnguessableToken>& failed_context_uploads() const {
     return failed_context_uploads_;
   }
-  bool submit_pending() const { return submit_pending_; }
+  bool submit_pending() const { return pending_submit_.has_value(); }
+  bool has_unsubmitted_query() const { return has_unsubmitted_query_; }
+  void set_has_unsubmitted_query(bool has_unsubmitted_query) {
+    has_unsubmitted_query_ = has_unsubmitted_query;
+  }
   void DeleteContext(const base::UnguessableToken& file_token);
   void DeleteTabContext(int32_t tab_id);
   bool OnBrowserTabClosedOrNavigated(SessionID tab_session_id,
@@ -366,12 +393,13 @@ class ContextualTasksWebContentsUserData
   // Returns the delayed tabs in `session_handle` to upload on submit.
   std::vector<int32_t> GetPendingDelayedTabs(
       contextual_search::ContextualSearchSessionHandle& session_handle);
-  // Posts the `on_submit_query_response` once `query_contextualizer_` has
-  // uploaded the tabs for the submitted query.
-  void OnSubmitQueryContextualized(
-      std::string query_text,
-      std::vector<lens::AddedContext> lens_added_contexts,
-      std::optional<base::UnguessableToken> overlay_token);
+  // Marks `pending_submit_` as contextualized once `query_contextualizer_`
+  // finishes and attempts to complete the submission.
+  void OnSubmitQueryContextualized();
+  // Posts `on_submit_query_response` if `pending_submit_` has finished
+  // contextualizing and no selected tabs still have in-flight uploads in
+  // `pending_context_uploads_`.
+  void MaybeFinishPendingSubmit();
   void OnPageContextIneligible();
   void OnPageChanged(bool is_zero_state);
   // Runs `on_tab_context_updated_cb` on every bound extension frame.
@@ -386,6 +414,9 @@ class ContextualTasksWebContentsUserData
       const std::vector<uint8_t>& message_bytes);
   PageSearchState& GetPrimaryPageSearchState();
   const PageSearchState* GetPrimaryPageSearchState() const;
+  // Returns true if both the profile allows sharing tab context and the
+  // current page's server handshake did not disable the `TABS` capability.
+  bool CanShareTabsForCurrentPage();
   // Returns true if the session has tabs for the context library to show:
   // unsubmitted tabs, submitted (persisted) tabs, or tabs restored from the AIM
   // thread. Keep in sync with
@@ -406,6 +437,7 @@ class ContextualTasksWebContentsUserData
   std::optional<ImplicitTab> implicit_tab_;
   base::flat_set<GURL> dismissed_implicit_urls_;
   bool preserve_prestaged_context_ = false;
+  bool has_unsubmitted_query_ = false;
   base::RepeatingClosureList zero_state_callbacks_;
 
   base::flat_map<base::UnguessableToken,
@@ -435,8 +467,26 @@ class ContextualTasksWebContentsUserData
   std::unique_ptr<DesktopQueryContextualizerDelegate>
       query_contextualizer_delegate_;
   std::unique_ptr<QueryContextualizer> query_contextualizer_;
-  // Whether a submit is waiting for `query_contextualizer_`.
-  bool submit_pending_ = false;
+  struct PendingSubmit {
+    PendingSubmit(std::string query_text,
+                  std::vector<lens::AddedContext> lens_added_contexts,
+                  std::optional<base::UnguessableToken> overlay_token);
+    PendingSubmit(PendingSubmit&&) noexcept;
+    PendingSubmit& operator=(PendingSubmit&&) noexcept;
+    ~PendingSubmit();
+
+    std::string query_text;
+    std::vector<lens::AddedContext> lens_added_contexts;
+    std::optional<base::UnguessableToken> overlay_token;
+    bool contextualized = false;
+  };
+  // State for an in-flight query submission while waiting for
+  // `query_contextualizer_` (`contextualized == false`) and any in-flight
+  // manual tab uploads in `pending_context_uploads_` (`contextualized ==
+  // true`). Populated in `HandleOnSubmitQueryRequest()` and cleared when
+  // `MaybeFinishPendingSubmit()` posts `on_submit_query_response` or when input
+  // plate state is reset (e.g. `ClearInputPlateState()`).
+  std::optional<PendingSubmit> pending_submit_;
 
   // Maps TabHandle raw values to SessionID values so closed tabs can still be
   // resolved when deleting tab context or removing underlines.

@@ -29,6 +29,7 @@ BASE_DECLARE_FEATURE(kContextualTasksPinningV2);
 BASE_DECLARE_FEATURE(kContextualTasksEphemeralPinButtonRefactor);
 BASE_DECLARE_FEATURE(kContextualTasksPinnedButtonActiveIndicator);
 BASE_DECLARE_FEATURE(kContextualTasksUnifyPinButtonLogos);
+BASE_DECLARE_FEATURE(kContextualTasksPinningStringVariants);
 BASE_DECLARE_FEATURE(kEphemeralPinningVisibleWhenPermanentlyPinned);
 BASE_DECLARE_FEATURE(kContextualTasksEphemeralButtonContextMenu);
 BASE_DECLARE_FEATURE(kContextualTasksEphemeralButtonAutoDismiss);
@@ -72,10 +73,6 @@ BASE_DECLARE_FEATURE(kEnableNotifyZeroStateRenderedCapability);
 // requests initiated from within an embedded Co-Browse <webview>.
 BASE_DECLARE_FEATURE(kContextualTasksSendFullVersionListEnabled);
 
-// If enabled, AIM will send the ContextualInputUploadType enum on
-// ContextualInputs.
-BASE_DECLARE_FEATURE(kContextualTasksSendContextualInputUploadType);
-
 // When contextual tasks is disabled and this flag is enabled, intecept the
 // contextual tasks URL and redirect to aim URL.
 BASE_DECLARE_FEATURE(kContextualTasksUrlRedirectToAimUrl);
@@ -98,6 +95,14 @@ BASE_DECLARE_FEATURE(kContextualTasksHideMenuOnAiPage);
 
 // Enables painting dropdown menus outside WebUI boundaries.
 BASE_DECLARE_FEATURE(kContextualTasksUnboundedMenu);
+
+// Labels the sign out item in the side panel toolbar account menu as signing
+// out of google.com, rather than just "Sign out".
+BASE_DECLARE_FEATURE(kContextualTasksAccountMenuGoogleComSignOutLabel);
+
+// Enables the single-tab menu item above the "Add tabs" row in the Contextual
+// Tasks context menu and tab picker.
+BASE_DECLARE_FEATURE(kContextualTasksSingleTabMenuItem);
 
 // Enables hiding the close button when in vertical tabs or immersive mode.
 BASE_DECLARE_FEATURE(kContextualTasksHideCloseButtonInVerticalTabs);
@@ -217,6 +222,7 @@ extern const base::FeatureParam<base::TimeDelta> kABASearchJourneysTtl;
 extern const base::FeatureParam<size_t> kABASearchJourneysMaxRingBufferSize;
 extern const base::FeatureParam<size_t> kABASearchJourneysMinQueryMatchLength;
 extern const base::FeatureParam<bool> kABASearchJourneysAllowIntermediateTabs;
+extern const base::FeatureParam<size_t> kABASearchJourneysMinWordsWithoutHint;
 
 bool IsABASearchJourneysEnabled();
 
@@ -228,6 +234,11 @@ size_t GetABASearchJourneysMinQueryMatchLength();
 // the source tab (A -> B -> C -> A) keeps the journey. Off by default, so only
 // A -> B -> A counts.
 bool ShouldAllowABASearchJourneysIntermediateTabs();
+
+// Minimum word count required for an ABA search journey's query when the search
+// results page didn't register any `AimPromoQueryHint`s. `0` (the default)
+// allows queries of any length.
+size_t GetABASearchJourneysMinWordsWithoutHint();
 
 BASE_DECLARE_FEATURE(kContextualTasksEnableSpatialModelToolbarLayout);
 
@@ -362,13 +373,6 @@ extern const base::FeatureParam<double>
 // tab relevancy selection.
 extern const base::FeatureParam<int> kMinQueryWords;
 
-// Controls whether we set the upload type in CreateSearchUrl.
-extern const base::FeatureParam<bool> kSendContextualInputUploadTypeInSearchUrl;
-
-// Controls whether we set the upload type in CreateClientToAimRequest.
-extern const base::FeatureParam<bool>
-    kSendContextualInputUploadTypeInAimRequest;
-
 // Controls whether the contextual task page action should show
 extern const base::FeatureParam<EntryPointOption, true> kShowEntryPoint;
 
@@ -381,12 +385,16 @@ extern bool GetEnableRightHandContextualTasksEphemeralButton();
 BASE_DECLARE_FEATURE_PARAM(bool,
                            kEnableCircularEphemeralButtonNextToBatterySaver);
 
-// Controls whether the ephemeral contextual tasks toolbar button context menu
-// displays "Close side panel" instead of "Hide side panel".
-extern const base::FeatureParam<bool>
-    kContextualTasksEphemeralButtonContextMenuCloseSidePanel;
+// Option for the label shown on the ephemeral contextual tasks toolbar button
+// context menu to close/dismiss the side panel.
+enum class EphemeralButtonContextMenuOption {
+  kHideSidePanel,
+  kCloseSidePanel,
+  kDismissActiveSearch,
+  kDismissActiveSearchInTab,
+};
 
-bool ShouldUseCloseSidePanelForEphemeralButtonContextMenu();
+EphemeralButtonContextMenuOption GetEphemeralButtonContextMenuOption();
 
 // Duration in minutes after closing the contextual tasks side panel before the
 // ephemeral toolbar button is automatically dismissed and its task
@@ -419,6 +427,29 @@ bool ShouldUseSuperGIconForPinButtons();
 // Returns whether both the toolbar and ephemeral pin buttons should be
 // unified to use the gray (monochrome) Super G logo.
 bool ShouldUseGraySuperGIconForPinButtons();
+
+// User-facing string variant replacing "Google Search AI Mode" across
+// Contextual Tasks pinning, tooltips, IPH, and tutorial strings.
+// LINT.IfChange(PinningStringVariant)
+enum class PinningStringVariant {
+  // Uses "Google Search AI Mode" (default).
+  kAiMode,
+  // Uses "Google Search side panel".
+  kSidePanel,
+  // Uses "Google Search in side panel".
+  kInSidePanel,
+  // Uses "Google Search in Chrome".
+  kInChrome,
+  // Uses "Google Search panel".
+  kPanel,
+};
+// LINT.ThenChange(
+//   //chrome/browser/about_flags.cc:PinningStringVariant,
+//   //components/contextual_tasks/public/features.cc:PinningStringVariant,
+//   //components/contextual_tasks/public/features.cc:PinningStringVariantDescription
+// )
+
+PinningStringVariant GetContextualTasksPinningStringVariant();
 
 // UI Options to expand the contextual tasks side panel to tab.
 extern const base::FeatureParam<ExpandButtonOption, true> kExpandButtonOptions;
@@ -636,6 +667,13 @@ extern bool IsContextualTasksPinningV2Enabled();
 // ContextualTasksButton.
 extern bool IsContextualTasksEphemeralPinButtonRefactorEnabled();
 
+// Returns whether an ephemeral toolbar entry point for Contextual Tasks is
+// active, either the legacy `toolbar-ephemeral-branded` entry point param or
+// the ephemeral pin button refactor. Use this instead of comparing
+// `kShowEntryPoint` directly so behavior does not silently depend on the
+// legacy param once the refactor is the only ephemeral entry point.
+extern bool IsContextualTasksEphemeralEntryPointEnabled();
+
 // Returns whether the permanent pinned contextual tasks toolbar button should
 // show an active indicator when the active tab has an ongoing thread/session.
 extern bool IsContextualTasksPinnedButtonActiveIndicatorEnabled();
@@ -673,6 +711,7 @@ extern bool IsContextualTasksSidePanelRearchitectureExpandToFullTabEnabled();
 extern bool IsContextualTasksClobberActiveTabEnabled();
 extern bool IsContextualTasksTabBasedSuggestionsEnabled();
 extern bool IsContextualTasksUnboundedMenuEnabled();
+extern bool IsContextualTasksSingleTabMenuItemEnabled();
 
 inline constexpr char kContextualTasksSearchCapabilitiesHeaderName[] =
     "Chrome-Search-Capabilities-Version";
@@ -742,6 +781,8 @@ extern const char kContextualTasksClobberActiveTabName[];
 extern const char kContextualTasksClobberActiveTabDescription[];
 extern const char kContextualTasksTabBasedSuggestionsName[];
 extern const char kContextualTasksTabBasedSuggestionsDescription[];
+extern const char kContextualTasksSingleTabMenuItemName[];
+extern const char kContextualTasksSingleTabMenuItemDescription[];
 extern const char kContextualTasksSidePanelTabStateName[];
 extern const char kContextualTasksSidePanelTabStateDescription[];
 extern const char kContextualTasksBypassDismissedCapName[];
@@ -754,6 +795,8 @@ extern const char kContextualTasksEphemeralButtonAutoDismissName[];
 extern const char kContextualTasksEphemeralButtonAutoDismissDescription[];
 extern const char kContextualTasksUnifyPinButtonLogosName[];
 extern const char kContextualTasksUnifyPinButtonLogosDescription[];
+extern const char kContextualTasksPinningStringVariantsName[];
+extern const char kContextualTasksPinningStringVariantsDescription[];
 extern const char kABASearchJourneysName[];
 extern const char kABASearchJourneysDescription[];
 extern const char kAllowSignedOutUserInDesktopAndroidName[];

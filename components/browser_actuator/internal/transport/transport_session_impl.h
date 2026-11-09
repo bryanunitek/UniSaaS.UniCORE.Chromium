@@ -46,6 +46,10 @@ class TransportSessionImpl : public TransportSession,
   // before the channel tears down the session.
   static constexpr size_t kMaxConsecutiveInvalidSequenceNumbers = 3;
 
+  // Number of consecutive downstream reorder-buffer overflows without
+  // advancing the sequence cursor before the channel tears down the session.
+  static constexpr size_t kMaxConsecutiveBufferFullErrors = 3;
+
   // Errors returned from the ProcessPayload method below.
   enum class ProcessPayloadError {
     kChannelDisconnected,
@@ -92,6 +96,11 @@ class TransportSessionImpl : public TransportSession,
     return start_time_;
   }
 
+  base::TimeTicks last_activity_time() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return last_activity_time_;
+  }
+
   int64_t client_sequence_number() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return client_sequence_number_;
@@ -124,9 +133,24 @@ class TransportSessionImpl : public TransportSession,
     return last_seen_sequence_number_ >= 0;
   }
 
+  // Sequence number of the downstream message currently being dispatched on
+  // the session's sequence (`0` on the out-of-band FCM wake-up path), or
+  // `std::nullopt` outside an active `OnMessage()` /
+  // `ProcessDownstreamMessage()` frame. Used by `ProbeTransportHandler` to
+  // preserve `responding_to_sequence_number` across delayed probe replies.
+  std::optional<int64_t> dispatching_sequence_number() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return dispatching_sequence_number_;
+  }
+
   size_t consecutive_invalid_sequence_numbers() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return consecutive_invalid_sequence_numbers_;
+  }
+
+  size_t consecutive_buffer_full_errors() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return consecutive_buffer_full_errors_;
   }
 
   // Increments the sequence number for the next outgoing message.
@@ -163,6 +187,7 @@ class TransportSessionImpl : public TransportSession,
   const DownstreamMessageCallback on_downstream_message_;
 
   const base::TimeTicks start_time_;
+  base::TimeTicks last_activity_time_ GUARDED_BY_CONTEXT(sequence_checker_);
   DownstreamMessageSequencer sequencer_ GUARDED_BY_CONTEXT(sequence_checker_);
   // Tracks the sequence number of the most recently dispatched downstream
   // message (>= 0), or -1 before any message is dispatched. Unlike
@@ -173,6 +198,8 @@ class TransportSessionImpl : public TransportSession,
   int64_t last_seen_sequence_number_ GUARDED_BY_CONTEXT(sequence_checker_) = -1;
   size_t consecutive_invalid_sequence_numbers_
       GUARDED_BY_CONTEXT(sequence_checker_) = 0;
+  size_t consecutive_buffer_full_errors_ GUARDED_BY_CONTEXT(sequence_checker_) =
+      0;
   int64_t client_sequence_number_ GUARDED_BY_CONTEXT(sequence_checker_) = 0;
   std::optional<int64_t> dispatching_sequence_number_
       GUARDED_BY_CONTEXT(sequence_checker_);

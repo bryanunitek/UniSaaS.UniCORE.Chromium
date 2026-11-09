@@ -26,7 +26,7 @@
 #include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
 #include "ui/base/cocoa/accessibility_focus_overrider.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/views/cocoa/drag_drop_client_mac.h"
@@ -417,6 +417,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void OnImmersiveFullscreenToolbarRevealChanged(bool is_revealed) override;
   void OnImmersiveFullscreenMenuBarRevealChanged(double reveal_amount) override;
   void OnAutohidingMenuBarHeightChanged(int menu_bar_height) override;
+  void OnImmersiveFullscreenTitlebarFrameChanged(
+      const gfx::Rect& frame) override;
   void DoDialogButtonAction(ui::mojom::DialogButton button) override;
   bool GetDialogButtonInfo(ui::mojom::DialogButton type,
                            bool* button_exists,
@@ -440,12 +442,13 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
       int32_t command,
       remote_cocoa::mojom::ValidateUserInterfaceItemResultPtr* out_result)
       override;
-  bool WillExecuteCommand(int32_t command,
-                          WindowOpenDisposition window_open_disposition,
-                          bool is_before_first_responder,
-                          bool* will_execute) override;
+  bool WillExecuteCommand(
+      int32_t command,
+      ui::mojom::WindowOpenDisposition window_open_disposition,
+      bool is_before_first_responder,
+      bool* will_execute) override;
   bool ExecuteCommand(int32_t command,
-                      WindowOpenDisposition window_open_disposition,
+                      ui::mojom::WindowOpenDisposition window_open_disposition,
                       bool is_before_first_responder,
                       bool* was_executed) override;
   bool HandleAccelerator(const ui::Accelerator& accelerator,
@@ -487,12 +490,13 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void ValidateUserInterfaceItem(
       int32_t command,
       ValidateUserInterfaceItemCallback callback) override;
-  void WillExecuteCommand(int32_t command,
-                          WindowOpenDisposition window_open_disposition,
-                          bool is_before_first_responder,
-                          ExecuteCommandCallback callback) override;
+  void WillExecuteCommand(
+      int32_t command,
+      ui::mojom::WindowOpenDisposition window_open_disposition,
+      bool is_before_first_responder,
+      ExecuteCommandCallback callback) override;
   void ExecuteCommand(int32_t command,
-                      WindowOpenDisposition window_open_disposition,
+                      ui::mojom::WindowOpenDisposition window_open_disposition,
                       bool is_before_first_responder,
                       ExecuteCommandCallback callback) override;
   void HandleAccelerator(const ui::Accelerator& accelerator,

@@ -160,8 +160,11 @@ enum RuleSetFlags {
   kFontFeatureValuesRules = 1 << 7,
   kViewTransitionRules = 1 << 8,
   kFunctionRules = 1 << 9,
+  kFullRecalcRules = 1 << 10,
 };
 
+// Includes kFullRecalcRules: layer-order changes can affect rules in unchanged
+// sheets and therefore require subtree style recalc.
 const unsigned kRuleSetFlagsAll = ~0u;
 
 unsigned GetRuleSetFlags(const HeapHashSet<Member<RuleSet>> rule_sets) {
@@ -2912,6 +2915,22 @@ void StyleEngine::InvalidateForRuleSetChanges(
   if (invalidation_root.GetStyleChangeType() == kSubtreeStyleChange) {
     return;
   }
+  // An unstyled root already marked for recalc (e.g. a newly inserted shadow
+  // host) needs nothing: matching could only mark it again, and we never
+  // descend below an unstyled root. Without a ComputedStyle, an independent
+  // style change is handled as a full recalc anyway.
+  if (invalidation_root.NeedsStyleRecalc() &&
+      !invalidation_root.GetComputedStyle()) {
+    return;
+  }
+
+  if (changed_rule_flags & kFullRecalcRules) {
+    invalidation_root.SetNeedsStyleRecalc(
+        kSubtreeStyleChange,
+        StyleChangeReasonForTracing::Create(
+            style_change_reason::kActiveStylesheetsUpdate));
+    return;
+  }
 
   SelectorFilter selector_filter;
   selector_filter.PushAllParentsOf(tree_scope);
@@ -4341,6 +4360,15 @@ void StyleEngine::ViewportDefiningElementDidChange() {
 
   LayoutObject* layout_object = body->GetLayoutObject();
   if (layout_object && layout_object->IsLayoutBlock()) {
+    if (!layout_object->Style().ScrollMarkerGroupNone()) {
+      // The body box is a scroll container only if its overflow is not
+      // propagated to the viewport (see LayoutBlock::RespectsCSSOverflow()).
+      // When that changes, the ::scroll-marker pseudo-elements inside it move
+      // between its ::scroll-marker-group and the root's. The body style did
+      // not change, so reattach it to detach the markers from their old group.
+      body->SetNeedsReattachLayoutTree();
+      return;
+    }
     // When the overflow style for documentElement changes to or from visible,
     // it changes whether the body element's box should have scrollable overflow
     // on its own box or propagated to the viewport. If the body style did not

@@ -18,6 +18,8 @@
 #import "base/byte_size.h"
 #import "base/check.h"
 #import "base/containers/span.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
 #import "base/strings/strcat.h"
 #import "base/strings/string_util.h"
 #import "base/strings/stringprintf.h"
@@ -162,6 +164,7 @@ void TtcConversation::set_journal(TTCJournal* journal) {
 
 void TtcConversation::Start() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  is_mic_muted_ = false;
   const uint64_t current_generation = ++session_generation_;
   ResetTurnJournalState();
 
@@ -185,12 +188,46 @@ void TtcConversation::Start() {
   }];
 }
 
+void TtcConversation::SetMicMuted(bool muted) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (is_stopping_ || is_mic_muted_ == muted) {
+    return;
+  }
+  is_mic_muted_ = muted;
+  // Invalidate any pending in-flight start completions.
+  const uint64_t current_generation = ++session_generation_;
+  if (muted) {
+    FlushSentAudioJournalState();
+    [audio_controller_ stopCapture];
+    if (delegate_) {
+      delegate_->OnAudioEnergyUpdated(0.0f);
+    }
+  } else {
+    [audio_controller_
+        startCaptureWithCompletion:
+            base::CallbackToBlock(base::BindOnce(
+                &TtcConversation::HandleResumeCaptureResult,
+                weak_ptr_factory_.GetWeakPtr(), current_generation))];
+  }
+  // Skip notifying if `startCaptureWithCompletion:` synchronously failed and
+  // rolled `is_mic_muted_` back via `SetMicMuted(true)`.
+  if (is_mic_muted_ == muted && delegate_) {
+    delegate_->OnConversationMicMutedChanged(muted);
+  }
+}
+
+bool TtcConversation::IsMicMuted() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return is_mic_muted_;
+}
+
 void TtcConversation::Stop() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (is_stopping_) {
     return;
   }
   is_stopping_ = true;
+  is_mic_muted_ = false;
 
   // Invalidate any pending in-flight start completions.
   session_generation_++;
@@ -241,7 +278,7 @@ void TtcConversation::SendContextUpdate(
 
 void TtcConversation::OnAudioChunkCaptured(NSData* pcm_data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!backend_) {
+  if (!backend_ || is_mic_muted_) {
     return;
   }
 
@@ -270,6 +307,9 @@ void TtcConversation::OnAudioChunkCaptured(NSData* pcm_data) {
 
 void TtcConversation::OnInputEnergyUpdated(float energy) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (is_mic_muted_) {
+    return;
+  }
   if (backend_ && !audio_controller_.isPlaying &&
       backend_->is_transport_connected()) {
     peak_input_energy_ = std::max(peak_input_energy_, energy);
@@ -286,7 +326,9 @@ void TtcConversation::OnAudioControllerError(NSError* error) {
 
 void TtcConversation::OnAudioControllerStoppedCapture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  Stop();
+  // OS or hardware audio interruptions mute microphone capture rather than
+  // severing the backend transport connection.
+  SetMicMuted(true);
 }
 
 #pragma mark - Backend Observer Callbacks
@@ -397,6 +439,15 @@ void TtcConversation::HandleStartCaptureResult(bool success,
 
   if (!success) {
     HandleError(ExtractTTCErrorCode(error));
+  }
+}
+
+void TtcConversation::HandleResumeCaptureResult(uint64_t generation,
+                                                BOOL success,
+                                                NSError* error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (session_generation_ == generation && !success) {
+    SetMicMuted(true);
   }
 }
 

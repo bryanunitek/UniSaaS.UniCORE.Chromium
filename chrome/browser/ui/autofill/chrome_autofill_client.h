@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/i18n/rtl.h"
@@ -50,13 +51,16 @@
 #include "url/origin.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/autofill/autofill_snackbar_controller_impl.h"
 #include "components/autofill/core/browser/ui/autofill_tapjacking_protector.h"
 #else  // BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/autofill/autofill_field_promo_controller.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 class ToastController;
+
+namespace device_reauth {
+class DeviceAuthAvailabilityChecker;
+}
 
 namespace optimization_guide {
 class RemoteModelExecutor;
@@ -76,6 +80,7 @@ namespace autofill {
 // TODO(crbug.com/364089352): When //c/b/ui/android/autofill gets modularized,
 // //c/b/ui/autofill/ can depend directly on it.
 class AutofillAiSaveUpdateEntityFlowManager;
+class AutofillSnackbarControllerImpl;
 class SaveUpdateAddressProfileFlowManager;
 class AutofillMessageController;
 class AutofillDialogController;
@@ -178,7 +183,8 @@ class ChromeAutofillClient : public ContentAutofillClient {
   AutofillAiManager* GetAutofillAiManager() final;
   AutofillAiPersonalContextAccessManager*
   GetAutofillAiPersonalContextAccessManager() final;
-  EntitySuppressionManager* GetEntitySuppressionManager() final;
+  PersonalContextEntityMetadataManager*
+  GetPersonalContextEntityMetadataManager() final;
   AutofillAiModelCache* GetAutofillAiModelCache() final;
   AutofillAiModelExecutor* GetAutofillAiModelExecutor() final;
   consent_auditor::ConsentAuditor* GetConsentAuditor() final;
@@ -370,12 +376,6 @@ class ChromeAutofillClient : public ContentAutofillClient {
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_ANDROID)
-  void SetAutofillSnackbarControllerImplForTesting(
-      std::unique_ptr<AutofillSnackbarControllerImpl>
-          autofill_snackbar_controller_impl) {
-    autofill_snackbar_controller_impl_ =
-        std::move(autofill_snackbar_controller_impl);
-  }
   void SetAutofillTapjackingProtectorImplForTesting(
       std::unique_ptr<AutofillTapjackingProtector>
           autofill_tapjacking_protector_impl) {
@@ -384,6 +384,23 @@ class ChromeAutofillClient : public ContentAutofillClient {
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 #endif  // defined(UNIT_TEST)
+
+#if BUILDFLAG(IS_ANDROID)
+  void SetAutofillSnackbarControllerImplForTesting(
+      std::unique_ptr<AutofillSnackbarControllerImpl>
+          autofill_snackbar_controller_impl);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // Test override factory invoked on each `GetDeviceAuthAvailabilityChecker()`
+  // call instead of querying the OS. Pass a non-null callback to
+  // `SetDeviceAuthAvailabilityCheckerFactoryForTesting()` and keep the
+  // returned `base::AutoReset` alive for the duration of the test.
+  using DeviceAuthAvailabilityCheckerFactoryForTesting =
+      base::RepeatingCallback<
+          std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>()>;
+  static base::AutoReset<DeviceAuthAvailabilityCheckerFactoryForTesting>
+  SetDeviceAuthAvailabilityCheckerFactoryForTesting(
+      DeviceAuthAvailabilityCheckerFactoryForTesting factory);
 
   // ContentAutofillClient:
   std::unique_ptr<AutofillManager> CreateManager(
@@ -401,6 +418,7 @@ class ChromeAutofillClient : public ContentAutofillClient {
   FormPredictionsTracker* GetFormPredictionsTracker() override;
 
   one_time_tokens::SmsOtpService* GetSmsOtpService() const final;
+  one_time_tokens::GmailOtpService* GetGmailOtpService() override;
   one_time_tokens::GmailOtpBackend* GetGmailOtpBackend() const final;
 
  protected:

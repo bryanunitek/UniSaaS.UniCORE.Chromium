@@ -92,7 +92,6 @@ public class ModelTrackingOrchestrator {
         SynchronizerState.MODEL_PENDING,
         SynchronizerState.RESTORING,
         SynchronizerState.TRACKING,
-        SynchronizerState.CANCELLED,
     })
     @Retention(RetentionPolicy.SOURCE)
     private @interface SynchronizerState {
@@ -112,9 +111,6 @@ public class ModelTrackingOrchestrator {
 
         /** Tracking changes to the TabModel. */
         int TRACKING = 3;
-
-        /** After a restore has been cancelled. */
-        int CANCELLED = 4;
     }
 
     private final PersistentStoreMigrationManager mMigrationManager;
@@ -132,6 +128,7 @@ public class ModelTrackingOrchestrator {
 
                 @Override
                 public void didBecomeEmpty() {
+                    mActiveTabCache.clearActiveTab(/* incognito= */ true);
                     assumeNonNull(mIncognitoSynchronizerManager).reset();
                 }
             };
@@ -274,13 +271,25 @@ public class ModelTrackingOrchestrator {
         }
     }
 
+    /**
+     * Called when the {@link CombinedTabRestorer} has been cancelled for one model.
+     *
+     * @param incognito Whether the model is incognito.
+     */
+    public void onCancelledForModel(boolean incognito) {
+        if (!mIsAuthoritative) return;
+        if (!incognito) {
+            mRegularSynchronizerManager.onRestoreCancelled();
+            return;
+        }
+        if (mIncognitoSynchronizerManager == null) return;
+        mIncognitoSynchronizerManager.onRestoreCancelled();
+    }
+
     /** Called when the {@link CombinedTabRestorer} has been cancelled for both models. */
     public void onRestoreCancelled() {
-        if (!mIsAuthoritative) return;
-        mRegularSynchronizerManager.onRestoreCancelled();
-        if (mIncognitoSynchronizerManager != null) {
-            mIncognitoSynchronizerManager.onRestoreCancelled();
-        }
+        onCancelledForModel(/* incognito= */ false);
+        onCancelledForModel(/* incognito= */ true);
     }
 
     /**
@@ -416,6 +425,19 @@ public class ModelTrackingOrchestrator {
         }
         drainDirtyTabs(incognito);
         synchronizer.saveStructureSnapshot(clearUnusedNodes, callback);
+    }
+
+    /**
+     * Flushes any pending structural snapshot for the specified model immediately.
+     *
+     * @param incognito Whether to flush the snapshot for the incognito model.
+     */
+    public void flushPendingStructureSnapshot(boolean incognito) {
+        StorageCollectionSynchronizer synchronizer =
+                incognito ? mIncognitoSynchronizer : mRegularSynchronizer;
+        if (synchronizer != null) {
+            synchronizer.flushPendingStructureSnapshot();
+        }
     }
 
     /**
@@ -620,24 +642,23 @@ public class ModelTrackingOrchestrator {
         private final boolean mIncognito;
         private @SynchronizerState int mState = SynchronizerState.START;
         private @Nullable Runnable mInitRestoreOrchestratorCallback;
+        private boolean mIsRestoreCancelled;
 
         SynchronizerManager(boolean incognito) {
             mIncognito = incognito;
         }
 
         public void onDataLoaded(StorageLoadedData data) {
-            if (mState != SynchronizerState.CANCELLED) {
-                if (mIsAuthoritative && data.getLoadedTabStates().length > 0) {
-                    assert mState == SynchronizerState.START;
-                    mState = SynchronizerState.MODEL_PENDING;
-                    mInitRestoreOrchestratorCallback =
-                            () -> initRestoreOrchestrator(data, mIncognito);
-                    // This handles the case where the model was already created before data
-                    // loaded (e.g. standard regular windows, or incognito windows where we
-                    // missed IncognitoTabModelObserver#onIncognitoModelCreated()).
-                    if (wasModelCreated(mIncognito)) {
-                        onModelCreated();
-                    }
+            mIsRestoreCancelled = false;
+            if (mIsAuthoritative && data.getLoadedTabStates().length > 0) {
+                assert mState == SynchronizerState.START;
+                mState = SynchronizerState.MODEL_PENDING;
+                mInitRestoreOrchestratorCallback = () -> initRestoreOrchestrator(data, mIncognito);
+                // This handles the case where the model was already created before data
+                // loaded (e.g. standard regular windows, or incognito windows where we
+                // missed IncognitoTabModelObserver#onIncognitoModelCreated()).
+                if (wasModelCreated(mIncognito)) {
+                    onModelCreated();
                 }
             }
         }
@@ -647,9 +668,12 @@ public class ModelTrackingOrchestrator {
             if (mIsAuthoritative && mState == SynchronizerState.MODEL_PENDING) {
                 mState = SynchronizerState.RESTORING;
                 assumeNonNull(mInitRestoreOrchestratorCallback).run();
+                mInitRestoreOrchestratorCallback = null;
                 initVisualDataTracking(mIncognito);
                 initActiveTabTracking(mIncognito);
-                mInitRestoreOrchestratorCallback = null;
+                if (getTabModel(mIncognito).getCurrentTabSupplier().get() != null) {
+                    onActiveTabChange(mIncognito);
+                }
             } else if (mState == SynchronizerState.START && !mLoadIncognitoTabsOnStart) {
                 if (fullSaveAndInitTracking(mIncognito)) {
                     mState = SynchronizerState.TRACKING;
@@ -658,7 +682,6 @@ public class ModelTrackingOrchestrator {
         }
 
         public void onRestoreFinished() {
-            if (mState == SynchronizerState.CANCELLED) return;
             if (mState == SynchronizerState.START) {
                 if (wasModelCreated(mIncognito)) {
                     if (fullSaveAndInitTracking(mIncognito)) {
@@ -667,6 +690,9 @@ public class ModelTrackingOrchestrator {
                 } else if (!mIsAuthoritative) {
                     markModelCaughtUp(mIncognito);
                 }
+            } else if (mIsAuthoritative && mState == SynchronizerState.MODEL_PENDING) {
+                mInitRestoreOrchestratorCallback = null;
+                mState = SynchronizerState.START;
             } else if (mIsAuthoritative && mState == SynchronizerState.RESTORING) {
                 mState = SynchronizerState.TRACKING;
                 initCollectionTracking(mIncognito);
@@ -679,10 +705,16 @@ public class ModelTrackingOrchestrator {
         }
 
         public void onRestoreCancelled() {
-            if (mState == SynchronizerState.START && (!mIncognito || mLoadIncognitoTabsOnStart)) {
+            if (mState == SynchronizerState.TRACKING) return;
+            if (!mIsRestoreCancelled
+                    && (mState == SynchronizerState.RESTORING
+                            || (mState == SynchronizerState.START
+                                    && (!mIncognito || mLoadIncognitoTabsOnStart)))) {
                 cancelRestore(mIncognito);
-                mState = SynchronizerState.CANCELLED;
+                mIsRestoreCancelled = true;
             }
+            mInitRestoreOrchestratorCallback = null;
+            mState = SynchronizerState.START;
             if (mIncognito) {
                 mLoadIncognitoTabsOnStart = false;
             }
@@ -695,9 +727,7 @@ public class ModelTrackingOrchestrator {
                     mIncognitoSynchronizer.destroy();
                     mIncognitoSynchronizer = null;
                 }
-                if (mState != SynchronizerState.CANCELLED) {
-                    mLoadIncognitoTabsOnStart = false;
-                }
+                mLoadIncognitoTabsOnStart = false;
             } else {
                 if (mRegularSynchronizer != null) {
                     mRegularSynchronizer.destroy();
@@ -706,6 +736,7 @@ public class ModelTrackingOrchestrator {
             }
             mState = SynchronizerState.START;
             mInitRestoreOrchestratorCallback = null;
+            mIsRestoreCancelled = false;
             cleanActiveTabTracking(mIncognito);
         }
     }

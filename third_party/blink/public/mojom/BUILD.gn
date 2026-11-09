@@ -138,7 +138,6 @@ mojom("mojom_platform") {
     "forms/form_control_type.mojom",
     "frame/policy_container.mojom",
     "geolocation/geolocation_service.mojom",
-    "haptics/haptics.mojom",
     "hid/hid.mojom",
     "hyphenation/hyphenation.mojom",
     "idle/idle_manager.mojom",
@@ -228,6 +227,7 @@ mojom("mojom_platform") {
     "scroll/scroll_into_view_params.mojom",
     "scroll/scrollbar_mode.mojom",
     "security_context/insecure_request_policy.mojom",
+    "security_context/outside_context_csp_violation_reporter.mojom",
     "selection_menu/selection_menu_behavior.mojom",
     "sensor/web_sensor_provider.mojom",
     "serial/serial.mojom",
@@ -693,6 +693,17 @@ mojom("mojom_platform") {
         },
 
         {
+          mojom = "blink.mojom.Manifest"
+          cpp = "::blink::Manifest"
+          default_constructible = false
+        },
+
+        {
+          mojom = "blink.mojom.ManifestFileHandler"
+          cpp = "::blink::Manifest::FileHandler"
+        },
+
+        {
           mojom = "blink.mojom.ManifestImageResource"
           cpp = "::blink::Manifest::ImageResource"
         },
@@ -703,8 +714,43 @@ mojom("mojom_platform") {
         },
 
         {
+          mojom = "blink.mojom.ManifestLockScreen"
+          cpp = "::blink::Manifest::LockScreen"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestMigrateFrom"
+          cpp = "::blink::Manifest::MigrateFrom"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestMigrateTo"
+          cpp = "::blink::Manifest::MigrateTo"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestNoteTaking"
+          cpp = "::blink::Manifest::NoteTaking"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestProtocolHandler"
+          cpp = "::blink::Manifest::ProtocolHandler"
+        },
+
+        {
           mojom = "blink.mojom.ManifestRelatedApplication"
           cpp = "::blink::Manifest::RelatedApplication"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestScopeExtension"
+          cpp = "::blink::Manifest::ScopeExtension"
+        },
+
+        {
+          mojom = "blink.mojom.ManifestScreenshot"
+          cpp = "::blink::Manifest::Screenshot"
         },
 
         {
@@ -738,6 +784,7 @@ mojom("mojom_platform") {
           [ "//third_party/blink/common/manifest/manifest_mojom_traits.cc" ]
       traits_deps = [
         "//net",
+        "//skia/public/mojom",
         "//third_party/icu",
         "//ui/gfx/geometry/mojom:mojom_traits",
         "//url",
@@ -910,16 +957,6 @@ mojom("mojom_platform") {
 
   # Don't scramble message IDs so they are redistributable to external tests.
   scramble_message_ids = false
-}
-
-if (is_android) {
-  # "mojom_platform" no longer generates Java bindings; the mojom files that are
-  # needed from Java live in "android_mojo_bindings" instead.
-  # TODO(crbug.com/579031069): Remove this alias once //clank depends on
-  # :android_mojo_bindings_java instead of :mojom_platform_java.
-  java_group("mojom_platform_java") {
-    deps = [ ":android_mojo_bindings_java" ]
-  }
 }
 
 # Kept separate from "mojom_platform" because the Java bindings are

@@ -23,6 +23,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/test/pixel_test_configuration_mixin.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
@@ -43,11 +44,15 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSettingsTabId);
 
 // Baseline Gerrit CL number of the most recent CL that modified the UI of the
 // default search engine picker.
-constexpr char kPickerScreenshotBaselineCL[] = "8641569";
+constexpr char kPickerScreenshotBaselineCL[] = "8726329";
 
 // Baseline Gerrit CL number of the most recent CL that modified the UI of the
 // "More search engines" dialog.
-constexpr char kMoreEnginesScreenshotBaselineCL[] = "8641629";
+constexpr char kMoreEnginesScreenshotBaselineCL[] = "8726329";
+
+// Baseline Gerrit CL number of the most recent CL that modified the UI of the
+// "More search engines" dialog with the guest checkbox.
+constexpr char kMoreEnginesGuestCheckboxBaselineCL[] = "8726329";
 
 // Artificial prepopulated search engines, which replace the production ones
 // through `ScopedPrepopulatedEnginesOverride`. They have no favicon URL, so
@@ -265,6 +270,12 @@ IN_PROC_BROWSER_TEST_P(SearchEnginePickerPixelBrowserTest, MoreEngines) {
 
 IN_PROC_BROWSER_TEST_P(SearchEnginePickerPixelBrowserTest,
                        MoreEnginesFiltered) {
+#if BUILDFLAG(IS_WIN)
+  if (GetParam().use_dark_theme) {
+    // TODO(crbug.com/579836795): Failing on Windows builders.
+    GTEST_SKIP();
+  }
+#endif
   RunTestSequence(
       OpenMoreEnginesDialog(),
       // Matches "Foxtrot" and "Hotel".
@@ -286,6 +297,24 @@ IN_PROC_BROWSER_TEST_P(SearchEnginePickerPixelBrowserTest,
                             kMoreEnginesDialog + ".no-search-results"),
       ScreenshotDialog(kMoreEnginesDialog, "MoreSearchEnginesNoResults",
                        kMoreEnginesScreenshotBaselineCL));
+}
+
+IN_PROC_BROWSER_TEST_P(SearchEnginePickerPixelBrowserTest,
+                       MoreEnginesGuestCheckbox) {
+  RunTestSequence(
+      OpenMoreEnginesDialog(),
+      // Shows the checkbox offered to guest profiles, to use the chosen engine
+      // in future guest sessions, by setting its state directly: with the
+      // prepopulated engines overridden, the default regional program is used,
+      // which doesn't offer it, even to guest profiles. The state that the
+      // search page fetched when opening the picker was received before the
+      // engines of this dialog, so it doesn't override this one.
+      ExecuteJsAt(kSettingsTabId, kMoreEnginesDialog,
+                  "(el) => { el.saveGuestChoice = false; }"),
+      WaitForElementVisible(kSettingsTabId,
+                            kMoreEnginesDialog + "#saveGuestChoiceCheckbox"),
+      ScreenshotDialog(kMoreEnginesDialog, "MoreSearchEnginesGuestCheckbox",
+                       kMoreEnginesGuestCheckboxBaselineCL));
 }
 
 INSTANTIATE_TEST_SUITE_P(

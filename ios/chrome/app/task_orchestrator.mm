@@ -39,7 +39,6 @@
 #import "ios/chrome/browser/signin/model/account_profile_mapper.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
-#import "ios/chrome/common/app_group/app_group_utils.h"
 #import "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace {
@@ -156,6 +155,20 @@ SceneState* GetSceneStateForScene(UIScene* scene) {
     }
   }
   return nil;
+}
+
+- (void)clearTasksForScene:(SceneState*)sceneState {
+  auto it = _tasksPerScene.find(GetSceneIdentifier(sceneState.scene));
+  if (it == _tasksPerScene.end()) {
+    return;
+  }
+  // The profile or account switch recreates the SceneState by disconnecting and
+  // reconnecting the scene; keep the tasks waiting for that switch.
+  if (it->second.is_switching) {
+    return;
+  }
+  _tasksPerScene.erase(it);
+  sceneState.hasPendingIntent = NO;
 }
 
 #pragma mark - Private
@@ -283,7 +296,7 @@ SceneState* GetSceneStateForScene(UIScene* scene) {
   }
 
   ChangeProfileReason reason =
-      app_group::IsShareExtensionCommandURL(gaiaTask.URL)
+      gaiaTask.isFromShareExtension
           ? ChangeProfileReason::kSwitchAccountsFromShareExtension
           : ChangeProfileReason::kSwitchAccountsFromWidget;
 

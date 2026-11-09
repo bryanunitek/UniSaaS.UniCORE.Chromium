@@ -83,8 +83,10 @@ import './site_settings/site_data.js';
 import './site_settings/site_details.js';
 import './site_settings/site_details_permission_device_entry.js';
 import './site_settings/site_settings_page.js';
-// <if expr="is_chromeos">
+// <if expr="enable_smart_card">
 import './site_settings/smart_card_readers_page.js';
+// </if>
+// <if expr="is_chromeos">
 import './site_settings/web_printing_page.js';
 // </if>
 import './site_settings/sound_page.js';
@@ -180,7 +182,7 @@ export {AutofillManagerImpl} from './autofill_page/autofill_manager_proxy.js';
 export type {AutofillManagerProxy, PersonalDataChangedListener} from './autofill_page/autofill_manager_proxy.js';
 export {SettingsAddressEditDialogElement} from './autofill_page/contact_info/address_edit_dialog.js';
 export {SettingsAddressRemoveConfirmationDialogElement} from './autofill_page/contact_info/address_remove_confirmation_dialog.js';
-export {AUTOFILL_GMAIL_OTP_FILLING_ENABLED_PREF, AUTOFILL_GMAIL_OTP_OPT_IN_SETTINGS_CHANGE_METRIC, AutofillAddressOptInChange, SettingsContactInfoPageElement} from './autofill_page/contact_info/contact_info_page.js';
+export {AUTOFILL_GMAIL_OTP_FILLING_ENABLED_PREF, AutofillAddressOptInChange, GMAIL_OTP_OPT_IN_SETTINGS_CHANGE_METRIC, GmailOtpSettingsChangeOutcome, SettingsContactInfoPageElement} from './autofill_page/contact_info/contact_info_page.js';
 export {SettingsGmailOtpDisclaimerDialogElement} from './autofill_page/contact_info/gmail_otp_disclaimer_dialog.js';
 export {CountryDetailManagerProxyImpl} from './autofill_page/country_detail_manager_proxy.js';
 export type {CountryDetailManagerProxy} from './autofill_page/country_detail_manager_proxy.js';
@@ -337,7 +339,7 @@ export {defaultSettingLabel} from './site_settings/site_settings_list.js';
 export {SiteSettingsMixin} from './site_settings/site_settings_mixin.js';
 export {SiteSettingsMixinLit} from './site_settings/site_settings_mixin_lit.js';
 export {SettingsSiteSettingsPageElement} from './site_settings/site_settings_page.js';
-// <if expr="is_chromeos">
+// <if expr="enable_smart_card">
 export {SettingsSmartCardReadersPageElement} from './site_settings/smart_card_readers_page.js';
 // </if>
 export {SoundPageElement} from './site_settings/sound_page.js';

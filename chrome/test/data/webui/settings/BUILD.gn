@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//third_party/blink/public/public_features.gni")
 import("../build_webui_tests.gni")
 
 build_webui_tests("build") {
@@ -158,6 +159,8 @@ build_webui_tests("build") {
     "settings_menu_test.ts",
     "settings_pref_util_test.ts",
     "settings_radio_group_test.ts",
+    "settings_search_dropdown_test.ts",
+    "settings_search_manager_test.ts",
     "settings_section_test.ts",
     "settings_slider_test.ts",
     "settings_subpage_test.ts",
@@ -217,6 +220,7 @@ build_webui_tests("build") {
     "test_search_manager.ts",
     "test_security_keys_browser_proxy.ts",
     "test_security_page_browser_proxy.ts",
+    "test_settings_search_handler.ts",
     "test_site_settings_browser_proxy.ts",
     "test_startup_urls_page_browser_proxy.ts",
     "test_sync_browser_proxy.ts",
@@ -230,10 +234,7 @@ build_webui_tests("build") {
   ]
 
   if (is_chromeos) {
-    files += [
-      "people_page_test_cros.ts",
-      "smart_card_readers_page_test.ts",
-    ]
+    files += [ "people_page_test_cros.ts" ]
   } else {
     files += [
       "clear_browsing_data_account_indicator_test.ts",
@@ -257,6 +258,10 @@ build_webui_tests("build") {
       "translate_page_metrics_test_browser.ts",
       "translate_page_test.ts",
     ]
+  }
+
+  if (enable_smart_card) {
+    files += [ "smart_card_readers_page_test.ts" ]
   }
 
   if (is_chrome_branded) {

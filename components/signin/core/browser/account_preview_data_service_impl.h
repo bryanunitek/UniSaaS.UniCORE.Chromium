@@ -15,6 +15,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/version_info/channel.h"
 #include "build/build_config.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -56,8 +57,8 @@ class AccountPreviewDataServiceImpl : public AccountPreviewDataService,
     kExternalAppAccountUpdated = 4,
     kPrimaryAccountSet = 5,
     kPrimaryAccountCleared = 6,
-    kPreferredAccountMissingForFRE = 7,
-    kMaxValue = kPreferredAccountMissingForFRE,
+    kPreferredAccountMissingForAsyncFetch = 7,
+    kMaxValue = kPreferredAccountMissingForAsyncFetch,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:AccountPreviewFetchTriggerCause)
 
@@ -90,7 +91,8 @@ class AccountPreviewDataServiceImpl : public AccountPreviewDataService,
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   void GetPreferredAccountForSigninAsync(
       base::OnceCallback<void(std::optional<AccountPreviewPreference>)>
-          callback) override;
+          callback,
+      base::TimeDelta timeout) override;
 #endif
 
   // Retrieves the cached preview data. Exposed specifically for testing.
@@ -238,9 +240,15 @@ class AccountPreviewDataServiceImpl : public AccountPreviewDataService,
       identity_manager_observation_{this};
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  struct PendingPreferredAccountRequest;
+  // Called when a preferred account request times out.
+  void OnPendingPreferredAccountRequestTimedOut(
+      PendingPreferredAccountRequest* request);
+  void ResolvePendingPreferredAccountRequests(
+      std::optional<AccountPreviewPreference> preference);
   // Requests originating from `GetPreferredAccountForSigninAsync()` that
   // wait for the preferred account computation to complete.
-  std::vector<base::OnceCallback<void(std::optional<AccountPreviewPreference>)>>
+  std::vector<std::unique_ptr<PendingPreferredAccountRequest>>
       pending_preferred_account_requests_;
 #endif
 

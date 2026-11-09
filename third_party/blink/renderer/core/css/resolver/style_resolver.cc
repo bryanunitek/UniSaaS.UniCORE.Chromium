@@ -394,6 +394,7 @@ String ComputeBaseComputedStyleDiff(const ComputedStyle* base_computed_style,
   exclusions.insert(DebugField::is_css_inert_is_inherited_);
   exclusions.insert(DebugField::is_html_inert_);
   exclusions.insert(DebugField::is_html_inert_is_inherited_);
+  exclusions.insert(DebugField::can_escape_overscroll_inertness_);
 
   Vector<DebugDiff> diff = base_computed_style->DebugDiffFields(computed_style);
 
@@ -1341,16 +1342,17 @@ void StyleResolver::MatchAllRules(StyleResolverState& state,
     // Now check SMIL animation override style.
     auto* svg_element = DynamicTo<SVGElement>(element);
     if (include_smil_properties && svg_element) {
-      if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
-        // According to the spec[1], animations that are cloned into the <use>
-        // shadow tree, should run in that tree, while animations applied to
-        // the referenced element which are not cloned should have an instance
-        // in the <use> tree as if it was cloned.
-        //
-        // We apply the animations from the referenced subtree for now.
-        //
-        // [1] https://svgwg.org/svg2-draft/struct.html#UseAnimations
-        svg_element = corresponding;
+      // Animations cloned into the <use> shadow tree run on the instance
+      // elements, so an instance uses its own SMIL properties rather than the
+      // referenced element's. See
+      // https://svgwg.org/svg2-draft/struct.html#UseAnimations.
+      if (!RuntimeEnabledFeatures::SvgUseInstanceAnimationsEnabled()) {
+        // Take SMIL properties from the referenced element. The animations are
+        // not cloned into the <use> shadow tree, so the instance has none of
+        // its own.
+        if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
+          svg_element = corresponding;
+        }
       }
       collector.AddElementStyleProperties(
           svg_element->AnimatedSMILStyleProperties(), CascadeOrigin::kAuthor,
@@ -2663,11 +2665,6 @@ const ComputedStyle* StyleResolver::StyleForText(Text* text_node) {
   return nullptr;
 }
 
-void StyleResolver::AddMatchedRulesToTracker(
-    const ElementRuleCollector& collector) {
-  collector.AddMatchedRulesToTracker(tracker_);
-}
-
 StyleRuleList* StyleResolver::StyleRulesForElement(Element* element,
                                                    unsigned rules_to_include) {
   DCHECK(element);
@@ -2734,10 +2731,6 @@ RuleIndexList* StyleResolver::PseudoCSSRulesForElement(
   collector.SetMode(SelectorChecker::kCollectingCSSRules);
   CollectPseudoRulesForElement(*element, collector, pseudo_id, pseudo_argument,
                                rules_to_include);
-
-  if (tracker_) {
-    AddMatchedRulesToTracker(collector);
-  }
   return collector.MatchedCSSRuleList();
 }
 
@@ -3256,10 +3249,18 @@ const CSSValue* StyleResolver::ComputeValue(
     CSSToLengthConversionData::Flags& flags,
     bool& has_random,
     bool& has_attr) {
+  if (!element || !element->GetComputedStyle()) {
+    return nullptr;
+  }
   Document& document = element->GetDocument();
   document.GetStyleEngine().UpdateViewportSize();
-  const ComputedStyle* base_style = element->GetComputedStyle();
   StyleResolverState state(document, *element);
+  // Constructing StyleResolverState resolves flat tree ancestors and may
+  // recalculate slot assignments, detaching unslotted elements.
+  const ComputedStyle* base_style = element->GetComputedStyle();
+  if (!base_style) {
+    return nullptr;
+  }
   state.EnsureParentStyle();
   STACK_UNINITIALIZED StyleCascade cascade(state);
   state.CreateNewClonedStyle(*base_style);

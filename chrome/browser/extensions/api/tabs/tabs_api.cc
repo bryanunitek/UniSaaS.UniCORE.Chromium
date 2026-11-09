@@ -1846,6 +1846,11 @@ bool TabsMoveFunction::MoveTab(int tab_id,
     return false;
   }
 
+  if (PictureInPictureWindowManager::IsChildWebContents(contents)) {
+    *error = tabs_constants::kNotAllowedForPictureInPictureError;
+    return false;
+  }
+
   // Don't let the extension move the tab if the user is dragging tabs.
   if (!ExtensionTabUtil::IsTabStripEditable(*source_window->profile())) {
     *error = ExtensionTabUtil::kTabStripNotEditableError;
@@ -2007,6 +2012,13 @@ ExtensionFunction::ResponseAction TabsReloadFunction::Run() {
     return RespondNow(
         Error(tabs_constants::kNotAllowedForPictureInPictureError));
   }
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  if (extension()) {
+    enterprise_connectors::ExtensionActorTracker::SetActiveActor(
+        web_contents, extension_id(), static_function_name());
+  }
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
   web_contents->GetController().Reload(
       bypass_cache ? content::ReloadType::BYPASSING_CACHE
@@ -2219,6 +2231,11 @@ ExtensionFunction::ResponseAction TabsGroupFunction::Run() {
 
     if (DevToolsWindow::IsDevToolsWindow(web_contents)) {
       return RespondNow(Error(tabs_constants::kNotAllowedForDevToolsError));
+    }
+
+    if (PictureInPictureWindowManager::IsChildWebContents(web_contents)) {
+      return RespondNow(
+          Error(tabs_constants::kNotAllowedForPictureInPictureError));
     }
   }
 
@@ -3175,6 +3192,13 @@ ExtensionFunction::ResponseAction TabsGoForwardFunction::Run() {
     return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
   }
 
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  if (extension()) {
+    enterprise_connectors::ExtensionActorTracker::SetActiveActor(
+        web_contents, extension_id(), static_function_name());
+  }
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+
   controller.GoForward();
   return RespondNow(NoArguments());
 }
@@ -3196,6 +3220,13 @@ ExtensionFunction::ResponseAction TabsGoBackFunction::Run() {
   if (!controller.CanGoBack()) {
     return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
   }
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  if (extension()) {
+    enterprise_connectors::ExtensionActorTracker::SetActiveActor(
+        web_contents, extension_id(), static_function_name());
+  }
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
   controller.GoBack();
   return RespondNow(NoArguments());

@@ -63,6 +63,10 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
 
   void SetContentUiEventHandler(std::unique_ptr<ContentUiEventHandler> handler);
 
+  ContentUiEventHandler* content_ui_event_handler() const {
+    return content_ui_event_handler_.get();
+  }
+
   void set_synchronous_compositor_client(SynchronousCompositorClient* client) {
     synchronous_compositor_client_ = client;
   }
@@ -160,7 +164,6 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
   void OnControlsResizeViewChanged() override;
   void NotifyVirtualKeyboardOverlayRect(
       const gfx::Rect& keyboard_rect) override;
-  void ShowInterestInElement(int nodeID) override;
 
   virtual bool ShouldShowBlurTransitionAnimation(
       NavigationHandle* navigation_handle);

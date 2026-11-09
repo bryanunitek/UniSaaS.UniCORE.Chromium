@@ -105,7 +105,10 @@ source_set("toolbar") {
 
 source_set("impl") {
   sources = []
-  deps = [ ":toolbar" ]
+  deps = [
+    ":toolbar",
+    "//components/subscription_eligibility:tier_names",
+  ]
 
   if (!is_android) {
     sources += [
@@ -445,7 +448,6 @@ if (!is_android) {
       "//chrome/common:chrome_features",
       "//chrome/common:constants",
       "//chrome/test:test_support",
-      "//chrome/test:test_support_ui",
       "//chrome/test/base:browser_test_waiters",
       "//components/optimization_guide/core:features",
       "//components/password_manager/core/browser/password_store:test_support",
@@ -518,7 +520,6 @@ if (!is_android) {
           "//chrome/common",
           "//chrome/common:chrome_features",
           "//chrome/test:test_support",
-          "//chrome/test:test_support_ui",
           "//components/crx_file",
           "//components/optimization_guide/core:features",
           "//components/password_manager/core/common:features",

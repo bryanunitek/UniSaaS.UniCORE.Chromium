@@ -133,18 +133,6 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Download.Android.OpenPdfFromDuplicates"
-    enum="BooleanOpenFromDuplicates" expires_after="2024-12-31">
-  <owner>qinmin@chromium.org</owner>
-  <owner>dtrainor@chromium.org</owner>
-  <summary>
-    Records whether opening a pdf download on Android triggers opening an
-    existing downloaded file, instead of creating a new file. This metric is
-    only recorded when Chrome enables rendering PDFs inside a tab, and it is
-    reorded once each time a PDF is displayed.
-  </summary>
-</histogram>
-
 <histogram name="Download.Android.ResumedFromNotification"
     enum="DownloadAndroidResumedFromNotificationEvent"
     expires_after="2027-04-18">
@@ -391,7 +379,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Download.DuplicatePdfDownloadTriggered"
-    enum="BooleanOpenInline" expires_after="2027-02-28">
+    enum="BooleanOpenInline" expires_after="2027-05-02">
   <owner>qinmin@chromium.org</owner>
   <owner>clank-downloads@google.com</owner>
   <summary>
@@ -1243,7 +1231,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Download.Start.ContentType" enum="DownloadContentType"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>shaktisahu@chromium.org</owner>
   <owner>drubery@chromium.org</owner>
   <summary>
@@ -1314,7 +1302,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Download.UserValidatedDangerousDownload.DownloadsPage"
-    enum="DownloadItem.DangerType" expires_after="2027-03-02">
+    enum="DownloadItem.DangerType" expires_after="2027-05-02">
   <owner>yawfrempong@google.com</owner>
   <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>
@@ -1334,8 +1322,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Download.WarningData.ActionAdded" enum="DownloadWarningAction"
-    expires_after="2026-11-11">
+    expires_after="2027-05-11">
   <owner>xinghuilu@chromium.org</owner>
+  <owner>yawfrempong@google.com</owner>
   <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>
     Records the warning action that is successfully added in warning action

@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_context_menu.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_content_delegate.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
@@ -35,20 +36,28 @@
 #include "ui/views/widget/widget.h"
 
 OmniboxAimPopupWebUIContent::OmniboxAimPopupWebUIContent(
-    OmniboxPopupPresenterBase* presenter,
+    OmniboxPopupContentDelegate* content_delegate,
+    OmniboxPopupContentSizer* sizer,
+    OmniboxPopupContentConfig config,
     LocationBar* location_bar,
     OmniboxController* controller)
-    : OmniboxAimPopupWebUIContent(presenter,
+    : OmniboxAimPopupWebUIContent(content_delegate,
+                                  sizer,
+                                  config,
                                   location_bar,
                                   controller,
                                   /*contents=*/nullptr) {}
 
 OmniboxAimPopupWebUIContent::OmniboxAimPopupWebUIContent(
-    OmniboxPopupPresenterBase* presenter,
+    OmniboxPopupContentDelegate* content_delegate,
+    OmniboxPopupContentSizer* sizer,
+    OmniboxPopupContentConfig config,
     LocationBar* location_bar,
     OmniboxController* controller,
     std::unique_ptr<ContentsWrapper> contents)
-    : OmniboxPopupWebUIBaseContent(presenter,
+    : OmniboxPopupWebUIBaseContent(content_delegate,
+                                   sizer,
+                                   config,
                                    location_bar,
                                    controller,
                                    /*top_rounded_corners=*/true,
@@ -63,6 +72,7 @@ void OmniboxAimPopupWebUIContent::Clear() {
   set_is_shown(false);
   auto* handler = popup_aim_handler();
   if (handler) {
+    clear_in_flight_ = true;
     // Pass the original web contents captured during ShowUI to handle
     // underlying changes to referenced web contents due to async events.
     handler->ClearPopup(
@@ -79,10 +89,16 @@ void OmniboxAimPopupWebUIContent::OnContextMenuClosed() {
   }
 }
 
+bool OmniboxAimPopupWebUIContent::CanReleaseContentsWrapper() {
+  return !clear_in_flight_ &&
+         OmniboxPopupWebUIBaseContent::CanReleaseContentsWrapper();
+}
+
 void OmniboxAimPopupWebUIContent::OnClearCallback(
     base::WeakPtr<content::WebContents> original_web_contents,
     const std::string& input,
     bool query_submitted) {
+  clear_in_flight_ = false;
   // Now that the WebUI has painted, it is safe to detach and cleanup.
   Detach();
 
@@ -130,8 +146,8 @@ void OmniboxAimPopupWebUIContent::ApplyInputAndCleanup(const std::string& input,
   // from it, leave focus where the submission left it, which is the results
   // page unless they opened in a background tab.
   views::Widget* location_bar_widget =
-      popup_presenter() ? popup_presenter()->delegate().GetLocationBarWidget()
-                        : nullptr;
+      presenter_delegate() ? presenter_delegate()->GetLocationBarWidget()
+                           : nullptr;
   const bool should_restore_focus =
       draft_applied_on_close_ || (!query_submitted && location_bar_widget &&
                                   location_bar_widget->IsActive());
@@ -232,8 +248,10 @@ void OmniboxAimPopupWebUIContent::ShowUI() {
   OmniboxPopupWebUIBaseContent::ShowUI();
 
   // Start each session with a clean slate. `OnClearCallback()` normally clears
-  // this, but it never runs if the handler went away before `Clear()`.
+  // these, but it never runs if the handler went away before `Clear()` or the
+  // page went away before replying.
   draft_applied_on_close_ = false;
+  clear_in_flight_ = false;
 
   // Capture the web contents when UI is first shown.
   active_web_contents_ = location_bar()->GetWebContents()

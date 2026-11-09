@@ -151,6 +151,7 @@ if (is_android) {
 group("test_support") {
   testonly = true
   public_deps = [
+    "//chrome/browser/glic/public:provider_features",
     "//chrome/browser/notifications:test_support",
     "//chrome/browser/origin_trials",
     "//chrome/browser/performance_manager:test_support",
@@ -826,8 +827,6 @@ if (is_android) {
       "//components/privacy_sandbox/privacy_sandbox_attestations",
       "//components/privacy_sandbox/privacy_sandbox_attestations:metrics",
       "//components/privacy_sandbox/privacy_sandbox_attestations:test_support",
-      "//components/privacy_sandbox/privacy_sandbox_attestations/preload",
-      "//components/privacy_sandbox/privacy_sandbox_attestations/preload:privacy_sandbox_attestations_assets",
       "//components/privacy_sandbox/privacy_sandbox_attestations/proto",
       "//components/qr_code_generator:bitmap_generator",
       "//components/safe_browsing/content/common:interfaces",
@@ -1258,7 +1257,6 @@ if (!is_android) {
       "//chrome/browser/devtools:browser_tests",
       "//chrome/browser/dictation:browser_tests",
       "//chrome/browser/direct_sockets:browser_tests",
-      "//chrome/browser/dom_distiller:browser_tests",
       "//chrome/browser/domain_reliability:browser_tests",
       "//chrome/browser/download:browser_tests",
       "//chrome/browser/engagement:browser_tests",
@@ -1280,7 +1278,6 @@ if (!is_android) {
       "//chrome/browser/hid:browser_tests",
       "//chrome/browser/history:browser_tests",
       "//chrome/browser/history_clusters:browser_tests",
-      "//chrome/browser/history_embeddings:browser_tests",
       "//chrome/browser/icon_transcoder:browser_tests",
       "//chrome/browser/idle:browser_tests",
       "//chrome/browser/image_decoder:browser_tests",
@@ -1335,6 +1332,7 @@ if (!is_android) {
       "//chrome/browser/profiles:browser_tests",
       "//chrome/browser/push_messaging:browser_tests",
       "//chrome/browser/pwc:browser_tests",
+      "//chrome/browser/reader_mode:browser_tests",
       "//chrome/browser/reduce_accept_language:browser_tests",
       "//chrome/browser/regional_capabilities:browser_tests",
       "//chrome/browser/renderer_context_menu:browser_tests",
@@ -1380,7 +1378,6 @@ if (!is_android) {
       "//chrome/browser/ui/desktop_to_mobile_promos:browser_tests",
       "//chrome/browser/ui/exclusive_access:browser_tests",
       "//chrome/browser/ui/extensions:browser_tests",
-      "//chrome/browser/ui/feature_first_run:browser_tests",
       "//chrome/browser/ui/hats:browser_tests",
       "//chrome/browser/ui/javascript_dialogs:browser_tests",
       "//chrome/browser/ui/login:browser_tests",
@@ -1455,6 +1452,7 @@ if (!is_android) {
       "//chrome/browser/ui/webui/bookmarks:browser_tests",
       "//chrome/browser/ui/webui/commerce:browser_tests",
       "//chrome/browser/ui/webui/content_settings:browser_tests",
+      "//chrome/browser/ui/webui/craft:browser_tests",
       "//chrome/browser/ui/webui/customize_buttons:browser_tests",
       "//chrome/browser/ui/webui/extensions_zero_state_promo:browser_tests",
       "//chrome/browser/ui/webui/image:browser_tests",
@@ -2803,6 +2801,7 @@ test("unit_tests") {
     deps += [
       "//chrome/app_shim:unit_tests",
       "//chrome/browser/apps/app_shim:unit_tests",
+      "//chrome/browser/browser_actuator/colocation:unit_tests",
       "//chrome/browser/enterprise/connectors/device_trust/key_management/core/mac:unit_tests",
       "//chrome/browser/mac:unit_tests",
       "//chrome/browser/renderer_host:unit_tests",
@@ -2913,6 +2912,7 @@ test("unit_tests") {
       "//chrome/browser/ui/android/tab_contents:unit_tests",
       "//chrome/browser/ui/android/tab_model:unit_tests",
       "//chrome/browser/ui/android/toolbar:unit_tests",
+      "//chrome/browser/ui/bookmarks/controllers/android:unit_tests",
       "//chrome/browser/ui/browser_window/test:native_unit_test_support_java",
       "//chrome/browser/ui/side_panel/internal/android:unit_tests",
       "//chrome/browser/ui/side_panel/test/android:native_unit_test_support_java",
@@ -3014,6 +3014,7 @@ test("unit_tests") {
       "//chrome/browser/ui/animation:unit_tests",
       "//chrome/browser/ui/bookmarks:unit_tests",
       "//chrome/browser/ui/browser_active_state_manager:unit_tests",
+      "//chrome/browser/ui/browser_window_theme_observer:unit_tests",
       "//chrome/browser/ui/context_highlight:unit_tests",
       "//chrome/browser/ui/contextual_search:unit_tests",
       "//chrome/browser/ui/desktop_to_mobile_promos:unit_tests",
@@ -3178,7 +3179,6 @@ test("unit_tests") {
       "//chrome/browser/ui/webui/content_settings:unit_tests",
       "//chrome/browser/ui/webui/cr_components/composebox:unit_tests",
       "//chrome/browser/ui/webui/cr_components/customize_color_scheme_mode:unit_tests",
-      "//chrome/browser/ui/webui/cr_components/history_embeddings:unit_tests",
       "//chrome/browser/ui/webui/cr_components/searchbox:unit_tests",
       "//chrome/browser/ui/webui/cr_components/theme_color_picker:unit_tests",
       "//chrome/browser/ui/webui/discards:unit_tests",
@@ -3238,6 +3238,7 @@ test("unit_tests") {
     if (is_win) {
       deps += [
         "//chrome/browser/default_browser/win:unit_tests",
+        "//chrome/browser/ui/views/default_browser:unit_tests",
         "//chrome/browser/ui/webui/default_browser:unit_tests",
       ]
     }
@@ -3701,7 +3702,6 @@ if (!is_android) {
 
       deps = [
         ":test_support",
-        ":test_support_ui",
         "//chrome:packed_resources",
         "//chrome:resources",
         "//chrome:strings",
@@ -3851,7 +3851,6 @@ if (!is_android && !is_chromeos_device) {
       "//chrome/browser/ui/views/web_apps:interactive_ui_tests",
       "//chrome/browser/ui/web_applications:interactive_ui_tests",
       "//chrome/browser/ui/webui/access_code_cast:interactive_ui_tests",
-      "//chrome/browser/ui/webui/cr_components/history_embeddings:interactive_ui_tests",
       "//chrome/browser/ui/webui/downloads:interactive_ui_tests",
       "//chrome/browser/ui/webui/print_preview:interactive_ui_tests",
       "//chrome/browser/ui/webui/searchbox:interactive_ui_tests",
@@ -4279,7 +4278,6 @@ if (!is_android) {
 
     deps = [
       ":test_support",
-      ":test_support_ui",
       "//chrome:packed_resources",
       "//chrome:resources",
       "//chrome:strings",

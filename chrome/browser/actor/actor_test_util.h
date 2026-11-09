@@ -252,9 +252,12 @@ std::unique_ptr<ToolRequest> MakeTypeRequest(tabs::TabInterface& tab,
                                              const gfx::Point& type_point,
                                              std::string_view text,
                                              bool follow_by_enter);
-std::unique_ptr<ToolRequest> MakeSelectRequest(content::RenderFrameHost& rfh,
-                                               int content_node_id,
-                                               std::string_view value);
+std::unique_ptr<ToolRequest> MakeSelectRequest(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    std::string_view value,
+    mojom::SelectAction::OptionMatchMode match_mode =
+        mojom::SelectAction::OptionMatchMode::kValue);
 std::unique_ptr<ToolRequest> MakeScrollRequest(
     content::RenderFrameHost& rfh,
     std::optional<int> content_node_id,
@@ -330,6 +333,11 @@ void ExpectErrorResult(ActResultFuture& future,
 // Checks the standard disabled-target error and its reason-specific message.
 void ExpectElementDisabledResultWithReason(ActResultFuture& future,
                                            std::string_view reason);
+
+// Gets the DOM node matching `query_selector` in `rfh`, or returns
+// `std::nullopt` when the node ID or document identifier cannot be retrieved.
+std::optional<DomNode> GetDomNodeOnPage(content::RenderFrameHost& rfh,
+                                        std::string_view query_selector);
 
 // Sets up GLIC_ACTION_PAGE_BLOCK to block the given host via component updater.
 bool SetUpOptimizationGuideComponentBlocklist(const base::FilePath& path,

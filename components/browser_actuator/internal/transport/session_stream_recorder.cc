@@ -5,6 +5,8 @@
 #include "components/browser_actuator/internal/transport/session_stream_recorder.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,10 +17,14 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/containers/adapters.h"
+#include "base/containers/circular_deque.h"
 #include "base/json/json_writer.h"
 #include "base/json/values_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -69,6 +75,10 @@ constexpr std::optional<PayloadType> FromUpstreamProtoPayloadType(
       return PayloadType::kExperimentalTriggering;
     case ACTUATOR_UPSTREAM_PAYLOAD_TYPE_ACTUATION:
       return PayloadType::kActuation;
+    case ACTUATOR_UPSTREAM_PAYLOAD_TYPE_TASK_INGRESS:
+      return PayloadType::kTaskIngress;
+    case ACTUATOR_UPSTREAM_PAYLOAD_TYPE_PROBE:
+      return PayloadType::kProbe;
     case ACTUATOR_UPSTREAM_PAYLOAD_TYPE_UNSPECIFIED:
     default:
       return std::nullopt;
@@ -88,6 +98,153 @@ std::string_view PayloadTypeName(ActuatorUpstreamPayloadType type) {
   return PayloadTypeName(FromUpstreamProtoPayloadType(type));
 }
 
+// `Any::Is<T>()` is unavailable for LITE_RUNTIME protos, so `type_url` is
+// compared by hand. An empty value is accepted because the server does not
+// always populate it (crbug.com/572804026).
+bool HasExpectedPayloadTypeUrl(std::string_view type_url,
+                               PayloadType payload_type) {
+  return type_url.empty() || type_url == ExpectedTypeUrl(payload_type);
+}
+
+std::string FormatScrubbedProbePayload(std::string_view payload) {
+  static constexpr size_t kScrubbedProbePayloadPreviewBytes = 40;
+  return base::StrCat(
+      {"[<", base::NumberToString(payload.size()),
+       " synthetic bytes elided; head=",
+       base::TruncateUTF8ToByteSize(payload, kScrubbedProbePayloadPreviewBytes),
+       "...>]"});
+}
+
+// Synthetic `ProbeRequest` and `ProbeResponse` payloads can be up to 10 MB.
+// Because `SessionStreamRecorder` retains recorded entries in memory for the
+// lifetime of the profile, payloads larger than 128 bytes are replaced on
+// ingest with a compact summary marker preserving the original byte length and
+// leading `PROBE:...` header prefix. The 128-byte threshold exceeds the maximum
+// summary marker length (~97 bytes), keeping scrubbing strictly size-reducing
+// and idempotent.
+std::optional<std::string> TryScrubTransportProbePayload(
+    std::string_view serialized_probe) {
+  static constexpr size_t kMaxRecordedProbePayloadBytes = 128;
+  TransportProbe probe;
+  if (!probe.ParseFromString(serialized_probe)) {
+    return std::nullopt;
+  }
+  switch (probe.payload_case()) {
+    case TransportProbe::kRequest:
+      if (probe.request().payload().size() > kMaxRecordedProbePayloadBytes) {
+        probe.mutable_request()->set_payload(
+            FormatScrubbedProbePayload(probe.request().payload()));
+        return probe.SerializeAsString();
+      }
+      break;
+    case TransportProbe::kResponse:
+      if (probe.response().payload().size() > kMaxRecordedProbePayloadBytes) {
+        probe.mutable_response()->set_payload(
+            FormatScrubbedProbePayload(probe.response().payload()));
+        return probe.SerializeAsString();
+      }
+      break;
+    case TransportProbe::PAYLOAD_NOT_SET:
+      break;
+  }
+  return std::nullopt;
+}
+
+void MaybeScrubTransportProbePayload(std::string& serialized_probe) {
+  if (std::optional<std::string> scrubbed =
+          TryScrubTransportProbePayload(serialized_probe)) {
+    // Move-assign a fresh string rather than calling `SerializeToString()` in
+    // place, which would call `clear()`/`resize()` and retain the multi-MB
+    // heap `capacity()` for the lifetime of the profile.
+    serialized_probe = *std::move(scrubbed);
+  }
+}
+
+template <typename EnvelopeProto, typename ToPayloadTypeFn>
+void ScrubEnvelopeProbePayloads(EnvelopeProto& envelope,
+                                ToPayloadTypeFn to_payload_type) {
+  for (auto& typed_payload : *envelope.mutable_typed_payloads()) {
+    if (to_payload_type(typed_payload.payload_type()) == PayloadType::kProbe &&
+        typed_payload.has_proto_payload() &&
+        HasExpectedPayloadTypeUrl(typed_payload.proto_payload().type_url(),
+                                  PayloadType::kProbe) &&
+        !typed_payload.proto_payload().value().empty()) {
+      MaybeScrubTransportProbePayload(
+          *typed_payload.mutable_proto_payload()->mutable_value());
+    }
+  }
+}
+
+void ScrubLargeProbePayloads(ActuatorDownstreamMessage& message) {
+  ScrubEnvelopeProbePayloads(message, &FromDownstreamProtoPayloadType);
+}
+
+void ScrubLargeProbePayloads(ActuatorUpstreamMessage& message) {
+  ScrubEnvelopeProbePayloads(message, &FromUpstreamProtoPayloadType);
+}
+
+template <typename EnvelopeProto, typename ToPayloadTypeFn>
+base::DictValue SerializeEnvelopeWithDecodedPayloads(
+    const EnvelopeProto& envelope,
+    ToPayloadTypeFn to_payload_type) {
+  base::DictValue dict = browser_actuator::ToValue(envelope).TakeDict();
+  base::ListValue* payloads_list = dict.FindList("typed_payloads");
+  if (!payloads_list) {
+    return dict;
+  }
+  const size_t count =
+      std::min(payloads_list->size(),
+               static_cast<size_t>(envelope.typed_payloads_size()));
+  for (size_t i = 0; i < count; ++i) {
+    const auto& typed_payload = envelope.typed_payloads(static_cast<int>(i));
+    if (!typed_payload.has_proto_payload() ||
+        typed_payload.proto_payload().value().empty()) {
+      continue;
+    }
+    const std::optional<PayloadType> payload_type =
+        to_payload_type(typed_payload.payload_type());
+    if (!payload_type.has_value() || (*payload_type != PayloadType::kControl &&
+                                      *payload_type != PayloadType::kProbe)) {
+      continue;
+    }
+    if (!HasExpectedPayloadTypeUrl(typed_payload.proto_payload().type_url(),
+                                   *payload_type)) {
+      continue;
+    }
+    base::DictValue* payload_dict = (*payloads_list)[i].GetIfDict();
+    if (!payload_dict) {
+      continue;
+    }
+    if (*payload_type == PayloadType::kControl) {
+      ControlCommand parsed_command;
+      if (parsed_command.ParseFromString(
+              typed_payload.proto_payload().value())) {
+        payload_dict->Set("decoded_control_command",
+                          browser_actuator::ToValue(parsed_command));
+      }
+    } else if (*payload_type == PayloadType::kProbe) {
+      TransportProbe parsed_probe;
+      if (parsed_probe.ParseFromString(typed_payload.proto_payload().value())) {
+        payload_dict->Set("decoded_transport_probe",
+                          browser_actuator::ToValue(parsed_probe));
+      }
+    }
+  }
+  return dict;
+}
+
+base::DictValue SerializeMessageForDiagnostics(
+    const ActuatorDownstreamMessage& message) {
+  return SerializeEnvelopeWithDecodedPayloads(message,
+                                              &FromDownstreamProtoPayloadType);
+}
+
+base::DictValue SerializeMessageForDiagnostics(
+    const ActuatorUpstreamMessage& message) {
+  return SerializeEnvelopeWithDecodedPayloads(message,
+                                              &FromUpstreamProtoPayloadType);
+}
+
 SessionEventSnapshot BuildEventSnapshot(
     const SessionMetadata& metadata,
     const SessionStreamRecorder::Entry& entry,
@@ -96,15 +253,35 @@ SessionEventSnapshot BuildEventSnapshot(
   event.timestamp = ToWallTime(metadata, entry.timestamp);
   event.is_downstream =
       std::holds_alternative<ActuatorDownstreamMessage>(entry.message);
+  event.http_response_code = entry.http_response_code;
+  event.downstream_status = entry.downstream_status;
 
   std::visit(
-      [&event](const auto& msg) {
+      [&event, max_message_bytes](const auto& msg) {
+        bool has_oversized_payload = false;
         for (const auto& payload : msg.typed_payloads()) {
           event.payload_types.emplace_back(
               PayloadTypeName(payload.payload_type()));
+          if (payload.proto_payload().value().size() > max_message_bytes) {
+            has_oversized_payload = true;
+          }
         }
-        event.message =
-            base::WriteJson(browser_actuator::ToValue(msg)).value_or("");
+        if (has_oversized_payload) {
+          auto truncated_msg = msg;
+          for (auto& payload : *truncated_msg.mutable_typed_payloads()) {
+            if (payload.proto_payload().value().size() > max_message_bytes) {
+              payload.mutable_proto_payload()->mutable_value()->resize(
+                  max_message_bytes);
+              event.message_truncated = true;
+            }
+          }
+          event.message =
+              base::WriteJson(SerializeMessageForDiagnostics(truncated_msg))
+                  .value_or("");
+        } else {
+          event.message =
+              base::WriteJson(SerializeMessageForDiagnostics(msg)).value_or("");
+        }
       },
       entry.message);
 
@@ -119,7 +296,7 @@ SessionEventSnapshot BuildEventSnapshot(
 
 SessionSnapshot BuildSessionSnapshot(
     const SessionMetadata& metadata,
-    const std::vector<SessionStreamRecorder::Entry>& entries,
+    const base::circular_deque<SessionStreamRecorder::Entry>& entries,
     size_t max_events,
     size_t max_message_bytes) {
   SessionSnapshot snapshot;
@@ -130,7 +307,8 @@ SessionSnapshot BuildSessionSnapshot(
   }
   snapshot.total_downstream_messages = metadata.total_downstream_messages;
   snapshot.total_upstream_messages = metadata.total_upstream_messages;
-  snapshot.total_events = entries.size();
+  snapshot.total_events =
+      metadata.total_downstream_messages + metadata.total_upstream_messages;
 
   size_t kept_count = std::min(max_events, entries.size());
   size_t start_index = entries.size() - kept_count;
@@ -163,17 +341,40 @@ base::DictValue SessionMetadata::ToValue() const {
   return dict;
 }
 
+void SessionStreamRecorder::Observer::OnDownstreamMessage(
+    base::TimeTicks timestamp,
+    const ActuatorDownstreamMessage& message,
+    DownstreamDeliveryStatus status) {}
+
+void SessionStreamRecorder::Observer::OnUpstreamMessage(
+    base::TimeTicks timestamp,
+    const ActuatorUpstreamMessage& message,
+    int http_response_code) {}
+
 base::DictValue SessionStreamRecorder::Entry::ToValue() const {
   base::DictValue dict;
   dict.Set("timestamp_ticks", timestamp.since_origin().InMicrosecondsF());
   if (const auto* downstream =
           std::get_if<ActuatorDownstreamMessage>(&message)) {
     dict.Set("direction", "Downstream");
-    dict.Set("message", browser_actuator::ToValue(*downstream));
+    dict.Set("message", SerializeMessageForDiagnostics(*downstream));
+    switch (downstream_status) {
+      case DownstreamDeliveryStatus::kSuccess:
+        dict.Set("downstream_status", "Success");
+        break;
+      case DownstreamDeliveryStatus::kFailure:
+        dict.Set("downstream_status", "Failure");
+        break;
+      case DownstreamDeliveryStatus::kUnknown:
+      default:
+        dict.Set("downstream_status", "Unknown");
+        break;
+    }
   } else {
     dict.Set("direction", "Upstream");
-    dict.Set("message", browser_actuator::ToValue(
+    dict.Set("message", SerializeMessageForDiagnostics(
                             std::get<ActuatorUpstreamMessage>(message)));
+    dict.Set("http_response_code", http_response_code);
   }
   return dict;
 }
@@ -194,34 +395,78 @@ SessionStreamRecorder::~SessionStreamRecorder() {
 }
 
 void SessionStreamRecorder::RecordDownstreamMessage(
-    ActuatorDownstreamMessage message) {
+    ActuatorDownstreamMessage message,
+    DownstreamDeliveryStatus status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ScrubLargeProbePayloads(message);
   metadata_.total_downstream_messages++;
+  for (ActuatorDownstreamTypedPayload& typed_payload :
+       *message.mutable_typed_payloads()) {
+    if (typed_payload.has_proto_payload() &&
+        typed_payload.proto_payload().type_url().empty()) {
+      if (std::optional<PayloadType> payload_type =
+              FromDownstreamProtoPayloadType(typed_payload.payload_type())) {
+        typed_payload.mutable_proto_payload()->set_type_url(
+            std::string(ExpectedTypeUrl(*payload_type)));
+      }
+    }
+  }
+  if (entries_.size() >= kMaxEntriesPerSession) {
+    entries_.pop_front();
+  }
   base::TimeTicks now = base::TimeTicks::Now();
   entries_.push_back(Entry{
       .timestamp = now,
       .message = std::move(message),
+      .downstream_status = status,
   });
   const auto& recorded_message =
       std::get<ActuatorDownstreamMessage>(entries_.back().message);
   for (auto& observer : observers_) {
-    observer.OnDownstreamMessage(now, recorded_message);
+    observer.OnDownstreamMessage(now, recorded_message, status);
   }
 }
 
-void SessionStreamRecorder::RecordUpstreamMessage(
-    ActuatorUpstreamMessage message) {
+bool SessionStreamRecorder::UpdateUpstreamResponseCode(
+    int64_t client_sequence_number,
+    int http_response_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (Entry& entry : base::Reversed(entries_)) {
+    if (std::holds_alternative<ActuatorUpstreamMessage>(entry.message)) {
+      const auto& upstream = std::get<ActuatorUpstreamMessage>(entry.message);
+      if (upstream.client_sequence_number() == client_sequence_number &&
+          entry.http_response_code == 0) {
+        entry.http_response_code = http_response_code;
+        for (auto& observer : observers_) {
+          observer.OnUpstreamMessage(entry.timestamp, upstream,
+                                     http_response_code);
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void SessionStreamRecorder::RecordUpstreamMessage(
+    ActuatorUpstreamMessage message,
+    int http_response_code) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ScrubLargeProbePayloads(message);
   metadata_.total_upstream_messages++;
+  if (entries_.size() >= kMaxEntriesPerSession) {
+    entries_.pop_front();
+  }
   base::TimeTicks now = base::TimeTicks::Now();
   entries_.push_back(Entry{
       .timestamp = now,
       .message = std::move(message),
+      .http_response_code = http_response_code,
   });
   const auto& recorded_message =
       std::get<ActuatorUpstreamMessage>(entries_.back().message);
   for (auto& observer : observers_) {
-    observer.OnUpstreamMessage(now, recorded_message);
+    observer.OnUpstreamMessage(now, recorded_message, http_response_code);
   }
 }
 
@@ -245,7 +490,7 @@ const SessionMetadata& SessionStreamRecorder::metadata() const {
   return metadata_;
 }
 
-const std::vector<SessionStreamRecorder::Entry>&
+const base::circular_deque<SessionStreamRecorder::Entry>&
 SessionStreamRecorder::entries() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return entries_;
@@ -287,20 +532,36 @@ void SessionStreamRecorderFactory::OnSessionRemoved(
 
 void SessionStreamRecorderFactory::OnDownstreamMessage(
     std::string_view session_id,
-    const ActuatorDownstreamMessage& message) {
+    const ActuatorDownstreamMessage& message,
+    DownstreamDeliveryStatus status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (SessionStreamRecorder* recorder = FindActiveRecorder(session_id)) {
-    recorder->RecordDownstreamMessage(message);
+    recorder->RecordDownstreamMessage(message, status);
   }
   // No active recorder for this session (unknown or already closed). Drop it.
 }
 
 void SessionStreamRecorderFactory::OnUpstreamMessage(
     std::string_view session_id,
-    const ActuatorUpstreamMessage& message) {
+    const ActuatorUpstreamMessage& message,
+    int http_response_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (http_response_code != 0) {
+    if (SessionStreamRecorder* recorder = FindActiveRecorder(session_id)) {
+      recorder->UpdateUpstreamResponseCode(message.client_sequence_number(),
+                                           http_response_code);
+      return;
+    }
+    auto it = std::ranges::find(retained_recorders_, session_id,
+                                &SessionStreamRecorder::session_id);
+    if (it != retained_recorders_.end()) {
+      (*it)->UpdateUpstreamResponseCode(message.client_sequence_number(),
+                                        http_response_code);
+    }
+    return;
+  }
   if (SessionStreamRecorder* recorder = FindActiveRecorder(session_id)) {
-    recorder->RecordUpstreamMessage(message);
+    recorder->RecordUpstreamMessage(message, /*http_response_code=*/0);
   }
   // No active recorder for this session (unknown or already closed). Drop it.
 }
@@ -409,6 +670,12 @@ std::string SessionStreamRecorderFactory::ExportSessionsAsJson(
   return base::WriteJsonWithOptions(ExportSessionsAsValue(session_ids),
                                     base::OPTIONS_PRETTY_PRINT)
       .value_or("");
+}
+
+void SessionStreamRecorderFactory::Clear() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  active_recorders_.clear();
+  retained_recorders_.clear();
 }
 
 }  // namespace browser_actuator::transport

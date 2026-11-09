@@ -64,10 +64,12 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.Initializer;
@@ -125,7 +127,6 @@ import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
 import org.chromium.chrome.browser.device.DeviceClassManager;
 import org.chromium.chrome.browser.devtools.DevToolsWindowAndroid;
-import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
 import org.chromium.chrome.browser.download.DownloadManagerService;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.download.items.OfflineContentAggregatorNotificationBridgeUiFactory;
@@ -188,6 +189,7 @@ import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.provider.PageContentProviderImpl;
 import org.chromium.chrome.browser.provider.PageContentProviderMetrics;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
+import org.chromium.chrome.browser.reader_mode.ReaderModeManager;
 import org.chromium.chrome.browser.screenshot_protection.ScreenshotProtectionController;
 import org.chromium.chrome.browser.selection.SelectionPopupBackPressHandler;
 import org.chromium.chrome.browser.settings.SettingsInTab;
@@ -427,7 +429,8 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     private boolean mDeferredStartupQueued;
 
     /** Whether or not {@link #postDeferredStartupIfNeeded()} has already successfully run. */
-    private boolean mDeferredStartupPosted;
+    private final SettableNonNullObservableSupplier<Boolean> mDeferredStartupPostedSupplier =
+            ObservableSuppliers.createNonNull(false);
 
     private boolean mNativeInitialized;
     private boolean mRemoveWindowBackgroundDone;
@@ -1602,8 +1605,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         super.onPictureInPictureModeChanged(inPicture, newConfig);
         Log.i(
                 TAG,
-                "Picture in picture mode changed, inPicture: " + inPicture,
-                " custom tabs: " + wasInPictureInPictureForMinimizedCustomTabs());
+                "Picture in picture mode changed, inPicture: %b custom tabs: %b",
+                inPicture,
+                wasInPictureInPictureForMinimizedCustomTabs());
         if (wasInPictureInPictureForMinimizedCustomTabs()) return;
         if (inPicture) {
             mLastPictureInPictureModeForTesting = true;
@@ -1817,10 +1821,8 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
             //  & fixed.
             Log.i(
                     TAG,
-                    "#onStart, num async tabs: "
-                            + AsyncTabParamsManagerSingleton.getInstance()
-                                    .getAsyncTabParams()
-                                    .size());
+                    "#onStart, num async tabs: %d",
+                    AsyncTabParamsManagerSingleton.getInstance().getAsyncTabParams().size());
 
             CompositorViewHolder compositorViewHolder = mCompositorViewHolderSupplier.get();
             if (compositorViewHolder != null) {
@@ -1980,16 +1982,17 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     @SuppressWarnings("NullAway")
     @Override
     protected final void onDestroy() {
-        // Destroy all ChromeAndroidTaskFeatures scoped to this ChromeActivity.
-        // For one ChromeAndroidTaskFeature, its native code may hold pointers
-        // to other native objects that are destroyed later in this method,
-        // such as the native TabListInterface, the native BrowserWindowInterface, etc.
-        // Therefore, ChromeAndroidTaskFeatures should be destroyed first to
-        // prevent issues like dereferencing a non-null but invalid pointer.
-        ChromeAndroidTask chromeAndroidTask = mChromeAndroidTaskSupplier.get();
-        if (chromeAndroidTask != null) {
-            var activityWindowAndroid = getWindowAndroid();
-            chromeAndroidTask.removeAllFeaturesForActivity(activityWindowAndroid);
+        // Destroy all ChromeAndroidTaskFeatures and browser windows scoped to this ChromeActivity
+        // first. Their native code may hold pointers to native objects destroyed later in this
+        // method, such as the TabListInterface, and native code must never see a
+        // BrowserWindowInterface whose TabListInterface has already been destroyed.
+        //
+        // The ActivityWindowAndroid is null if the launch was aborted in onCreate() (see
+        // AsyncInitializationActivity#onCreateInternal), in which case there is nothing to remove.
+        ActivityWindowAndroid activityWindowAndroid = getWindowAndroid();
+        if (activityWindowAndroid != null) {
+            ChromeAndroidTaskTrackerFactory.getInstance()
+                    .onActivityDestroyStarted(activityWindowAndroid);
         }
 
         SnackbarManager snackbarManager = mSnackbarManagerSupplier.get();
@@ -2143,6 +2146,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         mActivityTabProvider.destroy();
 
         super.onDestroy();
+        onPostDestroy();
     }
 
     /**
@@ -2159,6 +2163,13 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
             mAcceleratorManager = null;
         }
     }
+
+    /**
+     * Override this to perform destruction tasks after {@link #onDestroy()} has completed,
+     * including {@link ActivityLifecycleDispatcher} destruction observers and {@link WindowAndroid}
+     * destruction.
+     */
+    protected void onPostDestroy() {}
 
     /**
      * @return Whether the activity is being launched as a recreation from a previous instance.
@@ -3574,10 +3585,15 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         }
         mDeferredStartupQueued = false;
 
-        if (!mDeferredStartupPosted) {
-            mDeferredStartupPosted = true;
+        if (!mDeferredStartupPostedSupplier.get()) {
+            mDeferredStartupPostedSupplier.set(true);
             onDeferredStartup();
         }
+    }
+
+    /** Returns a {@link NonNullObservableSupplier} for whether deferred startup has been posted. */
+    protected NonNullObservableSupplier<Boolean> getDeferredStartupPostedSupplier() {
+        return mDeferredStartupPostedSupplier;
     }
 
     @Override
@@ -3703,7 +3719,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
                 mConfig.smallestScreenWidthDp >= DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP;
         boolean didChangeTabletMode = wasTablet != isTablet;
         if (didChangeTabletMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Log.i(TAG, "Current smallest screen width is: " + smallestWidth);
+            Log.i(TAG, "Current smallest screen width is: %d", smallestWidth);
         }
         return new TabletMode(isTablet, didChangeTabletMode);
     }
@@ -3766,7 +3782,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     }
 
     public boolean deferredStartupPostedForTesting() {
-        return mDeferredStartupPosted;
+        return mDeferredStartupPostedSupplier.get();
     }
 
     public @Nullable DisplayAndroidObserver getDisplayAndroidObserverForTesting() {
@@ -3861,9 +3877,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         }
 
         int resourceId =
-                ChromeFeatureList.getParamValueAsBoolean(
-                                ChromeFeatureList.ANDROID_THEME_RESOURCE_PROVIDER,
-                                ChromeFeatureList.ANDROID_THEME_RESOURCE_PROVIDER_FORCE_LIGHT)
+                ChromeFeatures.AndroidThemeResourceProviderForceLight.getValue()
                         ? R.style.ThemeOverlay_BrowserUI_ForcedLightForTesting
                         : R.style.ThemeOverlay_BrowserUI_TabbedMode_Incognito;
         mThemeResourceProvider =

@@ -12,10 +12,10 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/types/pass_key.h"
-#include "chrome/browser/dom_distiller/tab_utils.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/reader_mode/tab_utils.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_triggers.h"
@@ -24,7 +24,6 @@
 #include "chrome/browser/ui/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decision.h"
@@ -367,8 +366,7 @@ void ReadAnythingEntryPointController::UpdatePageActionVisibility(
   }
 
   page_actions::PageActionController* page_action_controller =
-      tab->GetTabFeatures() ? tab->GetTabFeatures()->page_action_controller()
-                            : nullptr;
+      page_actions::PageActionController::From(tab);
   if (!page_action_controller) {
     return;
   }
@@ -512,13 +510,9 @@ void ReadAnythingEntryPointController::OnPageActionIgnored(
   prefs->SetInteger(prefs::kAccessibilityReadAnythingOmniboxChipIgnoredCount,
                     GetOmniboxChipIgnoredCount(prefs) + 1);
   if (!ShouldShowOmniboxChip(bwi)) {
+    tabs::TabInterface* tab = bwi->GetActiveTabInterface();
     page_actions::PageActionController* page_action_controller =
-        bwi->GetActiveTabInterface() &&
-                bwi->GetActiveTabInterface()->GetTabFeatures()
-            ? bwi->GetActiveTabInterface()
-                  ->GetTabFeatures()
-                  ->page_action_controller()
-            : nullptr;
+        tab ? page_actions::PageActionController::From(tab) : nullptr;
     if (page_action_controller) {
       page_action_controller->HideSuggestionChip(
           kActionSidePanelShowReadAnything);

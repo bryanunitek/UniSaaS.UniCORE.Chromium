@@ -328,9 +328,6 @@ const void* const kProcessPerSiteUmaLoggedKey = &kProcessPerSiteUmaLoggedKey;
 const void* const kSubframeProcessReuseOverLimitUmaLoggedKey =
     &kSubframeProcessReuseOverLimitUmaLoggedKey;
 
-RenderProcessHost::AnalyzeHungRendererFunction g_analyze_hung_renderer =
-    nullptr;
-
 // Memory threshold for subframe process reuse, in bytes. A process may be
 // reused for another subframe only if the process's memory footprint stays
 // below this threshold. The default memory threshold is 512MB, for more details
@@ -2291,6 +2288,7 @@ void RenderProcessHostImpl::InitializeChannelProxy() {
   // See OnProcessLaunched() for some additional details of this somewhat
   // surprising behavior.
   renderer_interface_.reset();
+  renderer_variations_configuration_.reset();
   channel_->GetRemoteAssociatedInterface(&renderer_interface_);
 
   if (ShouldPauseChannelUntilProcessLaunched()) {
@@ -2334,6 +2332,7 @@ void RenderProcessHostImpl::InitializeSharedMemoryRegionsOnceChannelIsUp() {
 }
 
 void RenderProcessHostImpl::ResetChannelProxy() {
+  renderer_variations_configuration_.reset();
   if (!channel_)
     return;
 
@@ -3217,6 +3216,17 @@ mojom::Renderer* RenderProcessHostImpl::GetRendererInterface() {
   return renderer_interface_.get();
 }
 
+mojom::RendererVariationsConfiguration*
+RenderProcessHostImpl::GetRendererVariationsConfiguration() {
+  if (!channel_) {
+    return nullptr;
+  }
+  if (!renderer_variations_configuration_.is_bound()) {
+    channel_->GetRemoteAssociatedInterface(&renderer_variations_configuration_);
+  }
+  return renderer_variations_configuration_.get();
+}
+
 blink::mojom::CallStackGenerator*
 RenderProcessHostImpl::GetJavaScriptCallStackGeneratorInterface() {
   if (!javascript_call_stack_generator_interface_.is_bound()) {
@@ -3639,13 +3649,11 @@ bool RenderProcessHostImpl::IsSpare() const {
       SpareRenderProcessHostManagerImpl::Get().GetSpares(), this);
 }
 
-void RenderProcessHostImpl::SetProcessLock(
-    const IsolationContext& isolation_context,
-    const ProcessLock& process_lock) {
+void RenderProcessHostImpl::SetProcessLock(const ProcessLock& process_lock) {
   TRACE_EVENT_BEGIN("shutdown", "Lock process", tracing_track_,
                     ChromeTrackEvent::kRenderProcessHost, *this);
-  ChildProcessSecurityPolicyImpl::GetInstance()->LockProcess(
-      isolation_context, GetID(), process_lock);
+  ChildProcessSecurityPolicyImpl::GetInstance()->LockProcess(GetID(),
+                                                             process_lock);
 
   // Note that SetProcessLock is only called on ProcessLock state transitions.
   // (e.g. invalid -> allows_any_site and allows_any_site -> locked_to_site).
@@ -5729,12 +5737,6 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
     // RenderProcessExited with status TERMINATION_STATUS_STILL_RUNNING,
     // since this will break WebContentsImpl logic.
     info.status = base::TERMINATION_STATUS_PROCESS_CRASHED;
-
-    // TODO(siggi): Remove this once https://crbug.com/806661 is resolved.
-#if BUILDFLAG(IS_WIN)
-    if (info.exit_code == WAIT_TIMEOUT && g_analyze_hung_renderer)
-      g_analyze_hung_renderer(child_process_launcher_->GetProcess());
-#endif
   }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -5894,12 +5896,6 @@ void RenderProcessHost::PostTaskWhenProcessIsReady(base::OnceClosure task) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
   CHECK(!task.is_null(), base::NotFatalUntil::M152);
   new RenderProcessHostIsReadyObserver(this, std::move(task));
-}
-
-// static
-void RenderProcessHost::SetHungRendererAnalysisFunction(
-    AnalyzeHungRendererFunction analyze_hung_renderer) {
-  g_analyze_hung_renderer = analyze_hung_renderer;
 }
 
 void RenderProcessHostImpl::SuddenTerminationAllowedChanged(bool allowed) {

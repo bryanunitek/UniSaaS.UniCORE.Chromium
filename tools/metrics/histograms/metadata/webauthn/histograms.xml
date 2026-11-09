@@ -186,6 +186,25 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="WebAuthentication.Android.IdentityCredentialsApiCall.{Operation}"
+    enum="WebAuthenticationAndroidApiCallEvent" expires_after="2027-11-01">
+  <owner>derinel@google.com</owner>
+  <owner>kenrb@chromium.org</owner>
+  <owner>chrome-webauthn@google.com</owner>
+  <summary>
+    Records the lifecycle (Started and terminal outcome: Succeeded, Cancelled,
+    TimedOut, or Failed) of {Operation} on Android. Comparing Started against
+    the sum of terminal outcomes surfaces silent hangs or wedged calls.
+  </summary>
+  <token key="Operation">
+    <variant name="CreateCredential"
+        summary="IdentityCredentialClient.createCredential calls"/>
+    <variant name="SignalCredentialState"
+        summary="IdentityCredentialClient.signalCredentialState calls"/>
+  </token>
+</histogram>
+
 <histogram name="WebAuthentication.Android.NonDiscoverableCredentialsFound"
     enum="Boolean" expires_after="2027-03-21">
   <owner>derinel@google.com</owner>
@@ -514,6 +533,19 @@ chromium-metrics-reviews@google.com.
   <summary>
     Records the net error or HTTP response code when an enclave connection
     fails.
+  </summary>
+</histogram>
+
+<histogram name="WebAuthentication.Enclave.ICloudRecoveryAccountStateUsage"
+    enum="ICloudRecoveryAccountStateUsage" expires_after="2027-08-01">
+  <owner>ammarmk@chromium.org</owner>
+  <owner>ylahodiuk@google.com</owner>
+  <summary>
+    Records whether a caller-supplied security domain state was provided to
+    EnclaveManager::RecoverWithICloudKeychain(), and if so whether it was used
+    by the state machine or discarded because the primary account changed before
+    the recovery step ran (requiring a fresh download). Recorded on macOS when
+    the state machine starts the iCloud Keychain recovery step.
   </summary>
 </histogram>
 
@@ -985,7 +1017,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.PasskeyCount" units="count"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>izuzic@google.com</owner>
   <owner>ylahodiuk@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
@@ -996,7 +1028,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.PasskeyReadiness" enum="Boolean"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>izuzic@google.com</owner>
   <owner>ylahodiuk@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>

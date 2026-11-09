@@ -51,6 +51,11 @@ class FakeTabContextSyncService
     NOTREACHED();
   }
 
+  std::optional<sync_tab_context::ContainerId>
+  CreateContainerPossiblyUnencryptedEphemeral() override {
+    NOTREACHED();
+  }
+
   void UploadPageContext(
       const sync_tab_context::ContainerId& container_id,
       const std::string& entry_id,
@@ -194,8 +199,7 @@ class TabContextDecryptionTokenTabHelperBrowserTest
     return content::EvalJs(web_contents, script).ExtractString();
   }
 
-  base::test::ScopedFeatureList feature_list_{
-      syncer::kSyncEncryptedTabContextContainer};
+  base::test::ScopedFeatureList feature_list_{syncer::kSyncEncryptedTabContext};
   base::CallbackListSubscription create_services_subscription_;
   std::string primary_gaia_id_;
   content::ContentMockCertVerifier mock_cert_verifier_;

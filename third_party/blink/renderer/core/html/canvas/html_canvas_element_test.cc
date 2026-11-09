@@ -144,8 +144,7 @@ TEST_P(HTMLCanvasElementTest, ContextCreationErrorReentrancyPreservesContext) {
   GetDocument().body()->appendChild(script);
   RunDocumentLifecycle();
 
-  auto* canvas =
-      To<HTMLCanvasElement>(GetDocument().getElementById(AtomicString("c")));
+  auto* canvas = To<HTMLCanvasElement>(GetElementById("c"));
   ASSERT_NE(canvas->RenderingContext(), nullptr);
 
   cc::PaintFlags fill_flags = FillFlags();
@@ -946,6 +945,9 @@ TEST_P(HTMLCanvasElementTest, SlotAssignmentDuringSetIsInCanvasSubtree) {
 
   ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
   GetDocument().GetSettings()->SetScriptEnabled(true);
+  // This test relies on focus moving into the date input's shadow subfields,
+  // which are not focusable by default on non-desktop Android.
+  GetDocument().GetSettings()->SetDateTimeSubfieldsFocusableForTesting(true);
   GetPage().GetFocusController().SetActive(true);
   GetPage().GetFocusController().SetFocused(true);
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
@@ -1168,27 +1170,25 @@ TEST_P(HTMLCanvasElementTest, MoveElementBetweenShadowHostAndSlotKeepsFlag) {
   )HTML");
   UpdateAllLifecyclePhasesForTest();
 
-  auto* other = GetDocument().getElementById(AtomicString("other"));
-  auto* host1 = GetDocument().getElementById(AtomicString("host1"));
-  auto* slotted1 = GetDocument().getElementById(AtomicString("slotted1"));
-  auto* slotted_child1 =
-      GetDocument().getElementById(AtomicString("slotted_child1"));
+  auto* other = GetElementById("other");
+  auto* host1 = GetElementById("host1");
+  auto* slotted1 = GetElementById("slotted1");
+  auto* slotted_child1 = GetElementById("slotted_child1");
   auto* slot1 = host1->GetShadowRoot()->getElementById(AtomicString("slot1"));
 
-  auto* host2 = GetDocument().getElementById(AtomicString("host2"));
-  auto* slotted2 = GetDocument().getElementById(AtomicString("slotted2"));
-  auto* slotted_child2 =
-      GetDocument().getElementById(AtomicString("slotted_child2"));
+  auto* host2 = GetElementById("host2");
+  auto* slotted2 = GetElementById("slotted2");
+  auto* slotted_child2 = GetElementById("slotted_child2");
   auto* slot2 = host2->GetShadowRoot()->getElementById(AtomicString("slot2"));
 
-  auto* host3 = GetDocument().getElementById(AtomicString("host3"));
+  auto* host3 = GetElementById("host3");
   auto* slot3 = host3->GetShadowRoot()->getElementById(AtomicString("slot3"));
   auto* fallback1 =
       host3->GetShadowRoot()->getElementById(AtomicString("fallback1"));
   auto* fallback_child1 =
       host3->GetShadowRoot()->getElementById(AtomicString("fallback_child1"));
 
-  auto* host4 = GetDocument().getElementById(AtomicString("host4"));
+  auto* host4 = GetElementById("host4");
   auto* slot4 = host4->GetShadowRoot()->getElementById(AtomicString("slot4"));
   auto* fallback2 =
       host4->GetShadowRoot()->getElementById(AtomicString("fallback2"));
@@ -1289,9 +1289,8 @@ TEST_P(HTMLCanvasElementTest, SlotIntoCanvasWithoutSuggestedValueKeepsFocus) {
       "</div>");
   UpdateAllLifecyclePhasesForTest();
 
-  auto* host = GetDocument().getElementById(AtomicString("host"));
-  auto* date =
-      To<HTMLInputElement>(GetDocument().getElementById(AtomicString("d")));
+  auto* host = GetElementById("host");
+  auto* date = To<HTMLInputElement>(GetElementById("d"));
   auto* inside = To<HTMLSlotElement>(
       host->GetShadowRoot()->getElementById(AtomicString("inside")));
   date->Focus();
@@ -1379,6 +1378,9 @@ TEST_P(HTMLCanvasElementTest, ReentrantSlotRecalcDuringDidRecalcAssignedNodes) {
 
   ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
   GetDocument().GetSettings()->SetScriptEnabled(true);
+  // This test relies on focus moving into the date input's shadow subfields,
+  // which are not focusable by default on non-desktop Android.
+  GetDocument().GetSettings()->SetDateTimeSubfieldsFocusableForTesting(true);
   GetPage().GetFocusController().SetActive(true);
   GetPage().GetFocusController().SetFocused(true);
 
@@ -1397,9 +1399,8 @@ TEST_P(HTMLCanvasElementTest, ReentrantSlotRecalcDuringDidRecalcAssignedNodes) {
       "</div></canvas>");
   UpdateAllLifecyclePhasesForTest();
 
-  auto* host = GetDocument().getElementById(AtomicString("host"));
-  auto* date =
-      To<HTMLInputElement>(GetDocument().getElementById(AtomicString("d")));
+  auto* host = GetElementById("host");
+  auto* date = To<HTMLInputElement>(GetElementById("d"));
   auto* shadow_root = host->GetShadowRoot();
   auto* s1 =
       To<HTMLSlotElement>(shadow_root->getElementById(AtomicString("s1")));
@@ -1435,6 +1436,106 @@ TEST_P(HTMLCanvasElementTest, ReentrantSlotRecalcDuringDidRecalcAssignedNodes) {
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(date->AssignedSlot(), s1);
 #endif  // DCHECK_IS_ON()
+}
+
+TEST_P(HTMLCanvasElementTest, MoveBeforeOutOfCanvasIntoShadowDom) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <canvas id="canvas" content="drawable">
+      <div id="draw" drawable>
+        <div id="item1">Item 1</div>
+        <div id="item2">Item 2</div>
+        <div id="item3">Item 3</div>
+      </div>
+      <div id="canvas_host">
+        <template shadowrootmode="open"><slot id="canvas_slot"></slot></template>
+      </div>
+      <div id="canvas_roundtrip_host"><template shadowrootmode="open"><slot id="canvas_roundtrip_slot"></slot></template><div id="item5">Item 5</div></div>
+    </canvas>
+    <div id="shadow_host">
+      <template shadowrootmode="open"></template>
+    </div>
+    <div id="slotless_host">
+      <template shadowrootmode="open"><div>Shadow</div></template>
+    </div>
+    <div id="slotted_host">
+      <template shadowrootmode="open"><slot id="active_slot"></slot></template>
+      <span>Assigned</span>
+    </div>
+    <div id="item4">Item 4</div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* draw = GetDocument().getElementById(AtomicString("draw"));
+  auto* canvas_host = GetDocument().getElementById(AtomicString("canvas_host"));
+  auto* canvas_slot =
+      canvas_host->GetShadowRoot()->getElementById(AtomicString("canvas_slot"));
+  auto* canvas_roundtrip_host =
+      GetDocument().getElementById(AtomicString("canvas_roundtrip_host"));
+  auto* canvas_roundtrip_slot =
+      canvas_roundtrip_host->GetShadowRoot()->getElementById(
+          AtomicString("canvas_roundtrip_slot"));
+  auto* shadow_host = GetDocument().getElementById(AtomicString("shadow_host"));
+  auto* slotless_host =
+      GetDocument().getElementById(AtomicString("slotless_host"));
+  auto* active_slot = GetDocument()
+                          .getElementById(AtomicString("slotted_host"))
+                          ->GetShadowRoot()
+                          ->getElementById(AtomicString("active_slot"));
+  auto* item1 = GetDocument().getElementById(AtomicString("item1"));
+  auto* item2 = GetDocument().getElementById(AtomicString("item2"));
+  auto* item3 = GetDocument().getElementById(AtomicString("item3"));
+  auto* item4 = GetDocument().getElementById(AtomicString("item4"));
+  auto* item5 = GetDocument().getElementById(AtomicString("item5"));
+
+  EXPECT_TRUE(item1->IsInCanvasSubtree());
+  EXPECT_TRUE(item2->IsInCanvasSubtree());
+  EXPECT_TRUE(item3->IsInCanvasSubtree());
+  EXPECT_FALSE(item4->IsInCanvasSubtree());
+  EXPECT_TRUE(item5->IsInCanvasSubtree());
+
+  // 1. moveBefore out of canvas into a ShadowRoot (crbug.com/575200203).
+  shadow_host->GetShadowRoot()->moveBefore(item1, nullptr, ASSERT_NO_EXCEPTION);
+  // 2. moveBefore out of canvas into a slotless shadow host
+  // (crbug.com/576136338, crbug.com/575200203).
+  slotless_host->moveBefore(item2, nullptr, ASSERT_NO_EXCEPTION);
+  // 3. moveBefore out of canvas into a <slot> with assigned nodes
+  // (crbug.com/576136338).
+  active_slot->moveBefore(item3, nullptr, ASSERT_NO_EXCEPTION);
+  // 4. moveBefore into a canvas <slot> while a host child is pending assignment
+  // (crbug.com/577332970).
+  canvas_host->AppendChild(
+      GetDocument().CreateRawElement(html_names::kSpanTag));
+  canvas_slot->moveBefore(item4, nullptr, ASSERT_NO_EXCEPTION);
+  // 5. moveBefore a slotted canvas child out of the canvas and back into its
+  // canvas shadow host in the same task.
+  shadow_host->moveBefore(item5, nullptr, ASSERT_NO_EXCEPTION);
+  canvas_roundtrip_host->moveBefore(item5, nullptr, ASSERT_NO_EXCEPTION);
+
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_FALSE(item1->IsInCanvasSubtree());
+  ASSERT_TRUE(item1->GetLayoutObject());
+  EXPECT_EQ(item1->GetLayoutObject()->Parent(), shadow_host->GetLayoutObject());
+  EXPECT_NE(item1->GetLayoutObject()->Parent(), draw->GetLayoutObject());
+
+  EXPECT_FALSE(item2->IsInCanvasSubtree());
+  EXPECT_FALSE(item2->GetLayoutObject());
+
+  EXPECT_FALSE(item3->IsInCanvasSubtree());
+  EXPECT_FALSE(item3->GetLayoutObject());
+
+  EXPECT_FALSE(item4->IsInCanvasSubtree());
+  EXPECT_FALSE(item4->GetLayoutObject());
+
+  EXPECT_TRUE(item5->IsInCanvasSubtree());
+  EXPECT_TRUE(item5->GetLayoutObject());
+
+  // 6. moveBefore a slotted canvas child directly into its <slot> as fallback.
+  canvas_roundtrip_slot->moveBefore(item5, nullptr, ASSERT_NO_EXCEPTION);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(item5->IsInCanvasSubtree());
+  EXPECT_TRUE(item5->GetLayoutObject());
 }
 
 }  // namespace blink

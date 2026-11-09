@@ -7,6 +7,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/crowdsourcing/mock_autofill_crowdsourcing_manager.h"
+#include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/foundations/mock_autofill_manager_observer.h"
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_manager_impl.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
@@ -210,7 +211,7 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpReady) {
   autofill_manager().OnAskForValuesToFillTest(
       otp_form, otp_form.fields().front().global_id());
 
-  // Simulate the WillSubmit event.
+  // Simulate form submission.
   SubmitForm(otp_form);
   DeleteDriverToCommitMetrics();
 
@@ -218,6 +219,9 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpReady) {
   VerifySingleSubmissionKeyMetricExpectations(
       histogram_tester, "OneTimePassword",
       {.readiness = true, .assistance = false});
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_NO_SUGGESTION_SUBMITTED_ONCE, 1);
   VerifyInteractedWithFormUkmMetric(otp_form,
                                     /*expected_local_record_type_count=*/1);
   EXPECT_THAT(autofill_metrics::GetUkmEvents(
@@ -262,7 +266,7 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotReady) {
   // form.
   SimulateOtpResponse(/*returns_otp=*/false);
 
-  // Simulate the WillSubmit event.
+  // Simulate form submission.
   SubmitForm(otp_form);
   DeleteDriverToCommitMetrics();
 
@@ -270,6 +274,9 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotReady) {
   VerifySingleSubmissionKeyMetricExpectations(
       histogram_tester, "OneTimePassword",
       {.readiness = false, .assistance = false});
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_NO_SUGGESTION_SUBMITTED_ONCE, 1);
   VerifyInteractedWithFormUkmMetric(otp_form,
                                     /*expected_local_record_type_count=*/0);
   EXPECT_THAT(autofill_metrics::GetUkmEvents(
@@ -318,9 +325,9 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
   OtpFillData fill_data = {{otp_form.fields().front().global_id(), u"123456"}};
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, otp_form.global_id(),
-      otp_form.fields().front().global_id(), &fill_data,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      otp_form.fields().front().global_id(), FillingProduct::kOneTimePassword,
+      &fill_data, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 
   SubmitForm(otp_form);
   DeleteDriverToCommitMetrics();
@@ -331,6 +338,12 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
                                                .acceptance = true,
                                                .assistance = true,
                                                .correctness = true});
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_LOCAL_SUGGESTION_SUBMITTED_ONCE, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE, 1);
   VerifyInteractedWithFormUkmMetric(otp_form,
                                     /*expected_local_record_type_count=*/1);
   VerifyUkmSuggestionFilledLogged(otp_form);
@@ -383,7 +396,11 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
              event_metrics(autofill_metrics::
                                FORM_EVENT_LOCAL_SUGGESTION_WILL_SUBMIT_ONCE),
              event_metrics(autofill_metrics::
-                               FORM_EVENT_SUGGESTION_SHOWN_WILL_SUBMIT_ONCE)}));
+                               FORM_EVENT_SUGGESTION_SHOWN_WILL_SUBMIT_ONCE),
+             event_metrics(
+                 autofill_metrics::FORM_EVENT_LOCAL_SUGGESTION_SUBMITTED_ONCE),
+             event_metrics(autofill_metrics::
+                               FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE)}));
   }
 #endif
 }
@@ -422,6 +439,12 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotAccepted) {
   VerifySingleSubmissionKeyMetricExpectations(
       histogram_tester, "OneTimePassword",
       {.readiness = true, .acceptance = false, .assistance = false});
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_NO_SUGGESTION_SUBMITTED_ONCE, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE, 1);
   VerifyInteractedWithFormUkmMetric(otp_form,
                                     /*expected_local_record_type_count=*/1);
   EXPECT_THAT(autofill_metrics::GetUkmEvents(
@@ -471,9 +494,9 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
   OtpFillData fill_data = {{otp_form.fields().front().global_id(), u"123456"}};
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, otp_form.global_id(),
-      otp_form.fields().front().global_id(), &fill_data,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      otp_form.fields().front().global_id(), FillingProduct::kOneTimePassword,
+      &fill_data, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
   // Simulate the user correcting the value.
   SimulateUserChangedFieldTo(otp_form, otp_form.fields().front().global_id(),
                              u"654321");
@@ -487,6 +510,12 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
                                                .acceptance = true,
                                                .assistance = true,
                                                .correctness = false});
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_LOCAL_SUGGESTION_SUBMITTED_ONCE, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.FormEvents.OneTimePassword",
+      autofill_metrics::FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE, 1);
   VerifyInteractedWithFormUkmMetric(otp_form,
                                     /*expected_local_record_type_count=*/1);
   VerifyUkmSuggestionFilledLogged(otp_form);
@@ -539,7 +568,11 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
              event_metrics(autofill_metrics::
                                FORM_EVENT_LOCAL_SUGGESTION_WILL_SUBMIT_ONCE),
              event_metrics(autofill_metrics::
-                               FORM_EVENT_SUGGESTION_SHOWN_WILL_SUBMIT_ONCE)}));
+                               FORM_EVENT_SUGGESTION_SHOWN_WILL_SUBMIT_ONCE),
+             event_metrics(
+                 autofill_metrics::FORM_EVENT_LOCAL_SUGGESTION_SUBMITTED_ONCE),
+             event_metrics(autofill_metrics::
+                               FORM_EVENT_SUGGESTION_SHOWN_SUBMITTED_ONCE)}));
   }
 #endif
 }

@@ -9,7 +9,6 @@
 <translation id="1013952917065545813">আপনি যেসব ট্যাবগুলি সম্প্রতি বন্ধ করেছন, সেগুলি আবার খুলতে আপনি এখানে ফিরে আসতে পারেন</translation>
 <translation id="1016495303386450659">আইটেম আপডেট হয়েছে</translation>
 <translation id="1018804590490383958">স্ক্যান করে অটোফিল করুন</translation>
-<translation id="1019990162050689579">Gemini অ্যাপ অ্যাক্টিভিটি</translation>
 <translation id="102471647093736603">সরানোর জন্য প্রেস করে ধরে রাখুন</translation>
 <translation id="102645702181682900">টাস্ক শুরু করা হয়েছে</translation>
 <translation id="102916930470544692">পাসকী</translation>
@@ -51,6 +50,7 @@
 <translation id="1122068467107743258">অফিস</translation>
 <translation id="1126696498560056882">এই ডিভাইসে থাকা অ্যাকাউন্ট ম্যানেজ করুন</translation>
 <translation id="1126809382673880764">এই মোডে আপনার ডিভাইসের ক্ষতি করতে পারে এমন ওয়েবসাইট, ডাউনলোড অথবা এক্সটেনশন থেকে কোনও সুরক্ষা পাওয়া সম্ভব হয় না। তবে Gmail এবং Search-এর মতো অন্যান্য Google পরিষেবায়, যেখানে উপলভ্য সেখানে আপনি এখনও 'Safe Browsing'-এর সুরক্ষা পাবেন।</translation>
+<translation id="112943553659469376">"<ph name="PROMPT" />"</translation>
 <translation id="1133418583142946603">বর্তমান ট্যাব যোগ করুন</translation>
 <translation id="1136104150802877429">প্রোডাক্ট রিভিউ দেখায়</translation>
 <translation id="1142371195993008685"><ph name="FEATURE_NAME" /> সংক্রান্ত বিজ্ঞপ্তি বন্ধ করুন</translation>
@@ -386,6 +386,7 @@
 <translation id="2104436223719117661">ট্রেন্ডিং সার্চ</translation>
 <translation id="21133533946938348">ট্যাব পিন করুন</translation>
 <translation id="2117650889962717098">ছদ্মবেশী মোডে পরিবর্তন করে আপনার ব্রাউজিং ব্যক্তিগত করে রাখুন</translation>
+<translation id="2119126821484134587">Gemini আপনাকে সবচেয়ে উপযুক্ত সহায়তা প্রদান করতে, Maps ও Flights-এর মতো অন্যান্য Google পরিষেবার সাথে আপনার কিছু ডেটা (যেমন, আপনার চ্যাটের কিছু অংশ, লোকেশন ও অন্যান্য প্রাসঙ্গিক তথ্য) শেয়ার করে। আপনি পরে নিজের Gemini অ্যাপ ইতিহাস মুছে দিলেও, পরিষেবা উন্নত করার জন্য এই পরিষেবাগুলি ওইসব তথ্য ব্যবহার করতে পারে। <ph name="BEGIN_LINK" />Gemini অ্যাপ গোপনীয়তা হাব<ph name="END_LINK" /> থেকে আরও জানুন।</translation>
 <translation id="2119636449201577317">এই অ্যাপে খুলুন…</translation>
 <translation id="2119962645034852864">আপনার অ্যাকাউন্টের জন্য কিছু পরিষেবা উপলভ্য নেই</translation>
 <translation id="2120553909046681540">আপনার সংস্থা ব্যক্তিগত ব্রাউজিংয়ের সুবিধা বন্ধ করে দিয়েছে।</translation>
@@ -507,6 +508,7 @@
 <translation id="2496180316473517155">ব্রাউজিং ইতিহাস</translation>
 <translation id="2496626742194544812">প্রথমে ট্যাবে যান</translation>
 <translation id="2499505845365628575">আপনি নিজের সব ব্রাউজিং ইতিহাস <ph name="HISTORY_BUTTON_ACCESSIBILITY_LABEL" /> থেকে পাবেন।</translation>
+<translation id="2499948218922929716">নিরাপত্তা আপডেট, কাস্টম থিম Sbx আরও অনেক কিছু সম্পর্কে বিজ্ঞপ্তি পান।</translation>
 <translation id="251033673027346551"><ph name="BEGIN_LINK" />ডেটা ও গোপনীয়তা সংক্রান্ত পছন্দ<ph name="END_LINK" /> ম্যানেজ করতে Google Wallet-এ যান।</translation>
 <translation id="2511117522375201202">আপনার <ph name="NUMBER_OF_PASSWORDS" />টি চুরি হয়ে যাওয়া পাসওয়ার্ড আছে যা আপনার সুরক্ষাকে ঝুঁকির মুখে ফেলতে পারে।</translation>
 <translation id="2512709994717613803">লেভেল <ph name="LEVEL_NUMBER" /></translation>
@@ -670,6 +672,7 @@
 <translation id="3038136505713492417">আপনি এই ডিভাইসে পাসকী ব্যবহার করছেন কিনা তা যাচাই করুন</translation>
 <translation id="3039671569659952257">ফোল্ডার মুছুন</translation>
 <translation id="3041835740069544003">Chrome এখন 'ফর্ম ফিল করার স্মার্ট সমাধান' ফিচার ব্যবহার করে আরও বেশি ফর্ম শনাক্ত ও পূরণ করতে পারে। এটি করার জন্য, ক্লাউডের প্রাইভেট স্পেসে পৃষ্ঠার কন্টেন্ট ও URL প্রসেস করা হতে পারে। সেটিংসে গিয়ে ম্যানেজ করুন।</translation>
+<translation id="3042118633250374317">Google আপনার ইতিহাস ব্যবহার করে নিজের পরিষেবা প্রদান করে, Google তার ব্যবহারকারী ও লোকজনকে সুরক্ষিত রাখে এবং হিউম্যান রিভিউয়ারের সাহায্যে নিজের পরিষেবা ডেভেলপ ও উন্নত করে। এমন ডেটা অন্তর্ভুক্ত করবেন না যা আপনি পর্যালোচনা বা ব্যবহার করতে দিতে চান না।</translation>
 <translation id="3050988301648974170">পাসওয়ার্ড চেক-আপ খুলুন</translation>
 <translation id="3053332585453689122">আপনার দেখা URL ও পৃষ্ঠার কন্টেন্টের ছোট স্যাম্পেল, ডাউনলোড, এক্সটেনশন সম্পর্কিত অ্যাক্টিভিটি ও সিস্টেমের বিষয়ে তথ্য ক্ষতিকর কিনা তা চেক করে দেখতে Google Safe Browsing-এ পাঠানো হয়।</translation>
 <translation id="3055102495753300780">তথ্যের স্টোরেজ</translation>
@@ -954,6 +957,7 @@
 <translation id="3967822245660637423">ডাউনলোড সম্পূর্ণ</translation>
 <translation id="3973560090698854095">এটি আপনার Google অ্যাকাউন্ট <ph name="USER_EMAIL" /> থেকে সেভ করা ঠিকানাগুলি মুছে দেয়।</translation>
 <translation id="398604237578616937"><ph name="USER_EMAIL" /> হিসেবে সাইন-ইন করেছেন। অ্যাকাউন্ট মেনু খুলুন।</translation>
+<translation id="3986082989454912832">উত্তর</translation>
 <translation id="3986739045730058129">ট্যাবে যান</translation>
 <translation id="3992684624889376114">এই পৃষ্ঠা সম্পর্কে</translation>
 <translation id="3993594519743675442">একটি রিমাইন্ডার সেট করুন মেনু আড়াল করুন</translation>
@@ -1113,6 +1117,7 @@
 <translation id="4488754974567924717">আপনার পাসওয়ার্ড যদি চুরি হয়ে যায়, আমরা তা আপনাকে জানাবো</translation>
 <translation id="4489536976005181779">{count,plural, =1{আপনার অ্যাকাউন্টে আপনার পড়ার তালিকায় পৃষ্ঠাগুলি যোগ করা হয়েছে, {email}}one{আপনার অ্যাকাউন্টে আপনার পড়ার তালিকায় পৃষ্ঠাগুলি যোগ করা হয়েছে, {email}}other{আপনার অ্যাকাউন্টে আপনার পড়ার তালিকায় পৃষ্ঠাগুলি যোগ করা হয়েছে, {email}}}</translation>
 <translation id="4493604894403585654">আপনি <ph name="USER_EMAIL" /> হিসেবে সাইন-ইন করেছেন। সেটিংস থেকে আপনি যেকোনও সময় সিঙ্ক করা বন্ধ করতে পারবেন। আপনার ইতিহাসের ভিত্তিতে, সার্চ ও অন্যান্য পরিষেবা পছন্দমতো করে তুলতে Google এই ডেটা ব্যবহার করতে পারে।</translation>
+<translation id="4495251723189610737">আপনার চ্যাট Gemini ইতিহাসে সেভ করা হবে। ইতিহাসের মধ্যে আপনার অডিও, Gemini Live ভিডিও ও শেয়ার করা স্ক্রিন, আপনি Gemini-র সাথে যা শেয়ার করেন (যেমন, প্রম্পট, <ph name="BEGIN_LINK" />আপলোড<ph name="END_LINK" /> ও <ph name="BEGIN_LINK" />স্ক্রিন<ph name="END_LINK" />), Gemini-র উত্তর, টাস্ক ও টুল কল, মতামত, Gemini-র মাধ্যমে আপনার ভিজিট করা ওয়েবসাইট থেকে পাওয়া তথ্য, প্রোডাক্টের ব্যবহার সংক্রান্ত ডেটা, আপনার ডিভাইসের সাধারণ লোকেশন, IP অ্যাড্রেস এবং আপনার Google অ্যাকাউন্টে থাকা বাড়ি বা কর্মস্থলের ঠিকানা অন্তর্ভুক্ত থাকে। এছাড়াও, Gemini-র সাথে কানেক্ট করা অ্যাপের ডেটা এর মধ্যে থাকতে পারে।</translation>
 <translation id="4502423230170890588">এই ডিভাইস থেকে সরান</translation>
 <translation id="4508486880075514067">ফুল-স্ক্রিন করুন</translation>
 <translation id="4508750114462689118">সাইন-ইন প্রোমো বন্ধ করুন</translation>
@@ -1217,6 +1222,7 @@
 <translation id="4808744395915275922">আপডেট</translation>
 <translation id="4813345808229079766">কানেকশন</translation>
 <translation id="4821595350501541683">ট্যাব বন্ধ করা এবং ব্রাউজ করা ডেটা মুছে দেওয়া হয়েছে</translation>
+<translation id="4821645169621230110">আপনার ইতিহাস কীভাবে ব্যবহার করা হয়</translation>
 <translation id="4823322556950229674">অ্যাড্রেস বার এবং ব্যাক বোতামটি নিচে সরিয়ে নিতে চাইলে প্রেস করে ধরে রাখুন</translation>
 <translation id="4824480232751123840">ভলিউম</translation>
 <translation id="4824497107140370669">{count,plural, =0{{domain}}=1{{domain} এবং আরও ১টি}one{{domain} এবং আরও {count}টি}other{{domain} এবং আরও {count}টি}}</translation>
@@ -1244,6 +1250,7 @@
 <translation id="4877597489778380935">পরে রিমাইন্ডার পেতে চাই</translation>
 <translation id="4881695831933465202">খুলুন</translation>
 <translation id="4883766694719903356">ছদ্মবেশী ট্যাব গ্রিড</translation>
+<translation id="4884205780547482830">আপনার ডেটা জেনারেটিভ AI-কে ট্রেনিং দিতে সাহায্য করে</translation>
 <translation id="4884937942297374058">"উন্নত সুরক্ষা" ফিচার বন্ধ করা আছে</translation>
 <translation id="4887391901725877182">ক্লোজড ক্যাপশন</translation>
 <translation id="488785315393301722">বিশদ বিবরণ দেখান</translation>
@@ -1696,7 +1703,6 @@
 <translation id="628251768213143684">আপনার Google অ্যাকাউন্টে কী কী সেভ করা রয়েছে, তা সব সময় ম্যানেজ করতে পারবেন</translation>
 <translation id="6284652193729350524"><ph name="LANGUAGE" /> ভাষায় অনুবাদ করার প্রস্তাব দিন</translation>
 <translation id="6293101329759844770">Safe Browsing চালু করতে, <ph name="BEGIN_LINK" />Google পরিষেবা<ph name="END_LINK" /> বিকল্পটি খুলে Safe Browsing-এ ট্যাপ করুন।</translation>
-<translation id="6295140892595702619">Gemini-র সাথে চ্যাট করতে আপনার মাইক্রোফোন ব্যবহার করুন। Gemini-র সাথে কথা বললে, অডিও Gemini অ্যাপ অ্যাক্টিভিটিতে (এটি চালু থাকলে) সেভ হয়। জেনারেটিভ AI মডেল উন্নত করতে আপনার ডেটা ব্যবহার করা হয় না</translation>
 <translation id="6295751040240588413">কার্ডের ডাকনাম সঠিক নয়</translation>
 <translation id="629730747756840877">অ্যাকাউন্ট</translation>
 <translation id="6301104306974789820">দাম ট্র্যাক করা সংক্রান্ত বিজ্ঞপ্তি পান</translation>
@@ -1891,6 +1897,7 @@
 <translation id="6830728435402077660">সুরক্ষিত নয়</translation>
 <translation id="6831043979455480757">অনুবাদ</translation>
 <translation id="6842136130964845393">আপনার সেভ করা পাসওয়ার্ড সবসময় যাতে অ্যাক্সেস করতে পারেন তা নিশ্চিত করতে, নিজের পরিচয় যাচাই করুন</translation>
+<translation id="6843744036364481304">কোন চ্যাট ইতিহাস সেভ করা হয়</translation>
 <translation id="6844773122575789617">AI মোড চালু করুন</translation>
 <translation id="6851516051005285358">ডেস্কটপ সাইটের জন্য অনুরোধ করুন</translation>
 <translation id="6857446173140146664">ব্যাকগ্রাউন্ড মুছুন</translation>
@@ -1946,7 +1953,6 @@
 <translation id="6979737339423435258">শুরু থেকে</translation>
 <translation id="6980507581230208647">রোজ থিম</translation>
 <translation id="6983306615164277634">এছাড়াও, অ্যাড্রেস বারের অবস্থান পরিবর্তন করার জন্য আপনি এটি টাচ করে ধরে রাখতে পারবেন।</translation>
-<translation id="6987201788018524855">আপনি মিস করে গেছেন এমন সহায়ক ফিচার এক্সপ্লোর করুন</translation>
 <translation id="6989636517316575338">যেকোনও পৃষ্ঠা সম্পর্কে জিজ্ঞাসা করুন</translation>
 <translation id="6990519590575500580">Facetime</translation>
 <translation id="6998236305642926573">সব টাস্ক</translation>
@@ -2015,6 +2021,7 @@
 <translation id="7223134495231529579">ডাউনলোড ফোল্ডারে সেভ করুন</translation>
 <translation id="722339453342442311">এখনই চেক করুন</translation>
 <translation id="7227235818314667565">শেয়ারিং ম্যানেজ করুন</translation>
+<translation id="7232376892719594461">Gemini-র সাথে আপনার কথোপকথন বা আপনার <ph name="BEGIN_LINK" />Google Workspace ডেটা<ph name="END_LINK" /> রিভিউ করা হয় না অথবা জেনারেটিভ AI মডেলকে ট্রেনিং দিতে তা ব্যবহার করা হয় না।</translation>
 <translation id="7233006041370588369">লেখার জন্য পাসওয়ার্ড বেছে নিন।</translation>
 <translation id="7238074332967840767">নিরাপত্তা</translation>
 <translation id="723874023660911012">প্রোফাইল সুইচ করুন</translation>
@@ -2096,6 +2103,7 @@
 <translation id="7486006552035434095">আপনার ডিভাইস সিঙ্ক করে রাখুন</translation>
 <translation id="7491131399623468277">সেটিংসে যান…</translation>
 <translation id="7491161827858509164">আগে ডাউনলোড করা ফাইল দেখতে, <ph name="BEGIN_LINK" />ফাইল<ph name="END_LINK" /> খুলুন</translation>
+<translation id="7496554840683586365">এই সাইটটি অ্যাপ স্টোর খোলার চেষ্টা করছে। এটি করলে আপনাকে ছদ্মবেশী মোড ছেড়ে বেরিয়ে যেতে হবে।</translation>
 <translation id="7498234416455752244">এডিট করতে থাকুন</translation>
 <translation id="7500244509706269886">ফর্ম অটোফিল করুন</translation>
 <translation id="750493650310597496">০টি নির্বাচিত</translation>
@@ -2525,6 +2533,7 @@
 <translation id="8746155870861185046">হাইলাইট শেয়ার করুন</translation>
 <translation id="8748678031495824833">অন-পেজ AI টুল খুলুন</translation>
 <translation id="8750037785291841318">আপনি নিজের ট্যাবগুলি এখানে খুঁজে পাবেন</translation>
+<translation id="8751126814549746156">১৮ মাস পরে আপনার ইতিহাস অটোমেটিক মুছে ফেলা হয়। আপনি সেটিংস থেকে এই সময়সীমা পরিবর্তন করতে পারবেন। পরিষেবা প্রদানকারীদের পর্যালোচনা করা চ্যাট আপনার অ্যাকাউন্ট থেকে আলাদা করা হয় এবং ৩ বছর স্টোর করে রাখা হয়। আপনি যেকোনও সময় আপনার ইতিহাস সেটিং <ph name="BEGIN_LINK" />বন্ধ করতে<ph name="END_LINK" /> পারবেন।</translation>
 <translation id="8756969031206844760">পাসওয়ার্ড আপডেট করবেন?</translation>
 <translation id="8763613688786959833">শেষে ট্যাবে যান</translation>
 <translation id="8766790350274092814"><ph name="WEBSITE" /> এবং <ph name="SECOND_WEBSITE" />-এর পাসওয়ার্ড মুছে ফেলা হবে। আপনার অ্যাকাউন্ট মুছে ফেলা হবে না।</translation>
@@ -2570,6 +2579,7 @@
 <translation id="8893208530912252670">ভিডিও</translation>
 <translation id="890009681345348416">৪০টির বেশি পাসওয়ার্ড অটোফিল করা হয়েছে</translation>
 <translation id="8900845556227858314">ব্রাউজার অ্যাপ</translation>
+<translation id="8903042868629070803">আপনার বয়স ১৮ বছর বা তার বেশি হলে, Google আপনার ইতিহাসও <ph name="BEGIN_LINK" />জেনারেটিভ AI মডেলকে ট্রেনিং দিতে<ph name="END_LINK" /> ব্যবহার করে। ভবিষ্যতের চ্যাটের জন্য আপনি যেকোনও সময় <ph name="BEGIN_LINK" />এটি বন্ধ করতে<ph name="END_LINK" /> পারবেন।</translation>
 <translation id="890565330728586731">ফিরে যান</translation>
 <translation id="8907722425137681851">পৃষ্ঠাতে খুঁজুন…</translation>
 <translation id="8909135823018751308">শেয়ার করুন...</translation>

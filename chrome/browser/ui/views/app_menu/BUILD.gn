@@ -65,6 +65,8 @@ source_set("impl") {
     "app_menu_block_button.cc",
     "app_menu_block_view.cc",
     "app_menu_chip_view.cc",
+    "app_menu_focus_controller.cc",
+    "app_menu_focus_controller.h",
     "app_menu_footer_button.cc",
     "app_menu_footer_view.cc",
     "app_menu_item_view.cc",
@@ -160,6 +162,7 @@ source_set("impl") {
     "//components/skills:features",
     "//components/strings:components_strings",
     "//components/strings:components_strings_grit",
+    "//components/subscription_eligibility:tier_names",
     "//components/sync/service",
     "//components/sync_sessions",
     "//components/tab_groups",
@@ -175,6 +178,7 @@ source_set("impl") {
     "//ui/display",
     "//ui/gfx",
     "//ui/views",
+    "//ui/views/controls/webview",
   ]
 
   if (use_aura) {
@@ -208,6 +212,7 @@ if (toolkit_views) {
       "action_app_menu_unittest.cc",
       "app_menu_block_button_unittest.cc",
       "app_menu_chip_view_unittest.cc",
+      "app_menu_focus_controller_unittest.cc",
       "app_menu_footer_button_unittest.cc",
       "app_menu_minor_text_view_unittest.cc",
       "app_menu_search_bar_view_unittest.cc",
@@ -258,15 +263,20 @@ if (toolkit_views) {
       "//components/skills:features",
       "//components/sync:test_support",
       "//components/tabs:test_support",
+      "//content/public/browser",
+      "//content/test:test_support",
       "//testing/gtest",
       "//ui/accessibility",
       "//ui/actions:actions_headers",
       "//ui/base",
       "//ui/base:test_support",
+      "//ui/events:gesture_detection",
+      "//ui/events:test_support",
       "//ui/gfx",
       "//ui/strings",
       "//ui/views",
       "//ui/views:test_support",
+      "//ui/views/controls/webview",
     ]
   }
 
@@ -293,6 +303,7 @@ if (toolkit_views) {
       "//components/prefs",
       "//components/sync:test_support",
       "//components/sync_sessions",
+      "//components/zoom",
       "//content/test:test_support",
       "//testing/gtest",
       "//ui/base",

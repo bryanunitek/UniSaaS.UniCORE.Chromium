@@ -184,6 +184,7 @@
 <translation id="2799223571221894425">重新启动</translation>
 <translation id="2803971713792056305">您的 Chromium</translation>
 <translation id="2816462166102338036">使用图片搜索功能搜索此视频</translation>
+<translation id="2819844767470613567">警告：Chromium 无法阻止扩展程序记录您的浏览记录。若要在隔离模式下停用该扩展程序，请取消选择此选项。</translation>
 <translation id="282591729717417030">有了 iOS 版 Chromium，随时随地通过摄像头发现好物、追踪降价，尽享便捷体验。</translation>
 <translation id="2841525013647267359">源语言</translation>
 <translation id="2846251086934905009">安装时出错：安装程序进程未完成。已中止安装。</translation>
@@ -481,6 +482,7 @@
 <translation id="5889361821821684993">Chromium 会定期进行检查，以确保您的浏览器使用了最安全的设置。如有任何事项需要您审核，我们会通知您。</translation>
 <translation id="5895138241574237353">重新启动</translation>
 <translation id="5896077214220653386">Chromium 中的 Gemini Enterprise</translation>
+<translation id="5900507321340749588">为提供诈骗检测等功能，Chromium 可使用直接在设备上运行的 AI 模型。如果关闭此设置，这些功能可能无法正常运行。<ph name="BEGIN_LINK" />详细了解设备端 AI<ph name="END_LINK" /></translation>
 <translation id="5903106910045431592"><ph name="PAGE_TITLE" /> - 网络登录</translation>
 <translation id="5924017743176219022">正在连接到互联网…</translation>
 <translation id="5941711191222866238">最小化</translation>

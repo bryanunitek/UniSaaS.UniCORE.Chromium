@@ -4,7 +4,6 @@
 
 #import "ios/chrome/app/startup/chrome_app_startup_parameters.h"
 
-#import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
@@ -13,10 +12,14 @@
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/password_manager/core/browser/manage_passwords_referrer.h"
+#import "components/password_manager/core/common/remote_actor/remote_actor_features.h"
+#import "ios/chrome/app/startup/app_group_command_payload.h"
 #import "ios/chrome/app/startup/app_startup_utils.h"
+#import "ios/chrome/app/startup/remote_actor_url_parser.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/google_one/shared/google_one_deep_link_util.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/passwords/model/remote_actor/remote_actor_constants.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
@@ -30,9 +33,6 @@
 using base::UmaHistogramEnumeration;
 
 namespace {
-
-const char kApplicationGroupCommandDelay[] =
-    "Startup.ApplicationGroupCommandDelay";
 
 // Host string used to detect an "external action" scheme URL.
 NSString* const kExternalActionURLHost = @"ChromeExternalAction";
@@ -180,6 +180,10 @@ TabOpeningPostOpeningAction XCallbackPoaToPostOpeningAction(
     appStartupParameters.openedViaWidgetScheme = YES;
     return appStartupParameters;
     // LINT.ThenChange(//ios/chrome/app/task_request_for_widget_url_context.mm)
+  } else if ([self isRemoteActorURL:completeURL]) {
+    return [self startupParametersForRemoteActorWithAppID:appID
+                                              completeURL:completeURL
+                                     forceApplicationMode:forceApplicationMode];
     // LINT.IfChange
     // TODO(crbug.com/462018636): This code will be soon migrated to
     // task_request_for_xcallback_url_context.mm, so any change should be
@@ -348,6 +352,42 @@ TabOpeningPostOpeningAction XCallbackPoaToPostOpeningAction(
   }
 }
 
+// Returns `YES` if the URL matches the Remote Actor host.
++ (BOOL)isRemoteActorURL:(NSURL*)URL {
+  return [URL.host isEqualToString:kRemoteActorURLHost];
+}
+
+// Returns the startup parameters for a Remote Actor request. Returns `nil` if
+// the feature flag is disabled or if the payload or nonce query parameters are
+// missing.
++ (instancetype)startupParametersForRemoteActorWithAppID:(NSString*)appID
+                                             completeURL:(NSURL*)completeURL
+                                    forceApplicationMode:
+                                        (BOOL)forceApplicationMode {
+  if (!password_manager::features::RemoteActorCredentialSharingEnabled()) {
+    return nil;
+  }
+
+  std::optional<RemoteActorRequest> request =
+      ExtractRemoteActorRequestFromURL(net::GURLWithNSURL(completeURL));
+  if (!request.has_value()) {
+    return nil;
+  }
+
+  ChromeAppStartupParameters* params = [[ChromeAppStartupParameters alloc]
+       initWithExternalURL:GURL()
+         declaredSourceApp:appID
+           secureSourceApp:nil
+               completeURL:completeURL
+           applicationMode:ApplicationModeForTabOpening::UNDETERMINED
+      forceApplicationMode:forceApplicationMode];
+  params.postOpeningAction =
+      TabOpeningPostOpeningAction::REMOTE_ACTOR_CREDENTIAL_SHARING;
+  params.remoteActorRequest = std::move(request);
+
+  return params;
+}
+
 // Returns true if the URL passed is an external action URL, defined by having
 // the `kExternalActionURLHost` as host.
 + (BOOL)isChromeExternalActionURL:(NSURL*)URL {
@@ -478,72 +518,20 @@ TabOpeningPostOpeningAction XCallbackPoaToPostOpeningAction(
                                           sourceApplication:(NSString*)appID
                                        forceApplicationMode:
                                            (BOOL)forceApplicationMode {
-  NSUserDefaults* sharedDefaults = app_group::GetGroupUserDefaults();
-
-  NSString* commandDictionaryPreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandPreference);
-  NSDictionary* commandDictionary = base::apple::ObjCCast<NSDictionary>(
-      [sharedDefaults objectForKey:commandDictionaryPreference]);
-
-  [sharedDefaults removeObjectForKey:commandDictionaryPreference];
-
-  // `sharedDefaults` is used for communication between apps. Synchronize to
-  // avoid synchronization issues (like removing the next order).
-  [sharedDefaults synchronize];
-
-  if (!commandDictionary) {
-    return nil;
-  }
-
-  NSString* commandCallerPreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandAppPreference);
-  NSString* commandCaller = base::apple::ObjCCast<NSString>(
-      [commandDictionary objectForKey:commandCallerPreference]);
-
-  NSString* commandPreference = base::SysUTF8ToNSString(
-      app_group::kChromeAppGroupCommandCommandPreference);
-  NSString* command = base::apple::ObjCCast<NSString>(
-      [commandDictionary objectForKey:commandPreference]);
-
-  NSString* commandTimePreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandTimePreference);
-  id commandTime = base::apple::ObjCCast<NSDate>(
-      [commandDictionary objectForKey:commandTimePreference]);
-
-  NSString* commandTextPreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandTextPreference);
-  NSString* externalText = base::apple::ObjCCast<NSString>(
-      [commandDictionary objectForKey:commandTextPreference]);
-
-  NSString* commandDataPreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandDataPreference);
-  NSData* externalData = base::apple::ObjCCast<NSData>(
-      [commandDictionary objectForKey:commandDataPreference]);
-
-  NSString* commandIndexPreference =
-      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandIndexPreference);
-  NSNumber* index = base::apple::ObjCCast<NSNumber>(
-      [commandDictionary objectForKey:commandIndexPreference]);
-
-  if (!commandCaller || !command || !commandTimePreference) {
-    return nil;
-  }
-
-  // Check the time of the last request to avoid app from intercepting old
-  // open url request and replay it later.
-  NSTimeInterval delay = [[NSDate date] timeIntervalSinceDate:commandTime];
-  UMA_HISTOGRAM_COUNTS_100(kApplicationGroupCommandDelay, delay);
-  if (delay > app_group::kAppGroupCommandTimeout) {
+  AppGroupCommandPayload payload = ConsumeAppGroupCommandPayload();
+  // Expired commands are discarded to avoid an app intercepting an old open
+  // URL request and replaying it later.
+  if (!payload.is_valid) {
     return nil;
   }
   return [ChromeAppStartupParameters
-      startupParametersForCommand:command
-                 withExternalText:externalText
-                     externalData:externalData
-                            index:index
+      startupParametersForCommand:payload.command
+                 withExternalText:payload.external_text
+                     externalData:payload.external_data
+                            index:payload.index
                               URL:URL
                 sourceApplication:appID
-          secureSourceApplication:commandCaller
+          secureSourceApplication:payload.caller_app
              forceApplicationMode:forceApplicationMode];
 }
 

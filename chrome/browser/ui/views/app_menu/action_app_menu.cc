@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/views/app_menu/app_menu_action_item.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_block_view.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_chip_view.h"
+#include "chrome/browser/ui/views/app_menu/app_menu_focus_controller.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_footer_view.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_item_view.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_minor_text_view.h"
@@ -45,7 +46,6 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/menu_button_controller.h"
-#include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/menu/menu_scroll_view_container.h"
@@ -55,6 +55,8 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 
@@ -196,20 +198,42 @@ actions::ActionInvocationContext BuildActionInvocationContext(
 
 }  // namespace
 
+ActionAppMenu::ScopedCloseGuard::ScopedCloseGuard(ActionAppMenu* menu)
+    : menu_(menu) {
+  ++menu_->close_guard_depth_;
+}
+
+ActionAppMenu::ScopedCloseGuard::~ScopedCloseGuard() {
+  if (--menu_->close_guard_depth_ == 0 &&
+      std::exchange(menu_->close_deferred_, false)) {
+    menu_->OnMenuClosed(/*menu=*/nullptr);
+  }
+}
+
 ActionAppMenu::ActionAppMenu(BrowserWindowInterface* browser_window_interface,
                              base::RepeatingClosure on_menu_closed_callback)
     : browser_window_interface_(browser_window_interface),
       on_menu_closed_callback_(std::move(on_menu_closed_callback)),
-      menu_manager_(
-          std::make_unique<ActionAppMenuManager>(browser_window_interface,
-                                                 /*drag_and_drop_host=*/this)) {
+      menu_manager_(std::make_unique<ActionAppMenuManager>(
+          browser_window_interface,
+          /*drag_and_drop_host=*/this,
+          // Unretained is safe because `this` owns `menu_manager_`.
+          base::BindRepeating(&ActionAppMenu::RebuildSubmenu,
+                              base::Unretained(this),
+                              kActionOtherDeviceTabsSubmenu))) {
   menu_manager_->CreateMenuHierarchy();
 }
 
 ActionAppMenu::~ActionAppMenu() {
+  if (focus_controller_) {
+    focus_controller_->RestoreOwnerFocus(
+        /*should_restore=*/!action_to_execute_on_close_.has_value());
+    focus_controller_.reset();
+  }
   search_bar_ = nullptr;
   command_to_action_map_.clear();
   search_controller_.reset();
+  old_search_results_.reset();
   menu_manager_.reset();
 }
 
@@ -254,6 +278,12 @@ void ActionAppMenu::RunMenu(views::Widget* parent,
   menu_runner_ = std::make_unique<views::MenuRunner>(std::move(root), types);
 
   metrics_.OnMenuOpened();
+
+  views::Widget* const owner_widget =
+      parent ? parent : (host ? host->button()->GetWidget() : nullptr);
+  focus_controller_ = search_bar_ ? std::make_unique<AppMenuFocusController>(
+                                        owner_widget, search_bar_)
+                                  : nullptr;
 
   menu_runner_->RunMenuAt(parent, host, anchor_screen_bounds,
                           views::MenuAnchorPosition::kTopRight, source_type,
@@ -300,6 +330,7 @@ void ActionAppMenu::UpdateMenuItem(actions::BaseAction* action,
   actions::BaseAction* old_parent_action = action->GetParent();
   CHECK(old_parent_action);
 
+  ScopedCloseGuard close_guard(this);
   views::MenuItemView* moved_item = GetMenuItemForAction(action);
   std::unique_ptr<actions::BaseAction> owned_action =
       old_parent_action->RemoveChild(action);
@@ -421,6 +452,11 @@ bool ActionAppMenu::ShouldExecuteCommandWithoutClosingMenu(int id,
 }
 
 void ActionAppMenu::OnMenuClosed(views::MenuItemView* menu) {
+  if (close_guard_depth_ > 0) {
+    close_deferred_ = true;
+    return;
+  }
+
   actions::ActionItem* action_to_execute = nullptr;
   actions::ActionInvocationContext action_context;
   if (action_to_execute_on_close_) {
@@ -429,6 +465,12 @@ void ActionAppMenu::OnMenuClosed(views::MenuItemView* menu) {
     CHECK(action_iterator != command_to_action_map_.end());
     action_to_execute = action_iterator->second->GetActionItem();
     action_context = std::move(action_to_execute_on_close_->context);
+  }
+
+  if (focus_controller_) {
+    focus_controller_->RestoreOwnerFocus(
+        /*should_restore=*/!action_to_execute_on_close_.has_value());
+    focus_controller_.reset();
   }
 
   search_bar_ = nullptr;
@@ -449,6 +491,7 @@ void ActionAppMenu::OnMenuClosed(views::MenuItemView* menu) {
     action_to_execute->InvokeAction(std::move(action_context));
   }
   search_controller_.reset();
+  old_search_results_.reset();
 
   menu_manager_->OnMenuClosed();
 }
@@ -458,16 +501,16 @@ void ActionAppMenu::WillShowMenu(views::MenuItemView* menu) {
     return;
   }
 
-  metrics_.OnWillShowSubMenu(menu->GetCommand());
+  actions::BaseAction* base_action = GetActionForMenuItem(menu);
+  metrics_.OnWillShowSubMenu(base_action);
 
   if (!menu->GetSubmenu()->GetMenuItems().empty()) {
     return;
   }
 
-  auto action_iterator = command_to_action_map_.find(menu->GetCommand());
-  if (action_iterator != command_to_action_map_.end() &&
-      action_iterator->second->HasPopulateChildActionsCallback()) {
-    PopulateMenu(menu, action_iterator->second);
+  if (base_action && base_action->HasPopulateChildActionsCallback()) {
+    ScopedCloseGuard close_guard(this);
+    PopulateMenu(menu, base_action);
   }
 }
 
@@ -613,20 +656,35 @@ bool ActionAppMenu::ShouldCloseOnDragDropCompleted() {
   return false;
 }
 
-void ActionAppMenu::ShowSearchResults(actions::ActionItem* results) {
+void ActionAppMenu::ShowSearchResults(
+    actions::ActionItem* results,
+    std::unique_ptr<actions::ActionItem> old_results) {
+  ScopedCloseGuard close_guard(this);
+  old_search_results_ = std::move(old_results);
   if (!menu_width_lock_) {
     menu_width_lock_ = LockMenuWidth();
   }
+  base::ScopedClosureRunner preserve_focus =
+      focus_controller_ ? focus_controller_->PreserveSearchBarFocus()
+                        : base::ScopedClosureRunner();
   ClearItemsBelowSearchBar();
   PopulateMenu(root_, results);
   root_->ChildrenChanged();
+  old_search_results_.reset();
 }
 
-void ActionAppMenu::RestoreMenu() {
+void ActionAppMenu::RestoreMenu(
+    std::unique_ptr<actions::ActionItem> old_results) {
+  ScopedCloseGuard close_guard(this);
+  old_search_results_ = std::move(old_results);
+  base::ScopedClosureRunner preserve_focus =
+      focus_controller_ ? focus_controller_->PreserveSearchBarFocus()
+                        : base::ScopedClosureRunner();
   ClearItemsBelowSearchBar();
   PopulateItemsBelowSearchBar();
   menu_width_lock_.RunAndReset();
   root_->ChildrenChanged();
+  old_search_results_.reset();
 }
 
 bool ActionAppMenu::ShouldDragActivateChildButtons() const {
@@ -682,6 +740,27 @@ void ActionAppMenu::RemoveSubmenuActionsFromMap(
     RemoveSubmenuActionsFromMap(child);
     command_to_action_map_.erase(child->GetCommand());
   }
+}
+
+void ActionAppMenu::RebuildSubmenu(actions::ActionId submenu_action_id) {
+  auto action_it = command_to_action_map_.find(submenu_action_id);
+  if (action_it == command_to_action_map_.end()) {
+    return;
+  }
+  views::MenuItemView* menu_item = root_->GetMenuItemByID(submenu_action_id);
+  CHECK(menu_item);
+  actions::BaseAction* submenu_action = action_it->second;
+  // Rows not built yet; WillShowMenu() builds them from the new actions.
+  if (menu_item->GetSubmenu()->GetMenuItems().empty() &&
+      !menu_item->GetSubmenu()->IsShowing()) {
+    submenu_action->PopulateChildItems();
+    return;
+  }
+  RemoveSubmenuActionsFromMap(menu_item);
+  menu_item->RemoveAllMenuItems();
+  submenu_action->PopulateChildItems();
+  PopulateMenu(menu_item, submenu_action);
+  menu_item->ChildrenChanged();
 }
 
 void ActionAppMenu::CancelAndEvaluate(actions::ActionId action_id,
@@ -806,8 +885,8 @@ void ActionAppMenu::PopulateItemsBelowSearchBar() {
   actions::ActionItem* const app_menu_root = menu_manager_->GetAppMenuRoot();
   const auto& children = app_menu_root->GetChildren().children();
   for (size_t i = 0; i < children.size(); ++i) {
-    const auto display_type = children[i]->GetProperty(
-        AppMenuActionItem::kDisplayTypeKey);
+    const auto display_type =
+        children[i]->GetProperty(AppMenuActionItem::kDisplayTypeKey);
     if (display_type == AppMenuActionItem::DisplayType::kSearch) {
       PopulateMenu(root_, app_menu_root, i + 1);
       return;
@@ -846,7 +925,6 @@ views::MenuItemView* ActionAppMenu::AppendMenuItem(
       has_submenu ? views::MenuItemView::Type::kSubMenu
                   : (is_checkable ? views::MenuItemView::Type::kCheckbox
                                   : views::MenuItemView::Type::kNormal);
-
 
   views::MenuItemView* menu_item = parent_menu_item->AddMenuItemView(
       std::make_unique<AppMenuItemView>(parent_menu_item, command_id,

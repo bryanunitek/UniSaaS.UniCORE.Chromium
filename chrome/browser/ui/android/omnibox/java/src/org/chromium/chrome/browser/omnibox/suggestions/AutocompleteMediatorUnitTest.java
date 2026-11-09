@@ -73,6 +73,7 @@ import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.LocationBarEmbedderUiOverrides;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
+import org.chromium.chrome.browser.omnibox.OmniboxMetrics.PrefetchResult;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
@@ -80,6 +81,7 @@ import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator.NavigationTarget;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator.OmniboxSuggestionsVisualStateObserver;
 import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.RoundSides;
@@ -94,6 +96,7 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
+import org.chromium.chrome.browser.tab.Tab.TabLoadStatus;
 import org.chromium.chrome.browser.ui.extensions.ExtensionUi;
 import org.chromium.chrome.browser.ui.extensions.ExtensionUiBackend;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
@@ -130,6 +133,7 @@ import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyKey;
@@ -1634,7 +1638,7 @@ public class AutocompleteMediatorUnitTest {
                 .callback
                 .onLoadUrl(
                         null,
-                        new LoadUrlResult(Tab.TabLoadStatus.DEFAULT_PAGE_LOAD, mNavigationHandle));
+                        new LoadUrlResult(TabLoadStatus.DEFAULT_PAGE_LOAD, mNavigationHandle));
         verify(mAutocompleteController)
                 .createNavigationObserver(mNavigationHandle, mSuggestionsList.get(0));
     }
@@ -1698,7 +1702,7 @@ public class AutocompleteMediatorUnitTest {
                 .callback
                 .onLoadUrl(
                         null,
-                        new LoadUrlResult(Tab.TabLoadStatus.DEFAULT_PAGE_LOAD, mNavigationHandle));
+                        new LoadUrlResult(TabLoadStatus.DEFAULT_PAGE_LOAD, mNavigationHandle));
         verify(mAutocompleteController).createNavigationObserver(mNavigationHandle, match);
     }
 
@@ -1988,142 +1992,6 @@ public class AutocompleteMediatorUnitTest {
     }
 
     @Test
-    public void keystrokeToUiModelTime_notRecordedForZps() {
-        GURL url = JUnitTestGURLs.BLUE_1;
-        var session = createSession(url, "Title", PageClassification.BLANK);
-        mMediator.beginInput(session);
-        verifyAutocompleteStartZeroSuggest("", url, PageClassification.BLANK, "Title");
-
-        var watcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_REQUEST_TO_UI_MODEL_FIRST, 100)
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_REQUEST_TO_UI_MODEL_LAST, 200)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST)
-                        .build();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(100));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ false);
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(100));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ true);
-        // RequestToUiModel is recorded for ZPS, KeystrokeToUiModel is not.
-        watcher.assertExpected();
-    }
-
-    @Test
-    public void keystrokeToUiModelTime_includesDeferralBeforeRequest() {
-        UnsyncedSuggestionsListAnimation.setAnimationsDisabledForTesting(
-                /* disabledForTesting= */ true);
-        GURL url = JUnitTestGURLs.BLUE_1;
-        var session = createSession(url, "Title", PageClassification.BLANK);
-        mMediator.beginInput(session);
-        clearInvocations(mAutocompleteController);
-
-        // Keystroke at T0. Advance the clock past the scheduling delay before running the deferred
-        // request, so the request is issued at T0 + 50ms.
-        var noRecords =
-                HistogramWatcher.newBuilder()
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST)
-                        .build();
-        session.getAutocompleteInput().setUserText("a");
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(50));
-        RobolectricUtil.runAllBackgroundAndUi();
-        verify(mAutocompleteController).start(any(), any(), anyInt(), anyBoolean());
-        noRecords.assertExpected();
-
-        // First reply at T0 + 150ms: RequestToUiModel sees 100ms, KeystrokeToUiModel sees 150ms.
-        var firstReply =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_REQUEST_TO_UI_MODEL_FIRST, 100)
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST,
-                                150)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST)
-                        .build();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(100));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ false);
-        firstReply.assertExpected();
-
-        // Final reply at T0 + 350ms: RequestToUiModel sees 300ms, KeystrokeToUiModel sees 350ms.
-        var finalReply =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_REQUEST_TO_UI_MODEL_LAST, 300)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST)
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST,
-                                350)
-                        .build();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(200));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ true);
-        finalReply.assertExpected();
-    }
-
-    @Test
-    public void keystrokeToUiModelTime_refiningKeystrokeCancelsLastAndRestartsClock() {
-        UnsyncedSuggestionsListAnimation.setAnimationsDisabledForTesting(
-                /* disabledForTesting= */ true);
-        GURL url = JUnitTestGURLs.BLUE_1;
-        var session = createSession(url, "Title", PageClassification.BLANK);
-        mMediator.beginInput(session);
-
-        // First keystroke; request issued 50ms later; first reply 100ms after that.
-        var firstKeystroke =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST,
-                                150)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST)
-                        .build();
-        session.getAutocompleteInput().setUserText("a");
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(50));
-        RobolectricUtil.runAllBackgroundAndUi();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(100));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ false);
-        firstKeystroke.assertExpected();
-
-        // Second keystroke before the final reply: the pending .Last is dropped and the clock
-        // restarts from this keystroke. First reply for it arrives after a 40ms deferral + 10ms.
-        var secondKeystroke =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST,
-                                50)
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST)
-                        .build();
-        session.getAutocompleteInput().setUserText("ab");
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(40));
-        RobolectricUtil.runAllBackgroundAndUi();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(10));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ false);
-        secondKeystroke.assertExpected();
-
-        // Final reply for the second keystroke: 40 + 10 + 60 = 110ms since that keystroke.
-        var finalReply =
-                HistogramWatcher.newBuilder()
-                        .expectNoRecords(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_FIRST)
-                        .expectIntRecord(
-                                OmniboxMetrics.HISTOGRAM_SUGGESTIONS_KEYSTROKE_TO_UI_MODEL_LAST,
-                                110)
-                        .build();
-        ShadowPausedSystemClock.advanceBy(Duration.ofMillis(60));
-        mMediator.onSuggestionsReceived(mAutocompleteResult, /* isFinal= */ true);
-        finalReply.assertExpected();
-    }
-
-    @Test
     public void touchDownForPrefetch_TouchDownDelayRecorded() {
         int delay = 100;
         long eventTime = TimeUtils.uptimeMillis() - delay;
@@ -2150,7 +2018,7 @@ public class AutocompleteMediatorUnitTest {
                 HistogramWatcher.newBuilder()
                         .expectIntRecord(
                                 OmniboxMetrics.HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PREFETCH_RESULT,
-                                OmniboxMetrics.PrefetchResult.HIT)
+                                PrefetchResult.HIT)
                         .expectIntRecord(
                                 OmniboxMetrics
                                         .HISTOGRAM_SEARCH_PREFETCH_NUM_PREFETCHES_STARTED_IN_OMNIBOX_SESSION,
@@ -2188,7 +2056,7 @@ public class AutocompleteMediatorUnitTest {
                 HistogramWatcher.newBuilder()
                         .expectIntRecord(
                                 OmniboxMetrics.HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PREFETCH_RESULT,
-                                OmniboxMetrics.PrefetchResult.MISS)
+                                PrefetchResult.MISS)
                         .expectIntRecord(
                                 OmniboxMetrics
                                         .HISTOGRAM_SEARCH_PREFETCH_NUM_PREFETCHES_STARTED_IN_OMNIBOX_SESSION,
@@ -2226,7 +2094,7 @@ public class AutocompleteMediatorUnitTest {
                 HistogramWatcher.newBuilder()
                         .expectIntRecord(
                                 OmniboxMetrics.HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PREFETCH_RESULT,
-                                OmniboxMetrics.PrefetchResult.NO_PREFETCH)
+                                PrefetchResult.NO_PREFETCH)
                         .expectIntRecord(
                                 OmniboxMetrics
                                         .HISTOGRAM_SEARCH_PREFETCH_NUM_PREFETCHES_STARTED_IN_OMNIBOX_SESSION,
@@ -2655,7 +2523,7 @@ public class AutocompleteMediatorUnitTest {
         mSuggestionsList.add(0, defaultMatch);
         mMediator.onSuggestionsReceived(AutocompleteResult.fromCache(mSuggestionsList, null), true);
 
-        mMediator.loadTypedOmniboxText(123L, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(123L, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertEquals(mOmniboxLoadUrlParamsCaptor.getValue().url, url.getSpec());
@@ -2685,8 +2553,7 @@ public class AutocompleteMediatorUnitTest {
                 .getAimUrlFromInputState(any(), any());
 
         mMediator.beginInput(session);
-        mMediator.loadTypedOmniboxText(
-                TEST_EVENT_TIME, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertEquals(mOmniboxLoadUrlParamsCaptor.getValue().url, JUnitTestGURLs.BLUE_2.getSpec());
@@ -2727,8 +2594,7 @@ public class AutocompleteMediatorUnitTest {
         mSuggestionsList.add(0, defaultMatch);
         mMediator.onSuggestionsReceived(AutocompleteResult.fromCache(mSuggestionsList, null), true);
 
-        mMediator.loadTypedOmniboxText(
-                TEST_EVENT_TIME, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertEquals(mOmniboxLoadUrlParamsCaptor.getValue().url, url2.getSpec());
@@ -2744,8 +2610,7 @@ public class AutocompleteMediatorUnitTest {
         when(mTextStateProvider.getTextWithAutocomplete()).thenReturn("query");
         mMediator.beginInput(session);
 
-        mMediator.loadTypedOmniboxText(
-                TEST_EVENT_TIME, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate, never()).loadUrl(any());
         verify(mAutocompleteDelegate, never()).clearOmniboxFocus();
@@ -2771,8 +2636,7 @@ public class AutocompleteMediatorUnitTest {
         mSuggestionsList.add(0, tabMatch);
         mMediator.onSuggestionsReceived(AutocompleteResult.fromCache(mSuggestionsList, null), true);
 
-        mMediator.loadTypedOmniboxText(
-                TEST_EVENT_TIME, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertEquals(JUnitTestGURLs.URL_1.getSpec(), mOmniboxLoadUrlParamsCaptor.getValue().url);
@@ -3058,8 +2922,7 @@ public class AutocompleteMediatorUnitTest {
     @Test
     public void testUnsyncedAnimation_doesNotShowKeyboardInStandbyNoFocus() {
         var session = createSession(AutocompleteRequestType.SEARCH);
-        session.getAutocompleteInput()
-                .setAutocompleteState(AutocompleteInput.AutocompleteState.STANDBY_NO_FOCUS);
+        session.getAutocompleteInput().setAutocompleteState(AutocompleteState.STANDBY_NO_FOCUS);
         mMediator.beginInput(session);
 
         clearInvocations(mAutocompleteDelegate);
@@ -3073,8 +2936,7 @@ public class AutocompleteMediatorUnitTest {
     @Test
     public void testUnsyncedAnimation_showsKeyboardInEnabledState() {
         var session = createSession(AutocompleteRequestType.SEARCH);
-        session.getAutocompleteInput()
-                .setAutocompleteState(AutocompleteInput.AutocompleteState.ENABLED);
+        session.getAutocompleteInput().setAutocompleteState(AutocompleteState.ENABLED);
         mMediator.beginInput(session);
 
         clearInvocations(mAutocompleteDelegate);
@@ -3093,8 +2955,7 @@ public class AutocompleteMediatorUnitTest {
         mMediator.beginInput(session);
         assertTrue(mMediator.shouldAnimateFuseboxPopover());
 
-        session.getAutocompleteInput()
-                .setAutocompleteState(AutocompleteInput.AutocompleteState.STANDBY);
+        session.getAutocompleteInput().setAutocompleteState(AutocompleteState.STANDBY);
         assertFalse(mMediator.shouldAnimateFuseboxPopover());
 
         clearInvocations(mAutocompleteDelegate);
@@ -3183,7 +3044,7 @@ public class AutocompleteMediatorUnitTest {
         mMediator.showDeleteDialog(mAutocompleteMatch, "Title", () -> {});
 
         // Verify dialog is shown.
-        verify(mModalDialogManager).showDialog(any(), eq(ModalDialogManager.ModalDialogType.APP));
+        verify(mModalDialogManager).showDialog(any(), eq(ModalDialogType.APP));
 
         // Deactivate: should dismiss the dialog.
         mMediator.onTopResumedActivityChanged(/* isTopResumedActivity= */ false);
@@ -3201,8 +3062,7 @@ public class AutocompleteMediatorUnitTest {
 
         mMediator.confirmDeleteMatch(mAutocompleteMatch, "Title");
 
-        verify(mModalDialogManager)
-                .showDialog(mDialogCaptor.capture(), eq(ModalDialogManager.ModalDialogType.APP));
+        verify(mModalDialogManager).showDialog(mDialogCaptor.capture(), eq(ModalDialogType.APP));
         var dialog = mDialogCaptor.getValue();
         dialog.get(ModalDialogProperties.CONTROLLER)
                 .onClick(dialog, ModalDialogProperties.ButtonType.POSITIVE);
@@ -3222,8 +3082,7 @@ public class AutocompleteMediatorUnitTest {
 
         mMediator.confirmDeleteMatch(mAutocompleteMatch, "Title");
 
-        verify(mModalDialogManager)
-                .showDialog(mDialogCaptor.capture(), eq(ModalDialogManager.ModalDialogType.APP));
+        verify(mModalDialogManager).showDialog(mDialogCaptor.capture(), eq(ModalDialogType.APP));
         var dialog = mDialogCaptor.getValue();
         dialog.get(ModalDialogProperties.CONTROLLER)
                 .onClick(dialog, ModalDialogProperties.ButtonType.NEGATIVE);
@@ -3470,6 +3329,13 @@ public class AutocompleteMediatorUnitTest {
 
     @Test
     @EnableFeatures(OmniboxFeatureList.OMNIBOX_AIM_OPEN_IN_NEW_TAB)
+    public void onSuggestionClicked_aimOnWebPage_desktopPlatform_loadsInCurrentTab() {
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(/* isDesktopPlatform= */ true);
+        assertFalse(clickAimSuggestionAndGetParams(PAGE_URL, /* modifiers= */ 0).openInNewTab);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_AIM_OPEN_IN_NEW_TAB)
     public void onSuggestionClicked_conventionalOnWebPage_loadsInCurrentTab() {
         setUpLocationBarDataProvider(PAGE_URL, PAGE_TITLE, PageClassification.OTHER);
         mMediator.beginInput(createSession(AutocompleteRequestType.SEARCH));
@@ -3505,8 +3371,7 @@ public class AutocompleteMediatorUnitTest {
                 .getAimUrlFromInputState(any(), any());
         mMediator.beginInput(session);
 
-        mMediator.loadTypedOmniboxText(
-                TEST_EVENT_TIME, AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadTypedOmniboxText(TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertTrue(mOmniboxLoadUrlParamsCaptor.getValue().openInNewTab);
@@ -3548,10 +3413,7 @@ public class AutocompleteMediatorUnitTest {
                 .when(mComposeboxQueryControllerBridge)
                 .getAimUrlFromInputState(any(), any());
 
-        mMediator.loadPastedText(
-                "pasted query",
-                TEST_EVENT_TIME,
-                AutocompleteCoordinator.NavigationTarget.CURRENT_TAB);
+        mMediator.loadPastedText("pasted query", TEST_EVENT_TIME, NavigationTarget.CURRENT_TAB);
 
         verify(mAutocompleteDelegate).loadUrl(mOmniboxLoadUrlParamsCaptor.capture());
         assertTrue(mOmniboxLoadUrlParamsCaptor.getValue().openInNewTab);

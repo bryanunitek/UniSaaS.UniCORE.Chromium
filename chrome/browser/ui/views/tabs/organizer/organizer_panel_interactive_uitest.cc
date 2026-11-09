@@ -246,20 +246,12 @@ class OrganizerPanelUiTest : public InteractiveBrowserTest {
     auto steps =
         Steps(EnsurePresent(kOrganizerPanelElementId),
               If(
-                  [this]() {
-                    return OrganizerPanelController::From(browser())
-                               ->GetCurrentOrganizerPanelLocation() ==
-                           OrganizerPanelLocation::kOrganizerTray;
+                  []() {
+                    return organizer_panel::
+                        IsOrganizerPanelSegmentationControlEnabled();
                   },
-                  Then(PressButton(kOrganizerPanelCloseButtonElementId)),
-                  Else(If(
-                      []() {
-                        return organizer_panel::
-                            IsOrganizerPanelSegmentationControlEnabled();
-                      },
-                      Then(PressButton(
-                          kVerticalTabStripTabStripButtonElementId)),
-                      Else(PressButton(kTabSearchButtonElementId))))),
+                  Then(PressButton(kVerticalTabStripTabStripButtonElementId)),
+                  Else(PressButton(kTabSearchButtonElementId))),
               WaitForPanelClose());
     AddDescriptionPrefix(steps, "CloseOrganizerPanel()");
     return steps;
@@ -357,16 +349,16 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, OpenClosePanelHorizontalTabs) {
 }
 
 IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
-                       TopControlsNotWindowCaptionInHorizontalTabs) {
+                       TopAreaNotWindowCaptionInHorizontalTabs) {
   RunTestSequence(
       SetVerticalTabsEnabled(false), OpenOrganizerPanel(),
       CheckView(
-          kOrganizerPanelControlsElementId,
-          [this](views::View* controls) {
+          kOrganizerPanelElementId,
+          [this](views::View* panel) {
             auto* const browser_view =
                 BrowserView::GetBrowserViewForBrowser(browser());
             gfx::Point point_in_ncv =
-                controls->GetBoundsInScreen().origin() + gfx::Vector2d(10, 10);
+                panel->GetBoundsInScreen().origin() + gfx::Vector2d(10, 10);
             views::View::ConvertPointFromScreen(
                 browser_view->GetWidget()->non_client_view(), &point_in_ncv);
             return browser_view->GetWidget()
@@ -413,21 +405,24 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, TrayClosesOnFocusLost) {
                   WaitForPanelClose(), CheckControllerState(false));
 }
 
-IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, ClickAboveSearchFieldUnfocuses) {
+IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
+                       CloseButtonNavigationAndActionInWebUI) {
   const DeepQuery kAppQuery{"organizer-panel-app"};
+  const DeepQuery kCloseButtonQuery{"organizer-panel-app", "#closeButton"};
+
   RunTestSequence(
       SetVerticalTabsEnabled(false), OpenOrganizerPanel(), WaitForPanelLoad(),
+      // Initially, search field should be focused in WebUI.
       CheckJsResultAt(kWebContentsId, kAppQuery,
                       "el => el.$.searchField.isSearchFocused()", true),
-      MoveMouseTo(kOrganizerPanelControlsElementId), ClickMouse(),
+      // Focus the close button in WebUI.
+      ExecuteJsAt(kWebContentsId, kCloseButtonQuery, "el => el.focus()"),
       CheckJsResultAt(kWebContentsId, kAppQuery,
-                      "el => el.$.searchField.isSearchFocused()", false),
-      CheckView(kBrowserViewElementId,
-                [](BrowserView* browser_view) {
-                  return browser_view->GetFocusManager()->GetFocusedView() !=
-                         nullptr;
-                }),
-      CloseOrganizerPanel());
+                      "el => el.shadowRoot.activeElement.id === 'closeButton'",
+                      true),
+      // Click close button in WebUI -> closes the organizer panel.
+      ClickElement(kWebContentsId, kCloseButtonQuery), WaitForPanelClose(),
+      CheckControllerState(false));
 }
 
 IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, TrayRestoresFocusOnClose) {
@@ -464,6 +459,7 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, TrayClosesOnEscPressed) {
 // Vertical tab strip with tray or embedded organizer panel.
 
 IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, OpenClosePanelVerticalTabs) {
+  const DeepQuery kAppQuery{"organizer-panel-app"};
   RunTestSequence(
       SetVerticalTabsEnabled(true), CheckControllerState(false),
       OpenOrganizerPanel(), CheckControllerState(true),
@@ -471,7 +467,11 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest, OpenClosePanelVerticalTabs) {
       CheckPanelVisuals(tabs::VerticalTabStripStateController::From(browser())
                             ->GetUncollapsedWidth(),
                         /*should_have_rounded_corners=*/false),
-      WaitForPanelLoad(), CloseOrganizerPanel(), CheckControllerState(false));
+      WaitForPanelLoad(),
+      CheckJsResultAt(
+          kWebContentsId, kAppQuery,
+          "el => el.shadowRoot.querySelector('#closeButton') === null", true),
+      CloseOrganizerPanel(), CheckControllerState(false));
 }
 
 class OrganizerPanelSegmentationControlUiTest : public OrganizerPanelUiTest {
@@ -504,6 +504,31 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
       WaitForPanelOpen(),
       SendAccelerator(kBrowserViewElementId, tab_search_accelerator),
       WaitForPanelClose());
+}
+
+IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
+                       PanelClosesOnEscInVerticalTabsWhenFocused) {
+  RunTestSequence(
+      SetVerticalTabsEnabled(true), OpenOrganizerPanel(),
+      ExpectPanelLocation(OrganizerPanelLocation::kVerticalTabStrip),
+      CheckViewProperty(OrganizerPanelView::kWebViewElementId,
+                        &views::View::HasFocus, true),
+      SendAccelerator(kBrowserViewElementId,
+                      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE)),
+      WaitForPanelClose(), CheckControllerState(false));
+}
+
+IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
+                       PanelDoesNotCloseOnEscInVerticalTabsWhenUnfocused) {
+  RunTestSequence(
+      SetVerticalTabsEnabled(true), OpenOrganizerPanel(),
+      ExpectPanelLocation(OrganizerPanelLocation::kVerticalTabStrip),
+      FocusElement(ContentsWebView::kContentsWebViewElementId),
+      CheckViewProperty(OrganizerPanelView::kWebViewElementId,
+                        &views::View::HasFocus, false),
+      SendAccelerator(kBrowserViewElementId,
+                      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE)),
+      CheckControllerState(true), EnsurePresent(kOrganizerPanelElementId));
 }
 
 IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
@@ -549,12 +574,18 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
 IN_PROC_BROWSER_TEST_F(
     OrganizerPanelUiTest,
     AppearsInTrayWhenVerticalTabsCollapsedAndNotExpandOnHover) {
+  const DeepQuery kAppQuery{"organizer-panel-app"};
   RunTestSequence(
       SetVerticalTabsEnabled(true, /*expand_on_hover_enabled=*/false),
       CollapseTabStrip(), OpenOrganizerPanel(),
       ExpectPanelLocation(OrganizerPanelLocation::kOrganizerTray),
       CheckPanelVisuals(organizer_panel::kOrganizerPanelMinWidth,
-                        /*should_have_rounded_corners=*/true));
+                        /*should_have_rounded_corners=*/true),
+      WaitForPanelLoad(),
+      CheckJsResultAt(
+          kWebContentsId, kAppQuery,
+          "el => el.shadowRoot.querySelector('#closeButton') !== null", true),
+      CloseOrganizerPanel());
 }
 
 IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
@@ -599,6 +630,28 @@ IN_PROC_BROWSER_TEST_F(OrganizerPanelUiTest,
   RunTestSequence(
       SetVerticalTabsEnabled(true, /*expand_on_hover_enabled=*/true),
       MoveMouseTo(kOmniboxElementId), CollapseTabStrip(), ExpandOnHover(),
+      OpenOrganizerPanel(),
+      ExpectPanelLocation(OrganizerPanelLocation::kVerticalTabStrip),
+      CheckPanelVisuals(tabs::kVerticalTabStripDefaultUncollapsedWidth, false));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    OrganizerPanelUiTest,
+    TabSearchButtonVisibleInExpandOnHoverWhenPreviouslyWider) {
+  RunTestSequence(
+      SetVerticalTabsEnabled(true, /*expand_on_hover_enabled=*/true),
+      ResizeVerticalTabsRegionToWidth(
+          tabs::kVerticalTabStripDefaultUncollapsedWidth + 100),
+      MoveMouseTo(kOmniboxElementId), CollapseTabStrip(), ExpandOnHover(),
+      WaitForShow(kTabSearchButtonElementId),
+      CheckView(kTabSearchButtonElementId,
+                [this](views::View* button) {
+                  auto* const top_container =
+                      BrowserElementsViews::From(browser())->GetView(
+                          kVerticalTabStripTopContainerElementId);
+                  return top_container->GetBoundsInScreen().Contains(
+                      button->GetBoundsInScreen());
+                }),
       OpenOrganizerPanel(),
       ExpectPanelLocation(OrganizerPanelLocation::kVerticalTabStrip),
       CheckPanelVisuals(tabs::kVerticalTabStripDefaultUncollapsedWidth, false));

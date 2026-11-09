@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/autofill/payments/save_iban_ui.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
@@ -29,8 +28,8 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 
 namespace autofill {
 
@@ -301,10 +300,11 @@ void IbanBubbleControllerImpl::OnAcceptButton(std::u16string_view nickname) {
 }
 
 void IbanBubbleControllerImpl::OnLegalMessageLinkClicked(const GURL& url) {
-  web_contents()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
-                              url, WindowOpenDisposition::kNewForegroundTab,
-                              ui::PAGE_TRANSITION_LINK),
-                          /*navigation_handle_callback=*/{});
+  web_contents()->OpenURL(
+      content::OpenURLParams::CreateBrowserInitiated(
+          url, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
+      /*navigation_handle_callback=*/{});
 }
 
 void IbanBubbleControllerImpl::OnManageSavedIbanExtraButtonClicked() {
@@ -448,11 +448,6 @@ const SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams&
 IbanBubbleControllerImpl::GetConfirmationUiParams() const {
   CHECK(confirmation_ui_params_.has_value());
   return confirmation_ui_params_.value();
-}
-
-std::optional<PageActionIconType>
-IbanBubbleControllerImpl::GetPageActionIconType() {
-  return PageActionIconType::kSaveIban;
 }
 
 #if !BUILDFLAG(IS_ANDROID)

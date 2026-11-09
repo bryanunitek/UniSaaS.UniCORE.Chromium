@@ -171,7 +171,6 @@ class ExternalProtocolObserver;
 class FileSystemAccessPermissionRequestManager;
 class FileSystemAccessTabHelper;
 class FromGWSNavigationAndKeepAliveRequestObserver;
-class HistoryEmbeddingsTabHelper;
 class HttpAuthCacheStatus;
 class MediaStateObserver;
 class MixedContentSettingsTabHelper;
@@ -208,15 +207,6 @@ class TabFeatures {
  public:
   TabFeatures(content::WebContents* web_contents, Profile* profile);
   ~TabFeatures();
-
-  NewTabPagePreloadPipelineManager* new_tab_page_preload_pipeline_manager() {
-    return new_tab_page_preload_pipeline_manager_.get();
-  }
-
-  enterprise_data_protection::DataProtectionNavigationController*
-  data_protection_controller() {
-    return data_protection_tab_controller_.get();
-  }
 
   tasks::TaskTabHelper* task_tab_helper() { return task_tab_helper_.get(); }
 
@@ -328,7 +318,6 @@ class TabFeatures {
   std::unique_ptr<RecentlyAudibleHelper> recently_audible_helper_;
   std::unique_ptr<SoundContentSettingObserver> sound_content_setting_observer_;
   std::unique_ptr<tasks::TaskTabHelper> task_tab_helper_;
-  std::unique_ptr<HistoryEmbeddingsTabHelper> history_embeddings_tab_helper_;
   std::unique_ptr<download::DownloadNavigationObserver>
       download_navigation_observer_;
   std::unique_ptr<history::WebContentsTopSitesObserver>

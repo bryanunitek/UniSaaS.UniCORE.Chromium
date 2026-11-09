@@ -175,7 +175,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Clipboard.Write" enum="ClipboardFormatWrite"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>huangdarwin@chromium.org</owner>
   <owner>src/ui/base/clipboard/OWNERS</owner>
   <summary>
@@ -605,6 +605,34 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="IndexedDB.SQLite.ConnectionDestructionGracePeriodWasUseful"
+    enum="Boolean" expires_after="2027-05-04">
+  <owner>leimy@chromium.org</owner>
+  <owner>evanstade@microsoft.com</owner>
+  <owner>chrome-owp-storage@google.com</owner>
+  <summary>
+    Records whether the destruction grace period for a DatabaseConnection
+    successfully enabled reuse of that DatabaseConnection at a later point in
+    time.
+
+    This is logged at the end of the grace period, unless the DatabaseConnection
+    was forcefully destroyed before that time elapsed.
+  </summary>
+</histogram>
+
+<histogram name="IndexedDB.SQLite.ConnectionReopenedAfterDestruction"
+    units="ms" expires_after="2027-05-04">
+  <owner>leimy@chromium.org</owner>
+  <owner>evanstade@microsoft.com</owner>
+  <owner>chrome-owp-storage@google.com</owner>
+  <summary>
+    The gap between when a DatabaseConnection self destructed (at the end of its
+    grace period), to the next time a new DatabaseConnection is created for the
+    same database. Nothing is logged if such a database is never reopened, or is
+    reopened after the entire backing store was recreated.
+  </summary>
+</histogram>
+
 <histogram name="IndexedDB.SQLite.FreelistPercentageAtClose" units="%"
     expires_after="2027-09-18">
   <owner>leimy@chromium.org</owner>
@@ -894,7 +922,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="LevelDBEnv.SyncResult" enum="PlatformFileError"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>estade@chromium.org</owner>
   <owner>chrome-owp-storage@google.com</owner>
   <summary>
@@ -1681,7 +1709,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Storage.{DomStorageType}.Duration.{Operation}.{DomStorageBackingStoreLifetime}"
-    units="ms" expires_after="2027-02-28">
+    units="ms" expires_after="2027-05-02">
   <owner>leimy@chromium.org</owner>
   <owner>fergal@chromium.org</owner>
   <owner>rahsin@microsoft.com</owner>

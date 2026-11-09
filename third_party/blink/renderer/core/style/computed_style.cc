@@ -338,6 +338,14 @@ bool ComputedStyle::NeedsReattachLayoutTree(const Element& element,
       old_style->IsScrollContainer() != new_style->IsScrollContainer()) {
     return true;
   }
+  // Only the first body element may propagate its overflow to the viewport, in
+  // which case it is not a scroll container. See also
+  // StyleEngine::ViewportDefiningElementDidChange().
+  if (!old_style->ScrollMarkerGroupNone() &&
+      old_style->IsSecondaryBodyElement() !=
+          new_style->IsSecondaryBodyElement()) {
+    return true;
+  }
   if (old_style->EffectiveOverscrollContainerType() !=
       new_style->EffectiveOverscrollContainerType()) {
     return true;
@@ -1723,11 +1731,17 @@ void ComputedStyle::ApplyMotionPathTransform(float origin_x,
     if (!resource) {
       return;
     }
-    // Call ResourceContainerNoCycleCheck() to ensure the resource's style is
-    // up-to-date.
-    resource->ResourceContainerNoCycleCheck(SVGResource::Usage::kContent);
-
-    const auto* target = DynamicTo<SVGGeometryElement>(resource->Target());
+    // TODO(crbug.com/576326793): Using Usage::kContent here means that
+    // forced-layout queries (e.g., getBBox) on elements with offset-path in
+    // a display-locked subtree incorrectly use an empty (i.e., blocked by
+    // display locking) offset-path. Supporting layout queries requires adding
+    // a layout usage mode and plumbing the client LayoutObject/Node (including
+    // for SVG children, where TransformHelper passes a null box) to ensure
+    // forced-layout updates on a locked subtree (e.g., lockedPath.getBBox())
+    // don't let unlocked elements resolve a paint-locked offset-path during
+    // layout and paint with it.
+    const auto* target = DynamicTo<SVGGeometryElement>(
+        resource->Target(SVGResource::Usage::kContent));
     Path path;
     if (!target || !target->GetComputedStyle()) {
       // Failure to find a shape should be equivalent to a "m0,0" path.
@@ -3198,7 +3212,7 @@ void ComputedStyleBuilder::CopyAnimatedSourceFrom(
   }
   if (AnimatedSource source = parent_style->GetAnimatedSource(property);
       source.IsValid()) {
-    source.has_untracked_dependencies = has_untracked_dependencies;
+    source.has_untracked_dependencies |= has_untracked_dependencies;
     UpdateAnimatedSource(*tracked, CSSProperty::Get(property), source);
   } else {
     ClearAnimatedSource(property);
@@ -3295,6 +3309,11 @@ void ComputedStyleBuilder::SetUsedColorScheme(
   bool has_light =
       flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kLight);
   bool has_only = flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kOnly);
+  // The 'only' keyword forbids the UA from overriding the color scheme chosen
+  // by the element, which includes forced darkening.
+  bool only_opts_out =
+      has_only &&
+      RuntimeEnabledFeatures::ForceDarkRespectsColorSchemeOnlyEnabled();
   bool dark_scheme =
       // Dark scheme because the preferred scheme is dark and color-scheme
       // contains dark.
@@ -3307,7 +3326,7 @@ void ComputedStyleBuilder::SetUsedColorScheme(
       // Typically, forced darkening should be used with a dark preferred
       // color-scheme. This is to support the FORCE_DARK_ONLY behavior from
       // WebView where this combination is passed to the renderer.
-      (force_dark && !prefers_dark);
+      (force_dark && !prefers_dark && !only_opts_out);
 
   SetDarkColorScheme(dark_scheme);
 
@@ -3321,7 +3340,7 @@ void ComputedStyleBuilder::SetUsedColorScheme(
       // preferred color-scheme. This is to support the FORCE_DARK_ONLY
       // behavior from WebView where this combination is passed to the
       // renderer.
-      (force_dark && !prefers_dark);
+      (force_dark && !prefers_dark && !only_opts_out);
 
   SetColorSchemeForced(forced_scheme);
 

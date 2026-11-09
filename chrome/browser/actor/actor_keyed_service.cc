@@ -161,6 +161,21 @@ CreateOptionalPaintPreviewOptions() {
 
 using ui::ActorUiStateManagerInterface;
 
+ScopedHeadlessActorSurface::ScopedHeadlessActorSurface(
+    base::PassKey<ActorKeyedService>,
+    ActorSurfaceHandle actor_surface_handle,
+    base::OnceClosure destroyer)
+    : actor_surface_handle_(actor_surface_handle),
+      destroyer_(std::move(destroyer)) {}
+
+ScopedHeadlessActorSurface::ScopedHeadlessActorSurface(
+    ScopedHeadlessActorSurface&& other)
+    : actor_surface_handle_(std::exchange(other.actor_surface_handle_,
+                                          ActorSurfaceHandle::Null())),
+      destroyer_(std::move(other.destroyer_)) {}
+
+ScopedHeadlessActorSurface::~ScopedHeadlessActorSurface() = default;
+
 ActorKeyedService::ActorKeyedService(Profile* profile) : profile_(profile) {
   actor_ui_state_manager_ = std::make_unique<ui::ActorUiStateManager>(*this);
   headless_web_contents_manager_ =
@@ -229,6 +244,57 @@ void ActorKeyedService::OnProfileInitializationComplete(Profile* profile) {
   // initialized which may not be true until the profile is initialized.
   download_notifier_ = std::make_unique<download::AllDownloadItemNotifier>(
       profile_->GetDownloadManager(), this);
+}
+
+ScopedHeadlessActorSurface ActorKeyedService::CreateHeadlessActorSurface() {
+  CHECK(surface_registry_);
+  const ActorSurfaceHandle actor_surface_handle =
+      surface_registry_
+          ->CreateHeadlessWebContents(base::PassKey<ActorKeyedService>())
+          ->GetHandle();
+  return ScopedHeadlessActorSurface(
+      base::PassKey<ActorKeyedService>(), actor_surface_handle,
+      base::BindOnce(&ActorKeyedService::DestroyHeadlessActorSurface,
+                     weak_ptr_factory_.GetWeakPtr(), actor_surface_handle));
+}
+
+void ActorKeyedService::DestroyHeadlessActorSurface(
+    ActorSurfaceHandle actor_surface_handle) {
+  if (!surface_registry_) {
+    // The registry is gone after Shutdown(), and with it every headless
+    // surface.
+    return;
+  }
+  ActorSurface* actor_surface = surface_registry_->Get(actor_surface_handle);
+  if (!actor_surface) {
+    // Already destroyed, e.g. destroyed explicitly before the scoper was
+    // dropped.
+    return;
+  }
+  // Only headless surfaces can be destroyed here.
+  CHECK(!actor_surface->IsTab());
+  if (!headless_actor_surfaces_being_destroyed_.insert(actor_surface_handle)
+           .second) {
+    // We probably reached here via reentrancy. Ignore it.
+    return;
+  }
+
+  // Tell tasks first, while the surface and its page are still alive. This may
+  // stop tasks.
+  std::vector<TaskId> tasks_to_notify =
+      FindTaskIdsInActive([actor_surface_handle](const ActorTask& task) {
+        return task.HasActorSurface(actor_surface_handle) ||
+               task.GetLastActedActorSurfaces().contains(actor_surface_handle);
+      });
+  for (TaskId id : tasks_to_notify) {
+    if (ActorTask* task = GetTask(id)) {
+      task->OnActorSurfaceWillDetach(actor_surface_handle);
+    }
+  }
+
+  surface_registry_->DestroyHeadlessActorSurface(
+      actor_surface_handle, base::PassKey<ActorKeyedService>());
+  headless_actor_surfaces_being_destroyed_.erase(actor_surface_handle);
 }
 
 ActorKeyedService::~ActorKeyedService() = default;
@@ -579,9 +645,10 @@ TaskId ActorKeyedService::CreateTaskImpl(
   GetJournal().Log(GURL(), TaskId(), "ActorKeyedService::CreateTask", {});
 
   const TaskId task_id = next_task_id_.GenerateNextId();
-  tabs::TabHandle initial_tab_handle = tabs::TabHandle::Null();
+  ActorSurfaceHandle initial_actor_surface;
   if (options && options->actuation_tab_id.has_value()) {
-    initial_tab_handle = tabs::TabHandle(options->actuation_tab_id.value());
+    initial_actor_surface =
+        ActorSurfaceHandle::FromRawValue(options->actuation_tab_id.value());
   }
 
   CHECK(ui_state_manager);
@@ -591,8 +658,8 @@ TaskId ActorKeyedService::CreateTaskImpl(
       policy_checker, std::move(delegate), initial_invocation_source,
       allowed_schemes);
 
-  if (initial_tab_handle != tabs::TabHandle::Null()) {
-    actor_task->AddActorSurface(ActorSurfaceHandle::From(initial_tab_handle),
+  if (!initial_actor_surface.is_null()) {
+    actor_task->AddActorSurface(initial_actor_surface,
                                 /*stop_task_on_detach=*/true,
                                 base::DoNothing());
   }
@@ -839,7 +906,6 @@ void ActorKeyedService::PerformActions(
     ActorTaskMetadata task_metadata,
     PerformActionsCallback callback) {
   TRACE_EVENT0("actor", "ActorKeyedService::PerformActions");
-  std::vector<ActionResultWithLatencyInfo> empty_results;
   auto* task = GetTask(task_id);
   if (!task) {
     GetJournal().Log(GURL(), task_id, "ActorKeyedService::PerformActions",

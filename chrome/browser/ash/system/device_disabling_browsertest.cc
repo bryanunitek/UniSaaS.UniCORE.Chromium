@@ -266,6 +266,12 @@ IN_PROC_BROWSER_TEST_F(DeviceDisablingBeforeLoginHostCreated,
       g_browser_process->GetFeatures()->application_locale_storage(),
       g_browser_process->shared_url_loader_factory(),
       g_browser_process->platform_part()->browser_policy_connector_ash(),
+      g_browser_process->platform_part()->component_manager_ash(),
+      g_browser_process->platform_part()
+          ->device_restriction_schedule_controller(),
+      g_browser_process->platform_part()
+          ->multi_user_sign_in_policy_controller(),
+      g_browser_process->platform_part()->GetSystemClock(),
       OOBE_SCREEN_UNKNOWN);
   // Check for WizardController state.
   OobeScreenWaiter(DeviceDisabledScreenView::kScreenId).Wait();

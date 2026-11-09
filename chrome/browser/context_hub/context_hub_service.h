@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_CONTEXT_HUB_CONTEXT_HUB_SERVICE_H_
 #define CHROME_BROWSER_CONTEXT_HUB_CONTEXT_HUB_SERVICE_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -62,6 +64,10 @@ class Page;
 class WebContents;
 }  // namespace content
 
+namespace image_fetcher {
+class ImageFetcher;
+}  // namespace image_fetcher
+
 namespace net {
 class BackoffEntry;
 }  // namespace net
@@ -89,6 +95,7 @@ namespace context_hub {
 
 class TabGroupStore;
 class ContextHubBackend;
+struct FetchedChatImage;
 
 class ContextHubService : public KeyedService,
                           public AutoTodosStore::Observer,
@@ -117,7 +124,16 @@ class ContextHubService : public KeyedService,
         const std::optional<std::string>& note,
         const std::optional<std::string>& collection) {}
     virtual void OnMemoryBankEntriesDeleted(const std::vector<int64_t>& ids) {}
+    // Called with the effective Auto Tab Groups preferences (the stored
+    // document, or the defaults when nothing is stored) whenever they change.
+    virtual void OnAutoTabGroupsPreferencesChanged(
+        const std::string& effective_text) {}
   };
+
+  // Hard cap, in UTF-8 bytes, on the Auto Tab Groups preferences document kept
+  // in the browser process. Deliberately a constant rather than a feature
+  // param: the server enforces the same bound.
+  static constexpr size_t kMaxAutoTabGroupsPreferencesLength = 4000;
 
   ContextHubService(
       Profile* profile,
@@ -273,12 +289,27 @@ class ContextHubService : public KeyedService,
   // Clears all tab group chat history turns from the LRU cache.
   void ClearTabGroupChatHistory();
 
+  // Auto Tab Groups preferences: a short markdown document, written by the
+  // user or distilled by the model, that shapes grouping decisions. The
+  // built-in defaults are never persisted: a stored document always wins over
+  // them, so changing the defaults in a later release cannot overwrite what a
+  // user (or refinement) saved.
+  //
+  // Returns the stored document, or the default preferences when nothing is
+  // stored.
+  std::string GetEffectiveAutoTabGroupsPreferences() const;
+  // Stores the trimmed `text` in the profile pref; empty text resets to the
+  // defaults. Returns false, without storing or notifying, when the text is
+  // longer than `kMaxAutoTabGroupsPreferencesLength` bytes. Observers receive
+  // the effective text.
+  bool SetAutoTabGroupsPreferences(std::string_view text);
+
   // Adds a memory bank chat history turn to the cache, along with any
   // citations associated with the turn.
   void AddMemoryBankChatHistoryTurn(
       optimization_guide::proto::ChatHistoryTurn::Role role,
       std::string_view message_content,
-      const std::vector<MemoryBankChatCitation>& citations = {});
+      std::vector<MemoryBankChatCitation> citations = {});
   // Returns all memory bank chat history turns stored in the LRU cache in
   // chronological order (oldest to newest).
   std::vector<MemoryBankChatHistoryTurn> GetMemoryBankChatHistory() const;
@@ -383,6 +414,9 @@ class ContextHubService : public KeyedService,
   void ConnectLocalTabGroup(const base::Uuid& group_guid,
                             const tab_groups::LocalTabGroupID& local_id);
 
+  void SetImageFetcherForTesting(
+      std::unique_ptr<image_fetcher::ImageFetcher> image_fetcher);
+
   base::WeakPtr<ContextHubService> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
@@ -443,6 +477,23 @@ class ContextHubService : public KeyedService,
                                   bool save_to_history,
                                   MemoryBankChatCallback callback,
                                   std::vector<MemoryBankEntry> entries);
+
+  // Attaches the fetched PNG-encoded image bytes to the image memory bank
+  // entries of `request`, then dispatches the chat request.
+  void OnMemoryBankChatImagesFetched(
+      std::vector<MemoryBankEntry> entries,
+      optimization_guide::proto::ContextHubRequest request,
+      bool save_to_history,
+      MemoryBankChatCallback callback,
+      const std::vector<FetchedChatImage>& fetched_images);
+
+  // Dispatches the prepared memory bank chat request to the remote model
+  // executor.
+  void DispatchMemoryBankChatRequest(
+      std::vector<MemoryBankEntry> entries,
+      const optimization_guide::proto::ContextHubRequest& request,
+      bool save_to_history,
+      MemoryBankChatCallback callback);
 
   // Generates tab groups based on the provided `tabs` and invokes `callback`
   // with the resulting groups and any ungrouped tabs.
@@ -513,7 +564,7 @@ class ContextHubService : public KeyedService,
 
   // Handles the result of the model execution from `ExecuteMemoryBankChat`.
   void HandleMemoryBankChatModelExecutionResult(
-      std::vector<MemoryBankEntry> entries,
+      const std::vector<MemoryBankEntry>& entries,
       const std::string& user_command,
       bool save_to_history,
       MemoryBankChatCallback callback,
@@ -625,6 +676,8 @@ class ContextHubService : public KeyedService,
   std::unique_ptr<TabGroupStore> tab_group_store_;
 
   std::unique_ptr<AutoTodosStore> auto_todos_store_;
+
+  std::unique_ptr<image_fetcher::ImageFetcher> image_fetcher_;
 
   // Metadata for the most recent First Party Auto Todos generation during the
   // current browser session.

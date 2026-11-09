@@ -134,6 +134,13 @@ extern const base::FeatureParam<bool> kCsdEnforceIos;
 // Killswitch for Llama forced trigger info redirect chain check.
 BASE_DECLARE_FEATURE(kClientSideDetectionForcedLlamaRedirectChainKillswitch);
 
+// Includes inner text from cross-origin and out-of-process iframes during
+// client-side detection intelligent scans.
+BASE_DECLARE_FEATURE(kClientSideDetectionIframeInnerText);
+extern const base::FeatureParam<int> kClientSideDetectionMaxIframesToExtract;
+extern const base::FeatureParam<base::TimeDelta>
+    kClientSideDetectionIframeInnerTextTimeout;
+
 // Enables sending a CSD ping when a page's image embedding matches a
 // target image embedding.
 BASE_DECLARE_FEATURE(kClientSideDetectionImageEmbeddingMatch);
@@ -141,6 +148,17 @@ BASE_DECLARE_FEATURE(kClientSideDetectionImageEmbeddingMatch);
 // embedding match.
 extern const base::FeatureParam<bool>
     kCsdImageEmbeddingMatchWithIntelligentScan;
+
+// Prepends the page title to the extracted inner text sent during client-side
+// detection intelligent scans.
+BASE_DECLARE_FEATURE(kClientSideDetectionIncludeTitleInInnerText);
+
+// Delays and retries KEYBOARD_LOCK_REQUESTED image embedding when the blurred
+// viewport image is uniform (e.g. blank white or black).
+BASE_DECLARE_FEATURE(kClientSideDetectionKeyboardLockUniformPageDelay);
+extern const base::FeatureParam<int> kCsdKeyboardLockUniformPageDelayDurationMs;
+extern const base::FeatureParam<int> kCsdKeyboardLockUniformPageMaxRetries;
+extern const base::FeatureParam<int> kCsdKeyboardLockUniformPageMaxColorRange;
 
 // Killswitch for client side phishing detection. Since client side models are
 // run on a large fraction of navigations, crashes due to the model are very
@@ -173,6 +191,11 @@ BASE_DECLARE_FEATURE(kClientSideDetectionScamDetectionRequestWithUrl);
 
 // Controls whether the scam score is included in IntelligentScanInfo.
 BASE_DECLARE_FEATURE(kClientSideDetectionScamScore);
+
+// Sends a second delayed FORCE_REQUEST ping if the first FORCE_REQUEST
+// verdict is safe.
+BASE_DECLARE_FEATURE(kClientSideDetectionSecondForceRequestWithDelay);
+extern const base::FeatureParam<int> kCsdForceRequestDelayMs;
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 // Inquire the server-side model instead of the on-device model for scam
@@ -416,10 +439,6 @@ extern const base::FeatureParam<std::string>
 // Safe Browsing-enabled users, and may show warnings.
 BASE_DECLARE_FEATURE_PARAM(bool, kMaliciousApkDownloadCheckTelemetryOnly);
 #endif
-
-// Enables one-time migration of enhanced-safe-browsing users to the enhanced
-// bundle.
-BASE_DECLARE_FEATURE(kMigrateEnhancedSbUserToEnhancedBundle);
 
 // When enabled, performs a one-time migration that selects the JavaScript
 // optimizer content setting that automatically blocks the browser from using

@@ -10,12 +10,14 @@
 #import <vector>
 
 #import "base/memory/raw_ptr.h"
+#import "base/memory/raw_ref.h"
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_observation.h"
 #import "base/time/time.h"
 #import "base/timer/timer.h"
 #import "components/safe_browsing/core/browser/client_side_detection_host_base.h"
 #import "components/safe_browsing/core/browser/db/database_manager.h"
+#import "components/safe_browsing/core/common/client_side_detection_enums.h"
 #import "components/safe_browsing/core/common/phishing_classifier/phishing_classifier.h"
 #import "components/safe_browsing/core/common/visual_utils.h"
 #import "ios/chrome/browser/safe_browsing/model/client_side_detection/client_side_detection_service.h"
@@ -26,6 +28,7 @@
 #import "ui/gfx/image/image.h"
 #import "url/gurl.h"
 
+class PageContextWrapperFactory;
 class PrefService;
 @class PageContextWrapper;
 @class UIImage;
@@ -59,14 +62,18 @@ class ClientSideDetectionHostIOS
   // `service`, `cache_manager`, `pref_service`, `identity_manager`, and
   // `history_service` supply required service dependencies.
   // `intelligent_scan_delegate` is optional and may be null if intelligent
-  // scanning is unsupported or disabled.
-  ClientSideDetectionHostIOS(web::WebState* web_state,
-                             ClientSideDetectionService* service,
-                             VerdictCacheManager* cache_manager,
-                             IntelligentScanDelegate* intelligent_scan_delegate,
-                             PrefService* pref_service,
-                             signin::IdentityManager* identity_manager,
-                             history::HistoryService* history_service);
+  // scanning is unsupported or disabled. `page_context_wrapper_factory` is
+  // optional and defaults to `DefaultPageContextWrapperFactory::GetInstance()`
+  // if null.
+  ClientSideDetectionHostIOS(
+      web::WebState* web_state,
+      ClientSideDetectionService* service,
+      VerdictCacheManager* cache_manager,
+      IntelligentScanDelegate* intelligent_scan_delegate,
+      PrefService* pref_service,
+      signin::IdentityManager* identity_manager,
+      history::HistoryService* history_service,
+      PageContextWrapperFactory* page_context_wrapper_factory = nullptr);
   ~ClientSideDetectionHostIOS() override;
 
   ClientSideDetectionHostIOS(const ClientSideDetectionHostIOS&) = delete;
@@ -82,6 +89,7 @@ class ClientSideDetectionHostIOS
   bool IsAccountSignedIn() override;
   bool IsErrorDocument() override;
   void GetInnerText(HostInnerTextCallback callback) override;
+  std::string GetPageTitle() const override;
   // Note: On iOS, the tab screenshot is captured alongside inner text in
   // `GetInnerText()` via `PageContextWrapper` and cached in
   // `intelligent_scan_tab_screenshot_`, rather than being captured here.
@@ -233,8 +241,12 @@ class ClientSideDetectionHostIOS
 
   // Callback invoked when `PageContextWrapper` completes inner text (and
   // optional tab screenshot) extraction.
-  void OnInnerTextExtracted(std::string inner_text,
-                            std::optional<std::string> tab_screenshot);
+  void OnInnerTextExtracted(
+      bool should_capture_screenshot,
+      base::TimeTicks start_time,
+      std::string inner_text,
+      std::optional<std::string> tab_screenshot,
+      std::optional<MultimodalScreenshotCaptureStatus> screenshot_status);
 
   // Associated WebState.
   raw_ptr<web::WebState> web_state_ = nullptr;
@@ -249,11 +261,16 @@ class ClientSideDetectionHostIOS
   HostInnerTextCallback pending_inner_text_callback_;
 
   // Raw PNG bytes of the tab screenshot extracted alongside inner text for
-  // multimodal intelligent scan.
+  // multimodal intelligent scan, and the corresponding capture status.
   std::optional<std::string> intelligent_scan_tab_screenshot_;
+  std::optional<MultimodalScreenshotCaptureStatus>
+      intelligent_scan_screenshot_capture_status_;
 
   // `PageContextWrapper` for inner text extraction.
   __strong PageContextWrapper* page_context_wrapper_ = nil;
+
+  // Factory used to create `PageContextWrapper` instances.
+  const raw_ref<PageContextWrapperFactory> page_context_wrapper_factory_;
 
   bool is_preclassifying_ = false;
   bool is_page_loaded_ = false;

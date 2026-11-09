@@ -4,11 +4,9 @@
 
 import {loadTimeData} from '//resources/js/load_time_data.js';
 
-import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
-import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import {NodeStore} from '../content/node_store.js';
 import type {ContentPosition} from '../content/read_anything_types.js';
-import {ContentPositionSource} from '../content/read_anything_types.js';
+import {ContentPositionSource, PendingLineFocusPosition} from '../content/read_anything_types.js';
 import {getWordCount, playFromSelectionTimeout} from '../shared/common.js';
 import type {MetricsBrowserProxy} from '../shared/metrics_browser_proxy.js';
 import {MetricsBrowserProxyImpl} from '../shared/metrics_browser_proxy.js';
@@ -59,8 +57,6 @@ export class SpeechController {
       AudioBrowserProxyImpl.getInstance();
   private metricsBrowserProxy_: MetricsBrowserProxy =
       MetricsBrowserProxyImpl.getInstance();
-  private visualBrowserProxy_: VisualBrowserProxy =
-      VisualBrowserProxyImpl.getInstance();
   private model_: SpeechModel = new SpeechModel();
   private speech_: SpeechBrowserProxy = SpeechBrowserProxyImpl.getInstance();
   private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
@@ -199,32 +195,65 @@ export class SpeechController {
     this.readAloudModel_.init(contextNode);
   }
 
-  onLineFocusChange(position: CaretPosition|null) {
-    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
+  // Called when the user moves line focus to new content (mouse, scroll, or
+  // keyboard). Sets a pending position that Play hit-tests and starts from.
+  // The hit test is deferred to avoid forcing layout on every move.
+  onLineFocusContentMove(focalPoint: number) {
+    // Speech-driven line focus moves must not be recorded, or the next resume
+    // would replay from the line start via playFromContentPosition_.
+    if (this.isSpeechActive() || this.isTemporaryPause()) {
       return;
     }
+    this.model_.setCurrentContentPosition(
+        new PendingLineFocusPosition(focalPoint));
+  }
 
-    let contentPosition: ContentPosition|null = null;
-    if (position) {
-      let node: Node = position.offsetNode;
-      let offset: number = position.offset;
-      if (node && this.nodeStore_.getAncestor(node)) {
-        const ancestor = this.nodeStore_.getAncestor(node)!;
-        node = ancestor.node;
-        offset += ancestor.offset;
-      }
-      contentPosition = {
-        node,
-        offset,
-        source: ContentPositionSource.LINE_FOCUS,
-      };
+  // Called when the focus window moves without user input (e.g. recentering
+  // after a font size change). Only updates a pending line focus position so it
+  // stays under the window; never creates one, so a paused resume position is
+  // kept.
+  onLineFocusVisualMove(focalPoint: number) {
+    if (this.model_.getCurrentContentPosition() instanceof
+        PendingLineFocusPosition) {
+      this.model_.setCurrentContentPosition(
+          new PendingLineFocusPosition(focalPoint));
     }
-    this.model_.setCurrentContentPosition(contentPosition);
+  }
+
+  onLineFocusChange(position: CaretPosition|null) {
+    if (!position) {
+      this.clearCurrentContentPosition_(ContentPositionSource.LINE_FOCUS);
+      return;
+    }
+    let node: Node = position.offsetNode;
+    let offset: number = position.offset;
+    if (node && this.nodeStore_.getAncestor(node)) {
+      const ancestor = this.nodeStore_.getAncestor(node)!;
+      node = ancestor.node;
+      offset += ancestor.offset;
+    }
+    this.model_.setCurrentContentPosition({
+      node,
+      offset,
+      source: ContentPositionSource.LINE_FOCUS,
+    });
   }
 
   onSelectionChange(position: ContentPosition|null) {
-    this.model_.setCurrentContentPosition(position);
+    if (position) {
+      this.model_.setCurrentContentPosition(position);
+    } else {
+      this.clearCurrentContentPosition_(ContentPositionSource.SELECTION);
+    }
     this.highlighter_.clearHighlightFormatting();
+  }
+
+  // Clears the current content position only if `source` set it, so losing a
+  // selection doesn't drop a line focus position and vice versa.
+  private clearCurrentContentPosition_(source: ContentPositionSource) {
+    if (this.model_.getCurrentContentPosition()?.source === source) {
+      this.model_.setCurrentContentPosition(null);
+    }
   }
 
   // If the screen is locked during speech, we should stop speaking.
@@ -301,9 +330,24 @@ export class SpeechController {
     if (this.isSpeechActive()) {
       this.stopSpeech_(PauseActionSource.BUTTON_CLICK);
     } else {
+      this.resolvePendingLineFocusPosition_(context);
       this.playSpeech_(context);
       this.model_.setPlaySessionStartTime(Date.now());
     }
+  }
+
+  private resolvePendingLineFocusPosition_(context: HTMLElement|null) {
+    const position = this.model_.getCurrentContentPosition();
+    if (!(position instanceof PendingLineFocusPosition) || !context) {
+      return;
+    }
+    // Content lives in the app's shadow tree, so the hit test must look inside
+    // it. If `context` isn't in a shadow tree, no roots are needed.
+    const root = context.getRootNode();
+    const caretPosition = document.caretPositionFromPoint(
+        0, position.focalPoint,
+        {shadowRoots: root instanceof ShadowRoot ? [root] : []});
+    this.onLineFocusChange(caretPosition);
   }
 
   private playSpeech_(context: HTMLElement|null) {
@@ -423,7 +467,8 @@ export class SpeechController {
     }
 
     const position = this.model_.getCurrentContentPosition();
-    if (!position) {
+    // A pending line focus position can only be played after it's hit-tested.
+    if (!position || position instanceof PendingLineFocusPosition) {
       return false;
     }
 
@@ -450,11 +495,7 @@ export class SpeechController {
         startOffset = 0;
       }
 
-      const readAloudNode = ReadAloudNode.create(startNode);
-      if (!readAloudNode) {
-        return;
-      }
-      this.movePlaybackToNode_(readAloudNode, startOffset);
+      this.movePlaybackToNode_(ReadAloudNode.create(startNode), startOffset);
       // Play the next granularity, which includes the selection.
       if (this.highlightAndPlayMessage_()) {
         this.logger_.logSpeechControlClick(speechControl);
@@ -1010,24 +1051,7 @@ export class SpeechController {
       // prevent the previous highlights from being added. However, not
       // showing the previous highlight is preferred to 10+ second speech
       // delays / crashes.
-      // This is technically a bug with both line focus and playing from
-      // selection. However, this bug is much more noticeable with line focus.
-      // Therefore, this change is being temporarily guarded with the line
-      // focus flag to allow it to be more safely tested in case it causes
-      // unexpected bugs. Longer term, moveSpeechForward should be the default
-      // regardless of the line focus flag OR reading mode should implement
-      // a better searching algorithm for finding the node in the DOM instead
-      // of looking through every element one-by-one.
-      if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-        this.readAloudModel_.moveSpeechForward();
-      } else {
-        this.highlightCurrentGranularity_(
-            currentSegments, /*scrollIntoView=*/ false,
-            /*shouldUpdateSentenceHighlight=*/ true,
-            /*shouldSetLastReadingPos=*/ false);
-        this.moveToNextGranularity_();
-      }
-
+      this.readAloudModel_.moveSpeechForward();
       currentSegments = this.readAloudModel_.getCurrentTextSegments();
       hasCurrentText = currentSegments.length > 0;
       foundSegment = this.findSegment_(currentSegments, node, offset);

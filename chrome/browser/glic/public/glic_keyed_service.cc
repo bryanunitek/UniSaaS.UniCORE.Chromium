@@ -34,7 +34,6 @@
 #include "chrome/browser/glic/experimental_opt_in/glic_experimental_opt_in_controller.h"
 #include "chrome/browser/glic/experimental_triggering/glic_experimental_triggering_transport_handler.h"
 #include "chrome/browser/glic/glic_enums.h"
-#include "chrome/browser/glic/glic_metrics_provider.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/glic_profile_manager.h"
 #include "chrome/browser/glic/glic_warming_checks.h"
@@ -53,6 +52,7 @@
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_feature.h"
 #include "chrome/browser/glic/public/glic_fre_store.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/public/glic_provider_metrics.h"
@@ -190,8 +190,9 @@ GlicKeyedService::GlicKeyedService(
       metrics_(std::make_unique<GlicMetrics>(profile, enabling_.get())),
       opt_in_controller_(
           std::make_unique<GlicExperimentalOptInController>(profile)),
-      client_data_storage_(
-          std::make_unique<GlicClientDataStorage>(profile->GetPrefs())),
+      client_data_storage_(std::make_unique<GlicClientDataStorage>(
+          profile->GetPrefs(),
+          provider_spec().GetGuestUrlKey())),
       instance_coordinator_(std::make_unique<GlicInstanceCoordinatorImpl>(
           profile,
           identity_manager,
@@ -226,11 +227,6 @@ GlicKeyedService::GlicKeyedService(
       tab_favicon_observer_(std::make_unique<GlicTabFaviconObserver>(profile)) {
   CHECK(GlicEnabling::IsProfileEligible(Profile::FromBrowserContext(profile)));
 
-  // Reconcile `prefs::kGlicPromotionSourceCohort` across loaded profiles and
-  // register the in-memory synthetic trial on startup if any profile has a
-  // persisted cohort (or mark `MultiProfileDetected` if profiles conflict).
-  GlicMetricsProvider::RegisterPromotionSourceSyntheticTrial(profile);
-
   GlicEnabling::RegisterDefaultHotkeyScopeSyntheticTrial(profile);
 
   metrics_->RecordGlicProfilePreferences();
@@ -253,6 +249,10 @@ GlicKeyedService::GlicKeyedService(
     TryPreload(GlicWarmingTrigger::kStartup);
   }
 
+#if !BUILDFLAG(IS_ANDROID)
+  GlicMediaIntegration::EnsurePeerConnectionTrackerInitialized(profile_);
+#endif
+
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&GlicKeyedService::InitializeAfterConstruction,
                                 GetWeakPtr()));
@@ -263,7 +263,8 @@ GlicKeyedService::GlicKeyedService(
               &GlicKeyedService::OnExperimentalTriggeringStateChanged,
               base::Unretained(this)));
 
-  if (base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator) &&
+  if (provider_spec().SupportsFeature(GlicFeature::kExperimentalTriggering) &&
+      base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator) &&
       base::FeatureList::IsEnabled(
           browser_actuator::
               kEnableBrowserActuatorForGlicExperimentalTriggering)) {

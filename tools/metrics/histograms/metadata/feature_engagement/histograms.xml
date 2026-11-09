@@ -249,6 +249,9 @@ chromium-metrics-reviews@google.com.
       summary="Sharing links with highlighted text"/>
   <variant name="IPH_Dictation"
       summary="Dictation IPH shown next to a focused text field"/>
+  <variant name="IPH_DictationHotkey"
+      summary="Dictation keyboard shortcut IPH shown after the user has
+               invoked Dictation a couple of times"/>
   <variant name="IPH_DiscardRing" summary="Discard ring for tabs"/>
   <variant name="IPH_DownloadEsbPromo" summary="download ESB promo"/>
   <variant name="IPH_DownloadHome" summary="download home"/>
@@ -357,8 +360,6 @@ chromium-metrics-reviews@google.com.
   <variant name="IPH_HighEfficiencyInfoMode" summary="High efficiency info"/>
   <variant name="IPH_HighEfficiencyMode"
       summary="encourages users to turn on high efficiency mode"/>
-  <variant name="IPH_HistorySearch"
-      summary="Prompting users to try history search powered by AI."/>
   <variant name="IPH_HomeCustomizationMenu"
       summary="Home customization menu entrypoint on the NTP"/>
   <variant name="IPH_IdentityDisc" summary="Identity Disc"/>
@@ -366,6 +367,10 @@ chromium-metrics-reviews@google.com.
       summary="educate users that they can close all Incognito windows by
                tapping the Incognito indicator"/>
   <variant name="IPH_IncognitoWindow" summary="incognito window"/>
+  <variant name="IPH_IndigoContextMenuSnooze"
+      summary="snooze promo educating users who are not shown Try it on via
+               contextual cues on an eligible product page that Try it on is
+               available in the right-click context menu"/>
   <variant name="IPH_IndigoContextMenuToast"
       summary="toast educating users after a transformation that Try it on is
                available in the right-click context menu"/>
@@ -385,8 +390,6 @@ chromium-metrics-reviews@google.com.
   <variant name="IPH_iOSBWGPromo" summary="shows users a promo for BWG"/>
   <variant name="IPH_iOSChoiceScreenFeature"
       summary="(obsolete) showing the Choice screen on iOS"/>
-  <variant name="IPH_iOSContextualPanelPriceInsights"
-      summary="contextual panel price insights IPH impression tracking"/>
   <variant name="IPH_iOSContextualPanelSampleModel"
       summary="contextual panel sample model IPH impression tracking"/>
   <variant name="IPH_iOSDefaultBrowserBadgeEligibility"
@@ -722,8 +725,6 @@ chromium-metrics-reviews@google.com.
   <variant name="IPH_RestoreTabsOnFRE"
       summary="the in product help sheet to let users know they can restore
                tabs from other synced devices on a fresh Chrome install"/>
-  <variant name="IPH_ResumptionRail"
-      summary="educating users about the Resumption Rail feature entrypoint"/>
   <variant name="IPH_RtlGestureNavigation"
       summary="the in product help dialog to educate users on how to do
                gesture navigation in RTL mode."/>
@@ -799,6 +800,9 @@ chromium-metrics-reviews@google.com.
   <variant name="IPH_TabGroupShareVersionUpdate"
       summary="notifying users that updating Chrome regains access to shared
                tab groups"/>
+  <variant name="IPH_TabGroupsNonGroupFocusingFeature"
+      summary="suggesting that the user group related tabs while in non-group
+               focus mode"/>
   <variant name="IPH_TabGroupsQuicklyComparePages"
       summary="(obsolete) long pressing a link to open in a tab group"/>
   <variant name="IPH_TabGroupsRemoteGroup"
@@ -860,6 +864,8 @@ chromium-metrics-reviews@google.com.
       summary="updated omnibox connection security indicators"/>
   <variant name="IPH_VerticalTabsExpandOnHoverFeature"
       summary="The vertical tabstrip expand on hover IPH"/>
+  <variant name="IPH_VerticalTabsTabGroupsInOrganizerFeature"
+      summary="tab groups moved into organizer panel in vertical tabs"/>
   <variant name="IPH_VerticalTabstripTutorialFeature"
       summary="The vertical tabstrip IPH"/>
   <variant name="IPH_WebUiHelpBubbleTest"

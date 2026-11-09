@@ -435,6 +435,7 @@ std::unique_ptr<WebScriptToolDeclaration> MakeWebScriptToolDeclaration(
   const mojom::blink::ScriptTool& script_tool = tool_data->ScriptTool();
   web_tool_declaration->description = WebString(script_tool.description);
   web_tool_declaration->input_schema = WebString(script_tool.input_schema);
+  web_tool_declaration->output_schema = WebString(script_tool.output_schema);
   if (script_tool.annotations) {
     web_tool_declaration->read_only = script_tool.annotations->read_only;
     web_tool_declaration->untrusted_content =
@@ -471,7 +472,7 @@ ScriptToolExecutedCallback ToScriptToolExecutedCallback(
 
 bool WebDocument::ExecuteScriptTool(
     const ToolInvocationToken& invocation_id,
-    const base::UnguessableToken& tool_id,
+    const ScriptToolToken& tool_id,
     const WebString& input_arguments,
     WebScriptToolResultCallback tool_result_cb) {
   auto* model_context =

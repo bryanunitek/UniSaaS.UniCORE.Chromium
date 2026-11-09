@@ -182,6 +182,11 @@ String SVGElement::title() const {
 template <typename T>
 static void ForSelfAndInstances(SVGElement* element, T callback) {
   callback(element);
+  // Animations cloned into the <use> shadow tree apply their results to the
+  // instance elements directly.
+  if (RuntimeEnabledFeatures::SvgUseInstanceAnimationsEnabled()) {
+    return;
+  }
   for (SVGElement* instance : element->InstancesForElement())
     callback(instance);
 }
@@ -962,10 +967,14 @@ void SVGElement::MarkForLayoutAndParentResourceInvalidation(
 }
 
 void SVGElement::NotifyResourceClients() const {
+  SVGTreeScopeResources* scope_resources =
+      GetTreeScope().ExistingSVGTreeScopedResources();
+  if (!scope_resources) {
+    return;
+  }
   LocalSVGResource* resource =
-      GetTreeScope().EnsureSVGTreeScopedResources().ExistingResourceForId(
-          GetIdAttribute());
-  if (!resource || resource->Target() != this) {
+      scope_resources->ExistingResourceForId(GetIdAttribute());
+  if (!resource || resource->Target(SVGResource::Usage::kElement) != this) {
     return;
   }
   resource->NotifyContentChanged();
@@ -1119,6 +1128,13 @@ SVGElementSet* SVGElement::SetOfIncomingReferences() const {
   if (!HasSVGRareData())
     return nullptr;
   return &SvgRareData()->IncomingReferences();
+}
+
+const SVGElementSet* SVGElement::SetOfOutgoingReferences() const {
+  if (!HasSVGRareData()) {
+    return nullptr;
+  }
+  return &SvgRareData()->OutgoingReferences();
 }
 
 void SVGElement::AddReferenceTo(SVGElement* target_element) {

@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <set>
 #include <string>
@@ -16,6 +17,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
@@ -42,6 +44,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -65,16 +68,15 @@
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
-#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/page_action/action_ids.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/tabs/organizer/organizer_panel_utils.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
@@ -85,6 +87,7 @@
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
 #include "chrome/browser/ui/views/page_action/anchored_message_view.h"
@@ -165,9 +168,12 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/permissions/scripting_permissions_modifier.h"
+#include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/permissions_manager_waiter.h"
 #include "net/base/filename_util.h"
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/features.h"
@@ -381,11 +387,7 @@ class WebUIToolbarWebViewPixelBrowserTest : public WebUIToolbarWebViewTestBase {
              ash::features::kBatterySaver,
 #endif
              features::kWebUIBatterySaverButton},
-            /*disabled=*/
-            // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
-            // Omnibox is enabled and then remove these two Features.
-            {omnibox::internal::kWebUIOmniboxPopup,
-             omnibox::internal::kWebUIOmniboxAimPopup}) {
+            /*disabled=*/{}) {
   }
 
   void SetUp() override {
@@ -1419,23 +1421,9 @@ class WebUIToolbarWebViewStabilityAboutBlankTest
  public:
   WebUIToolbarWebViewStabilityAboutBlankTest() {
     if (AllowAboutBlank()) {
-      param_feature_list_.InitWithFeatures(
-          /*enabled_features=*/
-          {features::kDebugTopChromeWebUI},
-          /*disabled_features=*/
-          // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
-          // Omnibox is enabled and then remove these two Features.
-          {omnibox::internal::kWebUIOmniboxPopup,
-           omnibox::internal::kWebUIOmniboxAimPopup});
+      param_feature_list_.InitAndEnableFeature(features::kDebugTopChromeWebUI);
     } else {
-      param_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{},
-          /*disabled_features=*/
-          // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
-          // Omnibox is enabled and then remove the two omnibox Features below.
-          {features::kDebugTopChromeWebUI,
-           omnibox::internal::kWebUIOmniboxPopup,
-           omnibox::internal::kWebUIOmniboxAimPopup});
+      param_feature_list_.InitAndDisableFeature(features::kDebugTopChromeWebUI);
     }
   }
 
@@ -1808,6 +1796,39 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarPrewarmSandboxBrowserTest,
                          /*expected_initialized_sync=*/true,
                          /*expected_snapshot_back_enabled=*/false,
                          /*expected_back_enabled=*/false);
+}
+
+// Verifies that a toolbar prewarmed before its window exists takes the home
+// button and touch layout from the profile pref and the touch mode.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarPrewarmSandboxBrowserTest,
+                       InitialStateReadsHomeButtonPrefAndTouchUi) {
+  // Both default to false, the values prewarming used to hardcode.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton, true);
+  ui::TouchUiController::TouchUiScoperForTesting touch_ui(true);
+  LifecycleTestSetup setup(browser());
+
+  content::TestNavigationObserver observer(
+      (GURL(chrome::kChromeUIWebUIToolbarURL)));
+  observer.StartWatchingNewWebContents();
+  auto manager = std::make_unique<InitialWebUIManager>(&setup.mock_browser);
+  observer.Wait();
+
+  content::WebContents* contents = manager->GetToolbarContentsForTesting();
+  ASSERT_TRUE(contents);
+  std::optional<base::DictValue> dict = base::JSONReader::ReadDict(
+      content::EvalJs(contents, "chrome.getVariableValue('initialState')")
+          .ExtractString(),
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(dict.has_value());
+  EXPECT_THAT(dict->FindBool("isFallbackPrewarming"), testing::Optional(true));
+  EXPECT_THAT(dict->FindBool("homeButtonShouldBeShown"),
+              testing::Optional(true));
+  EXPECT_THAT(dict->FindBool("touchUi"), testing::Optional(true));
+  // No window has sent state yet, so this comes from the initial state.
+  EXPECT_EQ(true,
+            content::EvalJs(contents,
+                            "document.querySelector('toolbar-app').shadowRoot."
+                            "querySelector('#reload').touchUi"));
 }
 
 class WebUIToolbarLifecyclePrewarmedBrowserTest
@@ -3062,6 +3083,72 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest, ContextMenuPositionE2E) {
   EXPECT_EQ(captured_bounds, expected_screen_bounds);
 }
 
+// Verifies that, when the vertical tab strip is shown, the space between WebUI
+// toolbar controls is treated as window caption (so it supports window dragging
+// and the system context menu), while the controls themselves are not.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest,
+                       IsPositionInWindowCaptionInVerticalTabStrip) {
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(true);
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  views::test::RunScheduledLayout(browser_view);
+
+  WebUIToolbarWebView* webui_toolbar_view = GetWebUIToolbarWebView(browser());
+  ASSERT_TRUE(webui_toolbar_view);
+  views::WebView* web_view = webui_toolbar_view->GetWebViewForTesting();
+  content::WebContents* web_contents = web_view->GetWebContents();
+
+  // Show the split tabs button, so that it sits right after the reload button.
+  PinButton(browser(), web_view, prefs::kPinSplitTabButton);
+  ASSERT_TRUE(WaitForButtonVisible(web_contents, kReloadButtonSelector));
+  ASSERT_TRUE(WaitForButtonVisible(web_contents, kSplitTabsSelector));
+
+  content::EvalJsResult result = content::EvalJs(
+      web_contents,
+      base::StrCat(
+          {"(() => { const r = ", GetButtonAppJS(kReloadButtonSelector),
+           ".getBoundingClientRect(); const s = ",
+           GetButtonAppJS(kSplitTabsSelector),
+           ".getBoundingClientRect(); return [r.left, r.top, r.right, "
+           "r.bottom, s.left]; })()"}));
+  ASSERT_TRUE(result.is_ok());
+  const base::ListValue& rects = result.ExtractList();
+  ASSERT_EQ(5u, rects.size());
+  const double reload_left = rects[0].GetDouble();
+  const double reload_top = rects[1].GetDouble();
+  const double reload_right = rects[2].GetDouble();
+  const double reload_bottom = rects[3].GetDouble();
+  const double split_tabs_left = rects[4].GetDouble();
+  ASSERT_GT(split_tabs_left, reload_right);
+
+  // Convert from CSS pixels to DIPs in the WebView's coordinates.
+  const double zoom = blink::ZoomLevelToZoomFactor(
+      zoom::ZoomController::GetZoomLevelForWebContents(web_contents));
+  const int center_y =
+      base::ClampFloor((reload_top + reload_bottom) / 2 * zoom);
+  const gfx::Point reload_center(
+      base::ClampFloor((reload_left + reload_right) / 2 * zoom), center_y);
+  // Controls are excluded from the draggable region by their enclosed integer
+  // bounds, so the middle of the gap between the buttons is always draggable.
+  const gfx::Point gap(
+      base::ClampFloor((reload_right + split_tabs_left) / 2 * zoom), center_y);
+
+  // Query through the top container, which is what BrowserView consults for
+  // the toolbar when the vertical tab strip is shown.
+  TopContainerView* top_container = browser_view->top_container();
+  auto in_top_container = [&](const gfx::Point& point_in_web_view) {
+    return views::View::ConvertPointToTarget(web_view, top_container,
+                                             point_in_web_view);
+  };
+
+  // The draggable region is reported by the renderer asynchronously.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return top_container->IsPositionInWindowCaption(in_top_container(gap));
+  }));
+  EXPECT_FALSE(top_container->IsPositionInWindowCaption(
+      in_top_container(reload_center)));
+}
+
 class WebUIToolbarLocationBarBrowserTest
     : public WebUIToolbarWebViewBrowserTest {
  public:
@@ -4150,7 +4237,8 @@ constexpr char kGetExtensionsButtonTooltipScript[] = R"(
   if (!divider) return null;
   const extensionElements = extensionsContainer.shadowRoot
       .querySelectorAll('webui-toolbar-extension');
-  const button = Array.from(extensionElements).find(el => el.state.id === '');
+  const button = Array.from(extensionElements).find(
+      el => !!el.state.id.extensionsMenuButton);
   if (!button) return null;
   return button.state.tooltip;
 })();
@@ -4184,8 +4272,6 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest, LoadExtension) {
   scoped_refptr<const extensions::Extension> extension =
       LoadAndPinExtension(temp_dir, /*has_background_script=*/false);
   ASSERT_TRUE(extension);
-
-  std::string extension_id = extension->id();
 
   auto wait_for_extensions_button_tooltip =
       [&](std::string_view expected_tooltip) {
@@ -4347,6 +4433,91 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest, ExtensionAnchoring) {
     EXPECT_TRUE(
         base::test::RunUntil([&]() { return !coordinator->IsShowing(); }));
   }
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest, RequestAccessButton) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  GURL allowed_url =
+      embedded_test_server()->GetURL("allowed.com", "/title1.html");
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), allowed_url));
+
+  ui::TrackedElement* element = nullptr;
+  WebUIToolbarWebView* webui_toolbar_view = nullptr;
+  views::WebView* web_view = nullptr;
+  ASSERT_NO_FATAL_FAILURE(SetUpWebUI(kWebUIToolbarElementIdentifier, &element,
+                                     &webui_toolbar_view, &web_view,
+                                     browser()));
+  content::WebContents* web_contents = web_view->GetWebContents();
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  scoped_refptr<const extensions::Extension> extension = LoadAndPinExtension(
+      temp_dir, /*has_background_script=*/false, /*has_popup=*/true);
+  ASSERT_TRUE(extension);
+
+  extensions::PermissionsManagerWaiter permissions_waiter(
+      extensions::PermissionsManager::Get(browser()->GetProfile()));
+  extensions::ScriptingPermissionsModifier(browser()->GetProfile(), extension)
+      .SetWithholdHostPermissions(true);
+  permissions_waiter.WaitForExtensionPermissionsUpdate();
+
+  auto* container = static_cast<WebUIToolbarExtensionsContainer*>(
+      ExtensionsContainer::From(*browser()));
+  ASSERT_TRUE(container);
+
+  // Request access button should not be visible yet.
+  EXPECT_FALSE(
+      container->GetExtensionAnchor(kExtensionsRequestAccessButtonActionId));
+
+  // Add host access request for the extension on the active tab.
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  int tab_id = extensions::ExtensionTabUtil::GetTabId(active_contents);
+  extensions::PermissionsManager::Get(browser()->GetProfile())
+      ->AddHostAccessRequest(active_contents, tab_id, *extension);
+
+  // Verify request access button becomes visible and anchorable.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return container->GetExtensionAnchor(
+               kExtensionsRequestAccessButtonActionId) != nullptr;
+  }));
+
+  ui::TrackedElement* req_anchor =
+      container->GetExtensionAnchor(kExtensionsRequestAccessButtonActionId);
+  ASSERT_NE(req_anchor, nullptr);
+  EXPECT_EQ(req_anchor->identifier(), kExtensionsRequestAccessButtonElementId);
+
+  ASSERT_TRUE(container->request_access_button_);
+  EXPECT_EQ(container->request_access_button_->flat_edge,
+            extensions_bar::mojom::FlatEdge::kEnd);
+  EXPECT_EQ(
+      container->request_access_button_->text,
+      l10n_util::GetStringFUTF16Int(IDS_EXTENSIONS_REQUEST_ACCESS_BUTTON, 1));
+
+  // Pressing the button with a stale sequence number, as would happen if the
+  // button's state changed while the press was in flight, does nothing.
+  container->ExecuteUserAction(
+      extensions_bar::mojom::ExtensionActionId::NewRequestAccessButton(
+          container->request_access_sequence_number_ - 1));
+  EXPECT_FALSE(container->IsRequestAccessButtonShowingConfirmation());
+
+  // Click on request access button in WebUI.
+  LeftClickExtensionButton(web_contents,
+                           kExtensionsRequestAccessButtonActionId);
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return container->IsRequestAccessButtonShowingConfirmation(); }));
+  EXPECT_EQ(container->request_access_button_->text,
+            l10n_util::GetStringUTF16(
+                IDS_EXTENSIONS_REQUEST_ACCESS_BUTTON_DISMISSED_TEXT));
+
+  // Collapse confirmation.
+  container->CollapseConfirmation();
+  EXPECT_FALSE(container->IsRequestAccessButtonShowingConfirmation());
 }
 
 IN_PROC_BROWSER_TEST_F(WebUIToolbarWebViewBrowserTest, ShowWidgetForExtension) {
@@ -5270,9 +5441,7 @@ class WebUIToolbarAlreadyExistsForTheSameProfileOnInitTest
              features::kWebUIHomeButton, features::kWebUIExtensionsContainer,
              features::kSkipIPCChannelPausingForNonGuests,
              features::kWebUIInProcessResourceLoadingV2},
-            {// TODO(crbug.com/579030694): Investigate lazy loading
-             // OrganizerPanel.
-             organizer_panel::kOrganizerPanel}) {
+            {}) {
     scoped_feature_list_.InitAndEnableFeatureWithParameters(
         features::kInitialWebUI,
         {{"use_separate_process", GetParam() ? "true" : "false"}});
@@ -6298,6 +6467,94 @@ class WebUIToolbarFullyEnabledBrowserTest
     }
   }
 };
+
+// Verifies that, like native ToolbarIconContainerView, the space between an
+// action and the divider in the extensions container is treated as window
+// caption when the vertical tab strip is shown, while the action itself is not.
+// Uses the extensions menu button, which is never moved to the overflow menu,
+// so this doesn't depend on the window width.
+// TODO(crbug.com/582480011): Deflake and re-enable.
+IN_PROC_BROWSER_TEST_F(
+    WebUIToolbarFullyEnabledBrowserTest,
+    DISABLED_IsPositionInWindowCaptionInExtensionsContainer) {
+  WebUIToolbarWebView* webui_toolbar_view = GetWebUIToolbarWebView(browser());
+  ASSERT_TRUE(webui_toolbar_view);
+  views::WebView* web_view = webui_toolbar_view->GetWebViewForTesting();
+  content::WebContents* web_contents = web_view->GetWebContents();
+
+  // The extensions menu button is shown once there's an extension.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  ASSERT_TRUE(LoadAndPinExtension(temp_dir));
+
+  // Draggable regions are only collected while the vertical tab strip is shown.
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(true);
+
+  // Returns the bounds of the extensions menu button, followed by the edges of
+  // the gap between it and the divider. Returns null until both are shown and
+  // done animating.
+  static constexpr char kGetMenuButtonAndGapScript[] = R"(
+    (() => {
+      const container = document.querySelector('toolbar-app')
+          ?.shadowRoot?.querySelector('#extensions');
+      if (!container || container.shadowRoot.getAnimations().length) {
+        return null;
+      }
+      const menu = Array.from(
+          container.shadowRoot.querySelectorAll('webui-toolbar-extension'))
+          .find(el => el.state?.id === '');
+      const button = menu?.shadowRoot?.querySelector('toolbar-chip-button');
+      const divider = container.shadowRoot.querySelector('toolbar-divider');
+      if (!button || !divider) return null;
+      const m = button.getBoundingClientRect();
+      const d = divider.getBoundingClientRect();
+      if (m.width === 0 || d.width === 0) return null;
+      const gap = m.right <= d.left ? [m.right, d.left] : [d.right, m.left];
+      return [m.left, m.top, m.right, m.bottom, gap[0], gap[1]];
+    })())";
+  base::ListValue rects;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    content::EvalJsResult result =
+        content::EvalJs(web_contents, kGetMenuButtonAndGapScript);
+    if (!result.is_list()) {
+      return false;
+    }
+    rects = result.ExtractList().Clone();
+    return true;
+  }));
+  ASSERT_EQ(6u, rects.size());
+  const double menu_left = rects[0].GetDouble();
+  const double menu_top = rects[1].GetDouble();
+  const double menu_right = rects[2].GetDouble();
+  const double menu_bottom = rects[3].GetDouble();
+  const double gap_start = rects[4].GetDouble();
+  const double gap_end = rects[5].GetDouble();
+  ASSERT_GT(gap_end, gap_start);
+
+  // Convert from CSS pixels to DIPs in the WebView's coordinates.
+  const double zoom = blink::ZoomLevelToZoomFactor(
+      zoom::ZoomController::GetZoomLevelForWebContents(web_contents));
+  const int center_y = base::ClampFloor((menu_top + menu_bottom) / 2 * zoom);
+  const gfx::Point menu_center(
+      base::ClampFloor((menu_left + menu_right) / 2 * zoom), center_y);
+  // Controls are excluded from the draggable region by their enclosed integer
+  // bounds, so the middle of the gap is always draggable.
+  const gfx::Point gap(base::ClampFloor((gap_start + gap_end) / 2 * zoom),
+                       center_y);
+
+  ToolbarView* toolbar = GetToolbarView();
+  auto in_toolbar = [&](const gfx::Point& point_in_web_view) {
+    return views::View::ConvertPointToTarget(web_view, toolbar,
+                                             point_in_web_view);
+  };
+
+  // The draggable region is reported by the renderer asynchronously.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return toolbar->IsPositionInWindowCaption(in_toolbar(gap)); }));
+  EXPECT_FALSE(toolbar->IsPositionInWindowCaption(in_toolbar(menu_center)));
+}
 
 // When all currently supported WebUI controls are enabled, check that Views
 // controls are not instantiated.
@@ -7366,6 +7623,320 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarFullyEnabledBrowserTest,
   ASSERT_TRUE(WaitForExtensionsState(all_extensions_hidden));
   EXPECT_TRUE(WaitForPinnedActionHidden(
       toolbar_ui_api::mojom::PinnedToolbarAction::kShowDownloads));
+
+  AssertNoJsErrors();
+}
+
+// Tests for WebUIToolbarWebView::GetMinimumSize() when the WebUI toolbar is
+// fully enabled, and overflow is handled entirely in Javascript.
+class WebUIToolbarMinimumSizeBrowserTest
+    : public WebUIToolbarFullyEnabledBrowserTest {
+ public:
+  // Waits until the toolbar has been initialized, as signalled by the forward
+  // button, which is pinned by default, being visible.
+  [[nodiscard]] bool WaitForToolbarInitialized() {
+    return WaitUntilResponsiveControlsAreVisible({kForwardSelector});
+  }
+
+  // Returns the minimum width of the toolbar, as calculated by the Javascript
+  // layout code. Works by appending a spacer to the toolbar that's as wide as
+  // the window, which forces all ResponsiveControls to their minimum width
+  // (hiding all controls that can be overflowed), and showing the overflow
+  // button if anything was overflowed. Then measures the width of the
+  // toolbar-app, excluding the spacer and the gap before it. Removes the spacer
+  // and lays out the toolbar again before returning. Returns -1 on failure.
+  int GetJsMinimumWidth() {
+    content::EvalJsResult result = content::EvalJs(GetWebUIWebContents(), R"(
+          (() => {
+            const app = document.querySelector('toolbar-app');
+            const spacer = document.createElement('div');
+            spacer.style.flexShrink = '0';
+            spacer.style.width = window.innerWidth + 'px';
+            app.shadowRoot.appendChild(spacer);
+            app.layoutResponsiveControls();
+
+            const gap = parseFloat(getComputedStyle(app).columnGap) || 0;
+            const minWidth = app.getBoundingClientRect().width -
+                spacer.getBoundingClientRect().width - gap;
+
+            spacer.remove();
+            app.layoutResponsiveControls();
+            return Math.round(minWidth);
+          })();
+        )");
+    if (!result.is_ok() || !result.is_int()) {
+      ADD_FAILURE() << "Failed to get JS minimum width: " << result;
+      return -1;
+    }
+    return result.ExtractInt();
+  }
+
+  // Returns the preferred width of the toolbar, as calculated by the Javascript
+  // layout code. Works by hiding the overflow button and setting all
+  // ResponsiveControls that should be shown to their preferred width, and then
+  // measuring the width of the toolbar-app. Lays out the toolbar again before
+  // returning, to restore the controls to their original sizes. Must not be
+  // called while there's a spacer in the toolbar, since it would be included in
+  // the result. Returns -1 on failure.
+  int GetJsPreferredWidth() {
+    content::EvalJsResult result = content::EvalJs(GetWebUIWebContents(), R"(
+          (() => {
+            const app = document.querySelector('toolbar-app');
+            const overflowButton = app.shadowRoot.querySelector('#overflow');
+            overflowButton.toggleAttribute('hidden', true);
+            for (const control of app.getResponsiveControls()) {
+              if (control.shouldBeShown()) {
+                control.setToPreferredWidth();
+              }
+            }
+            const preferredWidth = app.clientWidth;
+
+            // Lay out again to restore controls to their original sizes.
+            app.layoutResponsiveControls();
+            return preferredWidth;
+          })();
+        )");
+    if (!result.is_ok() || !result.is_int()) {
+      ADD_FAILURE() << "Failed to get JS preferred width: " << result;
+      return -1;
+    }
+    return result.ExtractInt();
+  }
+
+  // Returns the number of non-divider pinned toolbar actions in the
+  // #pinnedToolbarActions element, whether visible or not.
+  int GetNumPinnedActionsInJs() {
+    return content::EvalJs(GetWebUIWebContents(), R"(
+          (() => {
+            const app = document.querySelector('toolbar-app');
+            const pinned =
+                app?.shadowRoot?.querySelector('#pinnedToolbarActions');
+            if (!pinned) {
+              return 0;
+            }
+            return pinned.getActions().filter(el => !el.isDivider).length;
+          })()
+        )")
+        .ExtractInt();
+  }
+
+  // Returns true if the ResponsiveControl matching `selector` exists and its
+  // shouldBeShown() method returns true. The control may still be hidden due
+  // to overflow.
+  bool ShouldControlBeShown(std::string_view selector) {
+    return content::EvalJs(GetWebUIWebContents(), content::JsReplace(R"(
+          (() => {
+            const app = document.querySelector('toolbar-app');
+            const control = app?.shadowRoot?.querySelector($1);
+            return !!control && control.shouldBeShown();
+          })()
+        )",
+                                                                     selector))
+        .ExtractBool();
+  }
+
+  // Pins a number of toolbar actions, an extension, the home button
+  // and the split tabs button, all of which may be overflowed by the
+  // Javascript layout code. Waits until the Javascript toolbar has been updated
+  // to include all of them, and until the preferred width of the
+  // WebUIToolbarWebView has grown to make room for the new buttons.
+  //
+  // Blocking must be allowed when this is called, and when
+  // `extension_temp_dir` is destroyed.
+  void PinOverflowableControls(base::ScopedTempDir& extension_temp_dir) {
+    const int initial_preferred_width =
+        GetWebUIToolbar()->GetPreferredSize().width();
+
+    // Load the extension first, since LoadAndPinExtension() waits for the
+    // extension's button to be visible, which may not happen if the other
+    // controls have already been pinned, due to overflow.
+    ASSERT_TRUE(extension_temp_dir.CreateUniqueTempDir());
+    scoped_refptr<const extensions::Extension> extension =
+        LoadAndPinExtension(extension_temp_dir);
+    ASSERT_TRUE(extension);
+
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                    true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPinSplitTabButton,
+                                                    true);
+
+    auto* model = PinnedToolbarActionsModel::Get(browser()->GetProfile());
+    const auto kActionsToPin = std::to_array<actions::ActionId>({
+        kActionShowDownloads,
+        kActionSidePanelShowBookmarks,
+        kActionSidePanelShowReadingList,
+        kActionSidePanelShowHistoryCluster,
+        kActionPrint,
+        kActionCopyUrl,
+        kActionQrCodeGenerator,
+        kActionClearBrowsingData,
+        kActionTaskManager,
+        kActionDevTools,
+    });
+    for (actions::ActionId action : kActionsToPin) {
+      model->UpdatePinnedState(action, true);
+    }
+
+    // Wait for the Javascript toolbar to have all the new controls. Some of
+    // them may be overflowed, depending on window size, so don't wait for them
+    // to be visible.
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return ShouldControlBeShown(kHomeSelector) &&
+             ShouldControlBeShown(kSplitTabsSelector) &&
+             GetNumPinnedActionsInJs() ==
+                 static_cast<int>(kActionsToPin.size());
+    }));
+
+    // Wait for the C++ side to reflect the new controls. Each of the new
+    // buttons (the pinned toolbar actions, the home button, the split tabs
+    // button, and the extension) should increase the preferred width by at
+    // least a button's width.
+    const int min_expected_preferred_width_increase =
+        static_cast<int>(kActionsToPin.size() + 3) *
+        GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return GetWebUIToolbar()->GetPreferredSize().width() >=
+             initial_preferred_width + min_expected_preferred_width_increase;
+    })) << "Initial preferred width: "
+        << initial_preferred_width << ", current preferred width: "
+        << GetWebUIToolbar()->GetPreferredSize().width();
+  }
+};
+
+// Checks that the minimum width of the WebUI toolbar is less than its preferred
+// width, both in the default state, and when a large number of overflowable
+// controls are pinned.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarMinimumSizeBrowserTest,
+                       MinimumWidthLessThanPreferredWidth) {
+  ASSERT_TRUE(WaitForToolbarInitialized());
+
+  WebUIToolbarWebView* toolbar = GetWebUIToolbar();
+  EXPECT_LT(toolbar->GetMinimumSize().width(),
+            toolbar->GetPreferredSize().width());
+
+  // Creating, writing to, and deleting the extensions' temp directories
+  // requires blocking. Declared before the ScopedTempDirs so it outlives them.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir extension_temp_dir;
+  ASSERT_NO_FATAL_FAILURE(PinOverflowableControls(extension_temp_dir));
+  EXPECT_LT(toolbar->GetMinimumSize().width(),
+            toolbar->GetPreferredSize().width());
+}
+
+// Checks that pinning a large number of controls that Javascript can overflow
+// (pinned toolbar actions, an extension, the home button, and the split tabs
+// button) doesn't increase the minimum width of the WebUI toolbar.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarMinimumSizeBrowserTest,
+                       PinningOverflowableControlsDoesNotIncreaseMinimumWidth) {
+  ASSERT_TRUE(WaitForToolbarInitialized());
+
+  // Install an unpinned extension first. Installing any extension shows the
+  // extensions menu button, which is never overflowed, so does increase the
+  // minimum width. Pinning extensions, however, should not.
+  // Creating, writing to, and deleting the extensions' temp directories
+  // requires blocking. Declared before the ScopedTempDirs so it outlives them.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir unpinned_extension_temp_dir;
+  ASSERT_TRUE(unpinned_extension_temp_dir.CreateUniqueTempDir());
+  scoped_refptr<const extensions::Extension> unpinned_extension =
+      LoadExtension(unpinned_extension_temp_dir);
+  ASSERT_TRUE(unpinned_extension);
+  // The extension may be pinned by default, so explicitly unpin it.
+  ToolbarActionsModel::Get(browser()->GetProfile())
+      ->SetActionVisibility(unpinned_extension->id(), false);
+  ASSERT_TRUE(WaitForExtensionsState("<menu>,<divider>"));
+
+  WebUIToolbarWebView* toolbar = GetWebUIToolbar();
+  const int initial_min_width = toolbar->GetMinimumSize().width();
+
+  base::ScopedTempDir extension_temp_dir;
+  ASSERT_NO_FATAL_FAILURE(PinOverflowableControls(extension_temp_dir));
+
+  // When all pinned toolbar actions are overflowed, Javascript still displays
+  // the zero-width pinned toolbar actions container, which results in an extra
+  // gap between it and the previous control.
+  //
+  // TODO(crbug.com/538175276): Hide the pinned toolbar actions container in
+  // Javascript when all of its actions are overflowed, and remove this.
+  const int pinned_toolbar_actions_container_gap =
+      GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
+  EXPECT_EQ(toolbar->GetMinimumSize().width(),
+            initial_min_width + pinned_toolbar_actions_container_gap);
+}
+
+// Checks that the minimum width calculated by C++ is consistent with the
+// minimum width the Javascript layout code can actually shrink the toolbar to.
+// If the C++ minimum width is too small, the toolbar can be clipped when the
+// window is at its minimum width. If it's too large, the window can't be made
+// as narrow as it should be. Checks both in the default state, and when a large
+// number of overflowable controls are pinned.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarMinimumSizeBrowserTest,
+                       MinimumWidthMatchesJsMinimumWidth) {
+  ASSERT_TRUE(WaitForToolbarInitialized());
+  InstallErrorListener();
+
+  // Allow for a small amount of rounding error between the C++ and Javascript
+  // calculations.
+  constexpr int kMinWidthTolerance = 2;
+
+  // The C++ minimum width of the location bar (WebUILocationBar::MinimumSize())
+  // is 30 pixels smaller than the Javascript minimum width
+  // (LocationBarElement.LOCATION_BAR_MIN_WIDTH), so the C++ minimum width of
+  // the toolbar is expected to be 30 pixels smaller than the Javascript one.
+  //
+  // TODO(crbug.com/474060468): Remove this once the C++ and Javascript location
+  // bar sizes match.
+  constexpr int kLocationBarMinWidthDifference = 30;
+
+  WebUIToolbarWebView* toolbar = GetWebUIToolbar();
+
+  int js_min_width = GetJsMinimumWidth();
+  ASSERT_GT(js_min_width, 0);
+  EXPECT_NEAR(toolbar->GetMinimumSize().width(),
+              js_min_width - kLocationBarMinWidthDifference,
+              kMinWidthTolerance);
+
+  // Creating, writing to, and deleting the extensions' temp directories
+  // requires blocking. Declared before the ScopedTempDirs so it outlives them.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir extension_temp_dir;
+  ASSERT_NO_FATAL_FAILURE(PinOverflowableControls(extension_temp_dir));
+
+  js_min_width = GetJsMinimumWidth();
+  ASSERT_GT(js_min_width, 0);
+  EXPECT_NEAR(toolbar->GetMinimumSize().width(),
+              js_min_width - kLocationBarMinWidthDifference,
+              kMinWidthTolerance);
+
+  AssertNoJsErrors();
+}
+
+// Checks that the preferred width calculated by C++ exactly matches the
+// preferred width calculated by the Javascript layout code, both in the default
+// state, and when a large number of overflowable controls are pinned.
+IN_PROC_BROWSER_TEST_F(WebUIToolbarMinimumSizeBrowserTest,
+                       PreferredWidthMatchesJsPreferredWidth) {
+  ASSERT_TRUE(WaitForToolbarInitialized());
+  InstallErrorListener();
+
+  WebUIToolbarWebView* toolbar = GetWebUIToolbar();
+
+  const int initial_js_preferred_width = GetJsPreferredWidth();
+  ASSERT_GT(initial_js_preferred_width, 0);
+  EXPECT_EQ(toolbar->GetPreferredSize().width(), initial_js_preferred_width);
+
+  // Creating, writing to, and deleting the extensions' temp directories
+  // requires blocking. Declared before the ScopedTempDirs so it outlives them.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir extension_temp_dir;
+  ASSERT_NO_FATAL_FAILURE(PinOverflowableControls(extension_temp_dir));
+
+  // Pinning all those controls should increase the preferred width, and the
+  // C++ and Javascript preferred widths should still match.
+  const int js_preferred_width = GetJsPreferredWidth();
+  ASSERT_GT(js_preferred_width, 0);
+  EXPECT_GT(js_preferred_width, initial_js_preferred_width);
+  EXPECT_EQ(toolbar->GetPreferredSize().width(), js_preferred_width);
 
   AssertNoJsErrors();
 }

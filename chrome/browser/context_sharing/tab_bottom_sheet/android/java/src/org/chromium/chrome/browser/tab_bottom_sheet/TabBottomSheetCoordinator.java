@@ -22,6 +22,7 @@ import android.view.ViewGroup.MarginLayoutParams;
 import android.view.Window;
 import android.view.accessibility.AccessibilityEvent;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.Px;
 
 import org.chromium.base.Log;
@@ -213,6 +214,12 @@ public class TabBottomSheetCoordinator {
         return mBottomSheetController.getSheetState() == BottomSheetController.SheetState.PEEK;
     }
 
+    /** Returns the background color of the sheet. */
+    @ColorInt
+    int getBackgroundColor() {
+        return mCoBrowseViews.getBackgroundColor();
+    }
+
     void destroy() {
         if (mIsShowingTabBottomSheet && mSheetContent != null) {
             mBottomSheetController.hideContent(mSheetContent, false, StateChangeReason.NONE);
@@ -222,10 +229,11 @@ public class TabBottomSheetCoordinator {
     }
 
     private void createSheetContent() {
+        if (mSheetContent != null) mSheetContent.destroy();
         mContentView = mCoBrowseViews.getView();
         mContentView.setOutlineProvider(mOutlineProvider);
         mContentView.setClipToOutline(true);
-        View webUiContainer = mContentView.findViewById(R.id.web_ui_container);
+        View webUiContainer = TabBottomSheetUtils.getWebUiContainer(mContentView);
         if (webUiContainer != null
                 && webUiContainer.getLayoutParams() instanceof MarginLayoutParams params) {
             params.topMargin = isEdgeToEdgeEnabled() ? 0 : mWebUiTopMargin;
@@ -261,6 +269,7 @@ public class TabBottomSheetCoordinator {
         // Set peek height for touch arbitration.
         if (mSheetContent != null) {
             mMediator.setPeekHeight(mSheetContent.getPeekHeight());
+            mSheetContent.onBottomMarginChanged(mBottomSheetController.getContainerBottomMargin());
         }
         // Notify that the sheet is opened synchronously. The precise expansion state will be
         // refined once the posted task completes and layout is available.
@@ -489,6 +498,7 @@ public class TabBottomSheetCoordinator {
                     return;
                 }
 
+                mSheetContent.onBottomMarginChanged(bottomMargin);
                 if (!canResizeWebView()) {
                     updateContentHeight();
                 }
@@ -670,7 +680,7 @@ public class TabBottomSheetCoordinator {
         if (keyboardDelegate == null) {
             return false;
         }
-        return keyboardDelegate.isKeyboardShowing(mCoBrowseViews.getView());
+        return keyboardDelegate.isKeyboardObscuring(mCoBrowseViews.getView());
     }
 
     private void updateContentHeight() {

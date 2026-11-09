@@ -34,6 +34,7 @@
 #include "ui/gl/buildflags.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
+#include "ui/gl/gl_egl_api_implementation.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_surface_egl.h"
@@ -604,22 +605,16 @@ bool CollectGraphicsInfoFromANGLEDisplay(GPUInfo* gpu_info,
 
   gpu_info->display_type = GetDisplayTypeString(egl_display->GetDisplayType());
 
-  // Same queries as GetGLWindowSystemBindingInfoEGL(), but on the display
-  // directly so that no context needs to be current.
+  // Query the display directly so that no context needs to be current.
   EGLDisplay egl_display_handle = egl_display->GetDisplay();
-  const char* vendor = eglQueryString(egl_display_handle, EGL_VENDOR);
-  const char* version = eglQueryString(egl_display_handle, EGL_VERSION);
-  const char* extensions = eglQueryString(egl_display_handle, EGL_EXTENSIONS);
-  if (vendor) {
+  gl::GLWindowSystemBindingInfo window_system_binding_info;
+  if (gl::GetGLWindowSystemBindingInfoEGL(egl_display_handle,
+                                          &window_system_binding_info)) {
     // ANGLE's GL_VENDOR is the same string as its EGL_VENDOR.
-    gpu_info->gl_vendor = vendor;
-    gpu_info->gl_ws_vendor = vendor;
-  }
-  if (version) {
-    gpu_info->gl_ws_version = version;
-  }
-  if (extensions) {
-    gpu_info->gl_ws_extensions = extensions;
+    gpu_info->gl_vendor = window_system_binding_info.vendor;
+    gpu_info->gl_ws_vendor = window_system_binding_info.vendor;
+    gpu_info->gl_ws_version = window_system_binding_info.version;
+    gpu_info->gl_ws_extensions = window_system_binding_info.extensions;
   }
 
   // EGL_ANGLE_query_renderer_strings returns GL_RENDERER and the ANGLE version
@@ -703,18 +698,6 @@ bool CollectGraphicsInfoGL(GPUInfo* gpu_info, gl::GLDisplay* display) {
   if (!gl_info.driver_version.empty() && active_gpu.driver_version.empty()) {
     active_gpu.driver_version = gl_info.driver_version;
   }
-
-  GLint max_samples = 0;
-  if (gl_info.IsAtLeastGLES(3, 0) ||
-      gfx::HasExtension(extension_set, "GL_ANGLE_framebuffer_multisample") ||
-      gfx::HasExtension(extension_set, "GL_APPLE_framebuffer_multisample") ||
-      gfx::HasExtension(extension_set, "GL_EXT_framebuffer_multisample") ||
-      gfx::HasExtension(extension_set,
-                        "GL_EXT_multisampled_render_to_texture") ||
-      gfx::HasExtension(extension_set, "GL_NV_framebuffer_multisample")) {
-    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
-  }
-  gpu_info->max_msaa_samples = base::NumberToString(max_samples);
 
 #if BUILDFLAG(IS_ANDROID)
   gpu_info->can_support_threaded_texture_mailbox =
@@ -814,6 +797,13 @@ void IdentifyActiveGPU(GPUInfo* gpu_info) {
       gpu_info->secondary_gpus[ii].active = true;
       return;
     }
+  }
+}
+
+void MarkPrimaryGpuActive(GPUInfo* gpu_info) {
+  gpu_info->gpu.active = true;
+  for (auto& secondary_gpu : gpu_info->secondary_gpus) {
+    secondary_gpu.active = false;
   }
 }
 

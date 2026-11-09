@@ -33,6 +33,7 @@
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #import "components/remote_cocoa/app_shim/browser_native_widget_window_mac.h"
 #import "components/remote_cocoa/app_shim/context_menu_runner.h"
+#include "components/remote_cocoa/app_shim/features.h"
 #import "components/remote_cocoa/app_shim/mouse_capture.h"
 #import "components/remote_cocoa/app_shim/native_widget_mac_frameless_nswindow.h"
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
@@ -41,6 +42,7 @@
 #include "components/remote_cocoa/app_shim/select_file_dialog_bridge.h"
 #import "components/remote_cocoa/app_shim/views_nswindow_delegate.h"
 #import "components/remote_cocoa/app_shim/window_move_loop.h"
+#import "components/remote_cocoa/app_shim/window_occlusion_checker_mac.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/cert/x509_util_apple.h"
@@ -450,6 +452,7 @@ NativeWidgetNSWindowBridge::~NativeWidgetNSWindowBridge() {
   // that -[NSWindow close] is invoked on the hosted window before the
   // destructor is called.
   DCHECK(![window_ delegate]);
+  DCHECK(!is_tracked_by_occlusion_checker_);
   DCHECK(child_windows_.empty());
   DestroyContentView();
 }
@@ -516,6 +519,7 @@ void NativeWidgetNSWindowBridge::SetParent(uint64_t new_parent_id) {
     if (!was_allowing_screenshots || !ShouldAllowScreenshots()) {
       UpdateCaptureExclusion();
     }
+    UpdateWindowOcclusionTracking();
     return;
   }
 
@@ -536,6 +540,7 @@ void NativeWidgetNSWindowBridge::SetParent(uint64_t new_parent_id) {
   if (wants_to_be_visible_) {
     parent_->OrderChildren();
   }
+  UpdateWindowOcclusionTracking();
 }
 
 void NativeWidgetNSWindowBridge::CreateSelectFileDialog(
@@ -660,7 +665,10 @@ void NativeWidgetNSWindowBridge::InitWindow(
   if (params->modal_type == ui::mojom::ModalType::kWindow) {
     [window_ setMovable:NO];
   }
+  is_tooltip_ = params->is_tooltip;
   [window_ setIsTooltip:params->is_tooltip];
+  window_initialized_ = true;
+  UpdateWindowOcclusionTracking();
   CheckAndNotifyAllWorkspacesStateChanged();
 }
 
@@ -951,7 +959,8 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
   DCHECK(wants_to_be_visible_);
 
   if (!ca_transaction_sync_suppressed_) {
-    if (base::FeatureList::IsEnabled(features::kAlphaInsteadOfCATransaction)) {
+    if (base::FeatureList::IsEnabled(
+            ::features::kAlphaInsteadOfCATransaction)) {
       // If the window isn't visible and a compositor frame for the window size
       // hasn't come in yet, keep the window effectively invisible via
       // `alphaValue`. It will be made visible when a correctly sized compositor
@@ -1176,6 +1185,7 @@ void NativeWidgetNSWindowBridge::SetCursor(const ui::Cursor& cursor) {
 void NativeWidgetNSWindowBridge::EnableImmersiveFullscreen(
     uint64_t fullscreen_overlay_widget_id,
     uint64_t tab_widget_id) {
+  CHECK(!immersive_transparent_titlebar_controller_);
   NativeWidgetNSWindowBridge* tab_widget_bridge = GetFromId(tab_widget_id);
   if (tab_widget_bridge) {
     NSWindow* tab_window = tab_widget_bridge->ns_window();
@@ -1204,8 +1214,30 @@ void NativeWidgetNSWindowBridge::EnableImmersiveFullscreen(
   }
 }
 
+void NativeWidgetNSWindowBridge::
+    EnableImmersiveFullscreenWithTransparentTitlebar() {
+  CHECK(!immersive_mode_controller_);
+  immersive_transparent_titlebar_controller_ =
+      std::make_unique<ImmersiveModeTransparentTitlebarControllerCocoa>(
+          window_,
+          // Unretained is safe: `this` owns the controller.
+          base::BindRepeating(&NativeWidgetNSWindowBridge::
+                                  OnImmersiveFullscreenTitlebarFrameChanged,
+                              base::Unretained(this)));
+  immersive_transparent_titlebar_controller_->Init();
+
+  // It is possible for the fullscreen transition to complete before the
+  // immersive mode controller is created. Mark the transition as complete as
+  // needed here.
+  if (!fullscreen_controller_.IsInFullscreenTransition() &&
+      fullscreen_controller_.GetTargetFullscreenState()) {
+    immersive_transparent_titlebar_controller_->FullscreenTransitionCompleted();
+  }
+}
+
 void NativeWidgetNSWindowBridge::DisableImmersiveFullscreen() {
   immersive_mode_controller_.reset();
+  immersive_transparent_titlebar_controller_.reset();
 }
 
 void NativeWidgetNSWindowBridge::UpdateToolbarVisibility(
@@ -1213,12 +1245,18 @@ void NativeWidgetNSWindowBridge::UpdateToolbarVisibility(
   if (immersive_mode_controller_) {
     immersive_mode_controller_->UpdateToolbarVisibility(style);
   }
+  if (immersive_transparent_titlebar_controller_) {
+    immersive_transparent_titlebar_controller_->UpdateToolbarVisibility(style);
+  }
 }
 
 void NativeWidgetNSWindowBridge::OnTopContainerViewBoundsChanged(
     const gfx::Rect& bounds) {
   if (immersive_mode_controller_) {
     immersive_mode_controller_->OnTopViewBoundsChanged(bounds);
+  }
+  if (immersive_transparent_titlebar_controller_) {
+    immersive_transparent_titlebar_controller_->OnTopViewBoundsChanged(bounds);
   }
 }
 
@@ -1239,6 +1277,10 @@ void NativeWidgetNSWindowBridge::ImmersiveFullscreenRevealUnlock() {
 
 bool NativeWidgetNSWindowBridge::ShouldUseCustomTitlebarHeightForFullscreen()
     const {
+  if (immersive_transparent_titlebar_controller_) {
+    return immersive_transparent_titlebar_controller_->is_initialized() &&
+           !immersive_transparent_titlebar_controller_->IsContentFullscreen();
+  }
   return immersive_mode_controller_ &&
          immersive_mode_controller_->is_initialized() &&
          immersive_mode_controller_->IsTabbed() &&
@@ -1253,6 +1295,11 @@ void NativeWidgetNSWindowBridge::OnImmersiveFullscreenToolbarRevealChanged(
 void NativeWidgetNSWindowBridge::OnImmersiveFullscreenMenuBarRevealChanged(
     float reveal_amount) {
   host_->OnImmersiveFullscreenMenuBarRevealChanged(reveal_amount);
+}
+
+void NativeWidgetNSWindowBridge::OnImmersiveFullscreenTitlebarFrameChanged(
+    const gfx::Rect& frame) {
+  host_->OnImmersiveFullscreenTitlebarFrameChanged(frame);
 }
 
 void NativeWidgetNSWindowBridge::OnAutohidingMenuBarHeightChanged(
@@ -1312,6 +1359,26 @@ void NativeWidgetNSWindowBridge::UpdateCaptureExclusion() {
 
   for (NativeWidgetNSWindowBridge* child : child_windows_) {
     child->UpdateCaptureExclusion();
+  }
+}
+
+void NativeWidgetNSWindowBridge::UpdateWindowOcclusionTracking() {
+  // Note: when this is false (e.g. `kTrackAllTopLevelWindowsForOcclusion` is
+  // disabled), windows containing a `WebContents` are still registered by
+  // `WebContentsViewCocoa`.
+  const bool should_track = window_initialized_ && window_ && !parent_ &&
+                            !is_tooltip_ &&
+                            base::FeatureList::IsEnabled(
+                                features::kTrackAllTopLevelWindowsForOcclusion);
+  if (should_track == is_tracked_by_occlusion_checker_) {
+    return;
+  }
+  is_tracked_by_occlusion_checker_ = should_track;
+  if (should_track) {
+    [[WindowOcclusionCheckerMac sharedInstance] addTrackedWindow:window_];
+  } else {
+    [[WindowOcclusionCheckerMac sharedInstanceIfCreated]
+        removeTrackedWindow:window_];
   }
 }
 
@@ -1419,6 +1486,9 @@ void NativeWidgetNSWindowBridge::OnWindowWillClose() {
   [show_animation_ stopAnimation];  // If set, calls OnShowAnimationComplete().
   CHECK(!show_animation_);
 
+  window_initialized_ = false;
+  UpdateWindowOcclusionTracking();
+
   [window_ setDelegate:nil];
   [window_ setBridge:nullptr];
 
@@ -1507,7 +1577,8 @@ void NativeWidgetNSWindowBridge::OnSpaceActivationMayHaveChanged() {
     OrderChildren();
   }
   bool is_visible_on_screen = window_.onActiveSpace;
-  if (base::FeatureList::IsEnabled(features::kDetectSpaceChangeViaOcclusion)) {
+  if (base::FeatureList::IsEnabled(
+          ::features::kDetectSpaceChangeViaOcclusion)) {
     is_visible_on_screen =
         is_visible_on_screen ||
         (([window_ occlusionState] & NSWindowOcclusionStateVisible) != 0);
@@ -1694,6 +1765,15 @@ void NativeWidgetNSWindowBridge::FullscreenControllerTransitionStart(
 void NativeWidgetNSWindowBridge::FullscreenControllerTransitionComplete(
     bool is_fullscreen) {
   DCHECK(!fullscreen_controller_.IsInFullscreenTransition());
+  // The titlebar transparency must be reset before the window enters
+  // fullscreen again, see ImmersiveModeTransparentTitlebarControllerCocoa.
+  // Reset it only once the window has left fullscreen, so that the titlebar
+  // doesn't turn opaque while it animates out. This is a no-op if the
+  // transparency was never set.
+  if (!is_fullscreen) {
+    ImmersiveModeTransparentTitlebarControllerCocoa::ResetTitlebarTransparency(
+        window_);
+  }
   UpdateWindowGeometry();
   UpdateWindowDisplay();
 
@@ -1703,6 +1783,9 @@ void NativeWidgetNSWindowBridge::FullscreenControllerTransitionComplete(
   host_->OnWindowFullscreenTransitionComplete(is_fullscreen);
   if (is_fullscreen && immersive_mode_controller_) {
     immersive_mode_controller_->FullscreenTransitionCompleted();
+  }
+  if (is_fullscreen && immersive_transparent_titlebar_controller_) {
+    immersive_transparent_titlebar_controller_->FullscreenTransitionCompleted();
   }
 }
 
@@ -2230,7 +2313,7 @@ void NativeWidgetNSWindowBridge::UpdateWindowGeometry() {
   CheckAndNotifyAllWorkspacesStateChanged();
 
   if (content_resized && window_.visible && !ca_transaction_sync_suppressed_) {
-    if (!base::FeatureList::IsEnabled(features::kAsyncLiveResize)) {
+    if (!base::FeatureList::IsEnabled(::features::kAsyncLiveResize)) {
       ui::CATransactionCoordinator::Get().Synchronize();
     }
   }

@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Non proporre di tradurre questi siti</translation>
 <translation id="1143193470214071120">Chiudi una finestra o gestisci le finestre</translation>
 <translation id="1143486892058798649">Salva link come…</translation>
+<translation id="1149644372535087155">Salva le password in Chrome</translation>
 <translation id="1149725087019908252">Scansione di <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504"><ph name="APP_NAME" /> si aprirà in Chrome. Se continui, accetti i <ph name="BEGIN_LINK1" />Termini di servizio di Google<ph name="END_LINK1" /> e i <ph name="BEGIN_LINK2" />Termini di servizio aggiuntivi di Google Chrome e ChromeOS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Non hai password salvate in Gestore delle password di Google.</translation>
@@ -188,6 +189,7 @@ Solo chi conosce la tua passphrase può leggere i tuoi dati criptati. La passphr
 <translation id="1749561566933687563">Sincronizza i tuoi preferiti</translation>
 <translation id="1750238553597293878">Continua a usare le password nel tuo Account Google</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">Ripristina la finestra <ph name="TITLE_OF_WINDOW" />.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Pagine, 1 pagina nell'elenco}other{Pagine, # pagine nell'elenco}}</translation>
 <translation id="1771929606532798550">A Google vengono inviate informazioni sul tuo utilizzo di Chrome, ma non sono riconducibili a te\n\nSe Chrome si arresta in modo anomalo, i dettagli su questo evento potrebbero includere alcune delle tue informazioni personali\n\nSe sincronizzi la cronologia dell'Account Google, le metriche potrebbero includere anche informazioni sugli URL che visiti</translation>
 <translation id="1778457539567749232">Segna come da leggere</translation>
@@ -299,6 +301,7 @@ Solo chi conosce la tua passphrase può leggere i tuoi dati criptati. La passphr
 <translation id="2190355936436201913">(vuoto)</translation>
 <translation id="219283042927675668">Schede nel gruppo</translation>
 <translation id="2194856509914051091">Aspetti da considerare</translation>
+<translation id="2195339740518523951">Proteggiti con lo strumento di sicurezza più efficace di Chrome</translation>
 <translation id="2196695604589508993">Apri cronologia</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, scheda condivisa fissata</translation>
 <translation id="22091350895006575">Aggiungi nome utente</translation>
@@ -1256,6 +1259,7 @@ Il tuo Account Google potrebbe avere altre forme di cronologia di navigazione, a
 <translation id="6022659036123304283">Personalizza il tuo Chrome</translation>
 <translation id="6023820583797130428">Apri il menu per tornare indietro</translation>
 <translation id="6026538407078977628">Espandi a schermo intero</translation>
+<translation id="6027619584715411062">Accedi per avere a disposizione i tuoi preferiti, le password e altri dati su tutti i dispositivi.</translation>
 <translation id="6039379616847168523">Vai alla scheda successiva</translation>
 <translation id="6040143037577758943">Chiudi</translation>
 <translation id="604124094241169006">Automatico</translation>
@@ -1600,6 +1604,7 @@ Per modificare questa impostazione, <ph name="BEGIN_LINK" />elimina i dati di Ch
 <translation id="7190921792980745354">Bloccare <ph name="MEMBER_FULL_NAME" />?</translation>
 <translation id="7191430249889272776">Scheda aperta in background.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Dovresti cambiarla subito}other{Dovresti cambiarle subito}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{Ripristina la finestra di <ph name="TAB_COUNT_ONE" /> scheda.}other{Ripristina la finestra di <ph name="TAB_COUNT_MANY" /> schede.}}</translation>
 <translation id="7196215469483532480">Spiegazione della Guida alla privacy aperta a schermo intero</translation>
 <translation id="7196455519852483601">Puoi eliminare in parte o tutti i dati della cronologia, cookie, dati dei siti e altro ancora</translation>
 <translation id="7197682514647286393">Elimina rapidamente i dati di navigazione</translation>
@@ -1853,6 +1858,7 @@ Per modificare questa impostazione, <ph name="BEGIN_LINK" />elimina i dati di Ch
 <translation id="8135406045838672858">I PDF scaricati si aprono automaticamente con <ph name="APP_NAME" /></translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Link ricevuto}other{# link ricevuti}}</translation>
 <translation id="8137562778192957619">Non dovrai ricordare questa password perché verrà salvata in Gestore delle password di Google.</translation>
+<translation id="8149825829235553327">Proteggi le tue schede Incognito</translation>
 <translation id="8151185429379586178">Strumenti per sviluppatori</translation>
 <translation id="8152331954420209374">Vai a Lens</translation>
 <translation id="8153206878708357851">Attiva/disattiva la navigazione con cursore</translation>

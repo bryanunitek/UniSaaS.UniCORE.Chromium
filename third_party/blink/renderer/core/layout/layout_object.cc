@@ -231,17 +231,32 @@ inline bool CalculateCanTraversePhysicalFragments(const LayoutObject& obj) {
   return true;
 }
 
-bool HasNativeBackgroundPainter(Node* node) {
+bool MaybeHasNativeBackgroundPainter(Node* node) {
   Element* element = DynamicTo<Element>(node);
-  if (!element)
+  if (!element) {
     return false;
+  }
 
   ElementAnimations* element_animations = element->GetElementAnimations();
-  if (!element_animations)
+  if (!element_animations) {
     return false;
+  }
 
-  return element_animations->CompositedBackgroundColorStatus() ==
-         ElementAnimations::CompositedPaintStatus::kComposited;
+  NativePaintWorkletData* npw_data =
+      element_animations->GetBackgroundColorNpwData();
+  if (!npw_data) {
+    return false;
+  }
+
+  switch (npw_data->GetCompositedPaintStatus()) {
+    case ElementAnimations::CompositedPaintStatus::kComposited:
+    case ElementAnimations::CompositedPaintStatus::kNeedsRepaint:
+      return true;
+
+    case ElementAnimations::CompositedPaintStatus::kNotComposited:
+    case ElementAnimations::CompositedPaintStatus::kNoAnimation:
+      return false;
+  }
 }
 
 bool NeedsForcedUpdateForBackgroundPainter(Node* node,
@@ -253,6 +268,12 @@ bool NeedsForcedUpdateForBackgroundPainter(Node* node,
       element_animations->GetBackgroundColorNpwData();
   CHECK(npw_data);
   if (npw_data->NeedsKeyframeSnapshotUpdate()) {
+    return true;
+  }
+
+  if (npw_data->GetCompositedPaintStatus() ==
+      ElementAnimations::CompositedPaintStatus::kNeedsRepaint) {
+    // Requires a fresh compositing decision.
     return true;
   }
 
@@ -293,7 +314,7 @@ StyleDifference AdjustForCompositableAnimationPaint(
   DCHECK(new_style);
 
   bool skip_background_color_paint_invalidation =
-      HasNativeBackgroundPainter(node)
+      MaybeHasNativeBackgroundPainter(node)
           ? !NeedsForcedUpdateForBackgroundPainter(
                 node, diff.background_color_changed)
           : !diff.background_color_changed;
@@ -786,7 +807,7 @@ void LayoutObject::AddChild(LayoutObject* new_child,
                    DynamicTo<LayoutTextCombine>(SlowLastChild())) {
       last_child->AddChild(new_child);
     } else {
-      children->AppendChildNode(
+      children->InsertChildNode(
           this, LayoutTextCombine::CreateAnonymous(To<LayoutText>(new_child)));
     }
   } else {
@@ -1641,7 +1662,8 @@ void LayoutObject::MarkContainerChainForLayout(bool schedule_relayout) {
   // the intention of visiting it during this layout. We shouldn't be
   // scheduling it to be laid out later. Also, scheduleRelayout() must not be
   // called while iterating LocalFrameView::layout_subtree_root_list_.
-  schedule_relayout &= !GetFrameView()->IsInPerformLayout();
+  const bool is_in_perform_layout = GetFrameView()->IsInPerformLayout();
+  schedule_relayout &= !is_in_perform_layout;
 
   const bool allow_subtree_layout_root =
       schedule_relayout && !View()->NeedsLayout();
@@ -1686,6 +1708,15 @@ void LayoutObject::MarkContainerChainForLayout(bool schedule_relayout) {
       }
       object->SetNeedsSimplifiedLayout(true);
     } else {
+      // Orthogonal writing-mode children will have layout performed on them by
+      // their parent when calculating their min/max sizes. When crossing these
+      // orthogonal writing-mode boundaries, ensure the parent has their min/max
+      // sizes invalidated. Skip this during PerformLayout() (e.g. container
+      // query style recalc) as ancestors are already in layout.
+      if (!is_in_perform_layout && last->IsHorizontalWritingMode() !=
+                                       object->IsHorizontalWritingMode()) {
+        last->InvalidateContainerIntrinsicLogicalWidths();
+      }
       if (object->ChildNeedsFullLayout()) {
         return;
       }
@@ -1752,16 +1783,17 @@ void LayoutObject::MarkParentForSpannerOrOutOfFlowPositionedChange() {
     object->SetNeedsCollectInlines();
   }
 
+  // OOF-positioned objects and column-spanners are propagated up the fragment
+  // tree. Invalidate the entire container chain so that these fragments don't
+  // get reused.
   const LayoutBox* container = ContainingBox();
-  while (object != container) {
-    object->SetChildNeedsLayout(kMarkOnlyThis);
+  while (object) {
+    object->SetChildNeedsLayout();
+    if (object == container) {
+      break;
+    }
     object = object->Container();
   }
-  // Finally mark the parent block for layout. This will mark everything which
-  // has an OOF-positioned object or column spanner in a LayoutResult as
-  // needing layout.
-  if (object)
-    object->SetChildNeedsLayout();
 }
 
 void LayoutObject::SetIntrinsicLogicalWidthsDirty(
@@ -4619,6 +4651,15 @@ void LayoutObject::SetNeedsPaintPropertyUpdate() {
         // direct children of the container
         // (::-internal-overscroll-area-parent).
         container->SetDescendantNeedsPaintPropertyUpdate();
+
+        // The ::-internal-overscroll-area-parent objects of the body element
+        // may reparent the LayoutView's scroll node instead, which then needs
+        // an update as well.
+        if (container_element == GetDocument().body()) {
+          if (LayoutView* view = View()) {
+            view->SetNeedsPaintPropertyUpdate();
+          }
+        }
         return;
       }
     }
@@ -4627,6 +4668,15 @@ void LayoutObject::SetNeedsPaintPropertyUpdate() {
   needs_paint_property_update_ = true;
   if (Parent())
     Parent()->SetDescendantNeedsPaintPropertyUpdate();
+
+  if (IsLayoutView()) {
+    if (Element* body = GetDocument().body()) {
+      if (LayoutObject* body_object = body->GetLayoutObject();
+          body_object && body_object->IsOverscrollContainer()) {
+        body_object->SetNeedsPaintPropertyUpdate();
+      }
+    }
+  }
 }
 
 void LayoutObject::SetDescendantNeedsPaintPropertyUpdate() {

@@ -114,26 +114,19 @@ extension UIView {
   /// always has the same window coordinates as the receiver. The mirror view calls the
   /// `onWindowCoordinatesChanged` closure when its bounds change.
   private func addMirrorViewInWindow() {
+    guard let window = window else { fatalError() }
+    if let mirrorViewInWindow = self.mirrorViewInWindow, mirrorViewInWindow.superview == window {
+      return
+    }
+
     let mirrorViewInWindow = self.mirrorViewInWindow ?? NotifyingView()
     mirrorViewInWindow.backgroundColor = .clear
     mirrorViewInWindow.isUserInteractionEnabled = false
     mirrorViewInWindow.translatesAutoresizingMaskIntoConstraints = false
     mirrorViewInWindow.onLayoutChanged = { [weak self] _ in
-      guard let self = self else { return }
-      if self.cr_forcesSynchronousLayoutUpdates == true {
-        self.cr_onWindowCoordinatesChanged?(self)
-      } else {
-        // Callback on the next turn of the run loop to wait for AutoLayout to have updated the
-        // entire hierarchy. (It can happen that AutoLayout updates the mirror view before the
-        // mirrored view.)
-        DispatchQueue.main.async { [weak self] in
-          guard let self = self else { return }
-          self.cr_onWindowCoordinatesChanged?(self)
-        }
-      }
+      self?.onMirrorViewLayoutChanged()
     }
 
-    guard let window = window else { fatalError() }
     window.insertSubview(mirrorViewInWindow, at: 0)
     NSLayoutConstraint.activate([
       mirrorViewInWindow.topAnchor.constraint(equalTo: topAnchor),
@@ -143,6 +136,21 @@ extension UIView {
     ])
 
     self.mirrorViewInWindow = mirrorViewInWindow
+  }
+
+  /// Called when the mirror view's layout changes.
+  private func onMirrorViewLayoutChanged() {
+    if cr_forcesSynchronousLayoutUpdates {
+      cr_onWindowCoordinatesChanged?(self)
+    } else {
+      // Callback on the next turn of the run loop to wait for AutoLayout to have updated the
+      // entire hierarchy. (It can happen that AutoLayout updates the mirror view before the
+      // mirrored view.)
+      DispatchQueue.main.async { [weak self] in
+        guard let self = self else { return }
+        self.cr_onWindowCoordinatesChanged?(self)
+      }
+    }
   }
 
   /// Removes the mirror view added by a call to `addMirrorViewInWindow`.

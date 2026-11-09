@@ -1910,7 +1910,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.DefaultBrowserPromo.Click"
-    enum="DefaultBrowserPromoSourceType" expires_after="2027-03-01">
+    enum="DefaultBrowserPromoSourceType" expires_after="2027-05-02">
   <owner>xinyiji@chromium.org</owner>
   <owner>hanxi@chromium.org</owner>
   <summary>
@@ -2310,19 +2310,6 @@ chromium-metrics-reviews@google.com.
   <token key="TabObjectType" variants="TabObjectType"/>
 </histogram>
 
-<histogram name="Android.DynamicTopChrome.TabStripTransition.Finished"
-    enum="Boolean" expires_after="2026-08-30">
-  <owner>mschillaci@google.com</owner>
-  <owner>clank-large-form-factors@google.com</owner>
-  <summary>
-    On tablets, when the width of the tab strip passes a certain threshold, the
-    tab strip will start a transition to show / hide it from the top toolbar.
-    This records true when tab strip transition finishes successfully, or false
-    when a new transition starts before an ongoing transition dispatched the
-    finished signal.
-  </summary>
-</histogram>
-
 <histogram name="Android.DynamicTopChrome.WindowResize.DesktopWindowModeState"
     enum="DesktopWindowModeState" expires_after="2027-03-21">
   <owner>aishwaryarj@google.com</owner>
@@ -2618,7 +2605,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Hub.PaneFocused" enum="HubPaneId"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>ckitagawa@chromium.org</owner>
   <owner>clank-hub-dev@google.com</owner>
   <summary>
@@ -2632,7 +2619,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Hub.PaneFocused.PaneSwitcher" enum="HubPaneId"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>ckitagawa@chromium.org</owner>
   <owner>clank-hub-dev@google.com</owner>
   <summary>
@@ -2814,7 +2801,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Input.TouchEvent.Action" enum="MotionEventAction"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>lizeb@google.com</owner>
   <owner>clank-performance-team@google.com</owner>
   <summary>
@@ -2837,7 +2824,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.InputHintChecker.InputHintResult"
-    enum="InputHintResult" expires_after="2027-02-28">
+    enum="InputHintResult" expires_after="2027-05-02">
   <owner>pasko@chromium.org</owner>
   <owner>mthiesse@chromium.org</owner>
   <summary>
@@ -3030,7 +3017,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.InputOnViz.Viz.StateProcessingResult3"
-    enum="InputOnVizStateProcessingResult" expires_after="2027-02-28">
+    enum="InputOnVizStateProcessingResult" expires_after="2027-05-02">
   <owner>kartarsingh@google.com</owner>
   <owner>woa-performance-team@google.com</owner>
   <summary>
@@ -3715,7 +3702,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.MultipleUserProfilesState"
-    enum="MultipleUserProfilesState" expires_after="2027-02-28">
+    enum="MultipleUserProfilesState" expires_after="2027-05-02">
   <owner>ckitagawa@chromium.org</owner>
   <owner>yfriedman@chromium.org</owner>
   <owner>chrome-metrics-team@google.com</owner>
@@ -4165,7 +4152,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Omnibox.InputToNavigationControllerStart2" units="ms"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>spelchat@chromium.org</owner>
   <owner>gjc@google.com</owner>
   <owner>chrome-loading@google.com</owner>
@@ -4267,7 +4254,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Omnibox.OMTPrefetch.TouchDownDelay" units="ms"
-    expires_after="2027-01-01">
+    expires_after="2027-05-02">
   <owner>thesalsa@google.com</owner>
   <owner>chrome-mobile-search@google.com</owner>
   <summary>
@@ -4421,55 +4408,6 @@ chromium-metrics-reviews@google.com.
     timeout, but is not recorded if the onPrepare method is never called.
 
     Note: There is a recording gap between: 2025.09-2026.08.
-  </summary>
-</histogram>
-
-<histogram name="Android.Omnibox.SuggestionList.KeystrokeToUiModel.First"
-    units="ms" expires_after="2027-10-01">
-  <owner>pnoland@chromium.org</owner>
-  <owner>ender@google.com</owner>
-  <summary>
-    Records time elapsed between the keystroke that triggered a typed-text
-    suggestions request and converting the first (synchronous) set of received
-    suggestions to the UI model.
-
-    Unlike Android.Omnibox.SuggestionList.RequestToUiModel.First, whose clock
-    starts when the autocomplete request is issued, this metric includes the
-    deferral between the keystroke and the start of the request, and therefore
-    reflects the latency perceived by the user.
-
-    For the complete, asynchronous iteration see the
-    Android.Omnibox.SuggestionList.KeystrokeToUiModel.Last metric.
-
-    This metric is recorded at most once per typed-text autocomplete request,
-    timed from the most recent edit before the request started: edits arriving
-    while a request is still deferred are coalesced into that request, so the
-    sample count depends on the deferral duration. It is not recorded for
-    zero-prefix suggestions requests.
-  </summary>
-</histogram>
-
-<histogram name="Android.Omnibox.SuggestionList.KeystrokeToUiModel.Last"
-    units="ms" expires_after="2027-10-01">
-  <owner>pnoland@chromium.org</owner>
-  <owner>ender@google.com</owner>
-  <summary>
-    Records time elapsed between the keystroke that triggered a typed-text
-    suggestions request and converting the final (asynchronous) set of received
-    suggestions to the UI model.
-
-    Unlike Android.Omnibox.SuggestionList.RequestToUiModel.Last, whose clock
-    starts when the autocomplete request is issued, this metric includes the
-    deferral between the keystroke and the start of the request, and therefore
-    reflects the latency perceived by the user.
-
-    For the short, synchronous iteration see the
-    Android.Omnibox.SuggestionList.KeystrokeToUiModel.First metric.
-
-    This metric is recorded at most once per typed-text request (on the first
-    reply if that reply is already final). It is not recorded for zero-prefix
-    suggestions requests, and is dropped if the request is canceled before its
-    final reply, e.g. by further input or by ending the Omnibox interaction.
   </summary>
 </histogram>
 
@@ -5157,7 +5095,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.PasswordEcho.SettingReadTime.{SettingType}"
-    units="microseconds" expires_after="2027-03-01">
+    units="microseconds" expires_after="2027-05-02">
   <owner>shahinmd@google.com</owner>
   <owner>ashleynewson@chromium.org</owner>
   <summary>
@@ -5179,7 +5117,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.PasswordEcho.SettingStateInitializationTime"
-    units="microseconds" expires_after="2027-03-01">
+    units="microseconds" expires_after="2027-05-02">
   <owner>shahinmd@google.com</owner>
   <owner>ashleynewson@chromium.org</owner>
   <summary>
@@ -5264,7 +5202,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Pdf.DownloadTime.Transient" units="ms"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>shuyng@google.com</owner>
   <owner>clank-large-form-factors@google.com</owner>
   <summary>
@@ -5405,7 +5343,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.PlayServices.Version" units="versioncode"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>twellington@chromium.org</owner>
   <owner>tedchoc@chromium.org</owner>
   <summary>
@@ -5643,7 +5581,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.RestoreTabsOnFRE.ResultActionFirstShow2"
-    enum="RestoreTabsOnFREResultAction" expires_after="2027-02-07">
+    enum="RestoreTabsOnFREResultAction" expires_after="2027-05-02">
   <owner>ckitagawa@chromium.org</owner>
   <owner>bjfong@google.com</owner>
   <owner>fredmello@chromium.org</owner>
@@ -5654,7 +5592,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.RestoreTabsOnFRE.ResultActionSecondShow2"
-    enum="RestoreTabsOnFREResultAction" expires_after="2027-02-07">
+    enum="RestoreTabsOnFREResultAction" expires_after="2027-05-02">
   <owner>ckitagawa@chromium.org</owner>
   <owner>bjfong@google.com</owner>
   <owner>fredmello@chromium.org</owner>
@@ -5922,7 +5860,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.SideUi.ResizeHandle.TouchState"
-    enum="AndroidSideUiResizeHandleTouchState" expires_after="2026-12-16">
+    enum="AndroidSideUiResizeHandleTouchState" expires_after="2027-12-16">
   <owner>spdonghao@google.com</owner>
   <owner>linyuh@google.com</owner>
   <summary>
@@ -6377,6 +6315,22 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Android.TabListEditorIphController.ResolvedAnchorView"
+    enum="Boolean" expires_after="2027-04-01">
+  <owner>jkoblinsky@google.com</owner>
+  <owner>chrome-omnibox-team@google.com</owner>
+  <summary>
+    Records whether a fully visible tab card was found to anchor the select-tabs
+    IPH bubble. This measures how often viewport constraints prevent the IPH
+    from showing. It is recorded once when the Tab Picker opens with selectable
+    tabs from the Fusebox attachment flow. It records before the Feature
+    Engagement check, so it may emit even if the IPH is not ultimately shown. It
+    is not emitted when the Tab Picker opens with no selectable tabs, when
+    opened from non-Fusebox surfaces (such as Glic), or in other TabListEditor
+    surfaces (such as Tab Switcher or Tab Grid Dialog).
+  </summary>
+</histogram>
+
 <histogram name="Android.TabLoadingService.PendingQueueDepth" units="tabs"
     expires_after="2027-07-07">
   <owner>ckitagawa@chromium.org</owner>
@@ -6437,7 +6391,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.TabNavigationIntercept.Scheme"
-    enum="NavigationInterceptScheme" expires_after="2027-02-28">
+    enum="NavigationInterceptScheme" expires_after="2027-05-02">
   <owner>rbyers@chromium.org</owner>
   <owner>mthiesse@chromium.org</owner>
   <owner>mamir@chromium.org</owner>
@@ -6463,7 +6417,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.TabNavigationInterceptResult.For{Scheme}"
-    enum="NavigationInterceptResult" expires_after="2027-02-14">
+    enum="NavigationInterceptResult" expires_after="2027-05-02">
   <owner>mamir@chromium.org</owner>
   <owner>rbyers@chromium.org</owner>
   <summary>
@@ -6876,7 +6830,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.TopToolbar.InMotionStage" enum="ToolbarInMotionStage"
-    expires_after="2027-02-28">
+    expires_after="2027-05-02">
   <owner>skym@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <summary>
@@ -7056,7 +7010,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.AgsaProcessName" enum="AgsaProcessName"
-    expires_after="2026-11-30">
+    expires_after="2027-05-30">
   <owner>elabadysayed@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -9190,7 +9144,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.SaveState.ExtraHeadersAttached" enum="Boolean"
-    expires_after="2027-03-01">
+    expires_after="2027-05-02">
   <owner>jdeabreu@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -10415,17 +10369,6 @@ chromium-metrics-reviews@google.com.
     <variant name="AppHistoryPage" summary="In-app history"/>
     <variant name="HistoryPage" summary="Standard browser history"/>
   </token>
-</histogram>
-
-<histogram name="ChromiumAndroidLinker.RelroAvailableImmediately"
-    enum="BooleanRelroAvailableImmediately" expires_after="2023-12-29">
-  <owner>lizeb@chromium.org</owner>
-  <owner>pasko@chromium.org</owner>
-  <summary>
-    Recorded when RELRO is replaced with a shared memory region, in all
-    processes consuming RELRO. Indicates whether the shared RELRO was available
-    synchronously right after the native library was loaded. ModernLinker only.
-  </summary>
 </histogram>
 
 <histogram name="ChromiumAndroidLinker.RelroNotSharedPercentage" units="%"

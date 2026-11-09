@@ -8,6 +8,7 @@
 #include "chrome/browser/enterprise/test/management_context_mixin.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "components/enterprise/net/core/features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/policy_constants.h"
@@ -475,6 +476,82 @@ class ProxyOverrideRulesUnmanagedDeviceBrowserTest
 // even if EnableProxyOverrideRulesForAllUsers is not set.
 IN_PROC_BROWSER_TEST_F(ProxyOverrideRulesUnmanagedDeviceBrowserTest,
                        WorksOnUnmanagedDevice) {
+  base::ListValue rules;
+  rules.Append(CreateProxyRule(
+      kDestinationHost,
+      "PROXY " + embedded_test_server()->host_port_pair().ToString()));
+
+  SetUserProxyOverrideRules(std::move(rules));
+
+  GURL destination_url = GURL(base::StringPrintf(
+      "http://%s:%d/simple.html", kDestinationHost, kUnreachablePort));
+  EXPECT_TRUE(chrome_test_utils::NavigateToURL(
+      chrome_test_utils::GetActiveWebContents(this), destination_url));
+}
+
+class ProxyOverrideRulesPlatformManagedDeviceBrowserTest
+    : public ProxyOverrideRulesTestBase {
+ public:
+  ProxyOverrideRulesPlatformManagedDeviceBrowserTest()
+      : ProxyOverrideRulesTestBase(ManagementContext{
+            .is_cloud_user_managed = true,
+            .is_cloud_machine_managed = false,
+            .is_platform_managed = true,
+            .affiliated = false,
+        }) {}
+
+ private:
+  base::test::ScopedFeatureList affiliation_feature_list_{
+      enterprise_net::kEnforceProxyAffiliationOnPlatformManagedDevices};
+};
+
+// Verifies that user-scoped ProxyOverrideRules on a platform/EMM-managed
+// device without CBCM are ignored by default and applied when
+// EnableProxyOverrideRulesForAllUsers is enabled.
+IN_PROC_BROWSER_TEST_F(ProxyOverrideRulesPlatformManagedDeviceBrowserTest,
+                       PlatformManagedDeviceWithoutCbcm) {
+  base::ListValue rules;
+  rules.Append(CreateProxyRule(
+      kDestinationHost,
+      "PROXY " + embedded_test_server()->host_port_pair().ToString()));
+
+  SetUserProxyOverrideRules(std::move(rules));
+
+  GURL destination_url = GURL(base::StringPrintf(
+      "http://%s:%d/simple.html", kDestinationHost, kUnreachablePort));
+  EXPECT_FALSE(chrome_test_utils::NavigateToURL(
+      chrome_test_utils::GetActiveWebContents(this), destination_url));
+
+  SetEnableForAllUsers(true);
+  EXPECT_TRUE(chrome_test_utils::NavigateToURL(
+      chrome_test_utils::GetActiveWebContents(this), destination_url));
+}
+
+class ProxyOverrideRulesPlatformManagedDeviceNotEnforcedBrowserTest
+    : public ProxyOverrideRulesTestBase {
+ public:
+  ProxyOverrideRulesPlatformManagedDeviceNotEnforcedBrowserTest()
+      : ProxyOverrideRulesTestBase(ManagementContext{
+            .is_cloud_user_managed = true,
+            .is_cloud_machine_managed = false,
+            .is_platform_managed = true,
+            .affiliated = false,
+        }) {
+    affiliation_feature_list_.InitAndDisableFeature(
+        enterprise_net::kEnforceProxyAffiliationOnPlatformManagedDevices);
+  }
+
+ private:
+  base::test::ScopedFeatureList affiliation_feature_list_;
+};
+
+// Verifies that user-scoped ProxyOverrideRules on a platform/EMM-managed
+// device without CBCM are applied when
+// `kEnforceProxyAffiliationOnPlatformManagedDevices` is disabled, even if
+// EnableProxyOverrideRulesForAllUsers is not set.
+IN_PROC_BROWSER_TEST_F(
+    ProxyOverrideRulesPlatformManagedDeviceNotEnforcedBrowserTest,
+    AppliedWithoutEnableForAllUsers) {
   base::ListValue rules;
   rules.Append(CreateProxyRule(
       kDestinationHost,

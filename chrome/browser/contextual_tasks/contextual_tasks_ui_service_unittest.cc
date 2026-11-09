@@ -3394,7 +3394,7 @@ TEST_F(
                     const blink::mojom::WindowFeatures& features,
                     BrowserWindowInterface* browser) {
         EXPECT_EQ(external_url, params.url);
-        // CURRENT_TAB should be converted to NEW_FOREGROUND_TAB.
+        // `kCurrentTab` should be converted to `kNewForegroundTab`.
         EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewForegroundTab,
                   params.disposition);
         run_loop.Quit();
@@ -4088,14 +4088,16 @@ TEST_F(
                     const blink::mojom::WindowFeatures& features,
                     BrowserWindowInterface* target_browser) {
         EXPECT_EQ(citation_url, params.url);
-        EXPECT_EQ(WindowOpenDisposition::kNewBackgroundTab, params.disposition);
+        EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
+                  params.disposition);
         run_loop.Quit();
       });
 
-  content::OpenURLParams open_params(citation_url, content::Referrer(),
-                                     WindowOpenDisposition::kNewBackgroundTab,
-                                     ui::PageTransition::PAGE_TRANSITION_LINK,
-                                     /*is_renderer_initiated=*/true);
+  content::OpenURLParams open_params(
+      citation_url, content::Referrer(),
+      ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
+      ui::PageTransition::PAGE_TRANSITION_LINK,
+      /*is_renderer_initiated=*/true);
 
   EXPECT_TRUE(service_for_nav_->HandleNavigation(
       std::move(open_params), panel_contents.get(),
@@ -5933,5 +5935,23 @@ TEST_F(ContextualTasksUiServiceTest, SidePanelUrlChangesSyncStaleCsParam) {
                              captcha_url, panel_contents.get()));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Incognito always uses dark mode, on all platforms.
+TEST_F(ContextualTasksUiServiceTest,
+       SidePanelUrlChangesUseDarkModeInIncognito) {
+  Profile* otr_profile =
+      profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  std::unique_ptr<content::WebContents> panel_contents =
+      content::WebContentsTester::CreateTestWebContents(
+          otr_profile, content::SiteInstance::Create(otr_profile));
+
+  const GURL url = ContextualTasksUiService::AddRequiredSidePanelUrlChanges(
+      GURL("https://www.google.com/search?udm=50&q=test"),
+      panel_contents.get());
+
+  std::string cs_value;
+  ASSERT_TRUE(net::GetValueForKeyInQuery(url, "cs", &cs_value));
+  EXPECT_EQ(cs_value, "1");
+}
 
 }  // namespace contextual_tasks

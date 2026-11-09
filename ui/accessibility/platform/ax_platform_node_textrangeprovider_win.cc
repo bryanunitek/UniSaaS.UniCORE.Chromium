@@ -337,18 +337,54 @@ HRESULT AXPlatformNodeTextRangeProviderWin::ExpandToEnclosingUnitImpl(
            AXBoundaryDetection::kDontCheckInitialPosition}));
       break;
     case TextUnit_Word: {
-      AXPositionInstance start_backup = start()->Clone();
-      SetStart(start()->CreatePreviousWordStartPosition(
-          {AXBoundaryBehavior::kStopAtAnchorBoundary,
-           AXBoundaryDetection::kCheckInitialPosition}));
+      AXPositionInstance original_start = start()->Clone();
+      AXPositionInstance word_start =
+          original_start->CreatePreviousWordStartPosition(
+              {AXBoundaryBehavior::kStopAtLastAnchorBoundary,
+               AXBoundaryDetection::kCheckInitialPosition});
 
-      // Since start_ is already located at a word boundary, we need to cross it
-      // in order to move to the next one. Because Windows ATs behave
-      // undesirably when the start and end endpoints are not in the same anchor
-      // (for character and word navigation), stop at anchor boundary.
-      SetEnd(start()->CreateNextWordStartPosition(
-          {AXBoundaryBehavior::kStopAtAnchorBoundary,
-           AXBoundaryDetection::kDontCheckInitialPosition}));
+      // UIA word ranges should include trailing word-break characters:
+      // https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationtextunits#word
+      // For example, the first word in "one two" expands to "one ".
+      // With cross-anchor offsets, the split word in ["This h", "aas style"]
+      // expands to "haas ".
+      // Find the word end across anchors, then the next word start only in
+      // that final anchor. This preserves existing separator handling rather
+      // than newly including a following line-break anchor.
+      AXPositionInstance expanded_end;
+      if (word_start->AtStartOfWord()) {
+        AXPositionInstance word_end = word_start->CreateNextWordEndPosition(
+            {AXBoundaryBehavior::kStopAtLastAnchorBoundary,
+             AXBoundaryDetection::kDontCheckInitialPosition});
+        expanded_end = word_end->CreateNextWordStartPosition(
+            {AXBoundaryBehavior::kStopAtAnchorBoundary,
+             AXBoundaryDetection::kCheckInitialPosition});
+      }
+      // In these examples, each list item is an anchor. | marks the original
+      // start position, not a character in the text.
+      //
+      // At document start, [" | two"] has no preceding word start. The search
+      // stops at offset 0, although "two" starts at offset 2.
+      // In ["one", " | two"], it instead finds "one", ending before the caret.
+      // In either case, keep the original anchor's "  " unit. Similarly,
+      // ["one", "++|"] keeps "++" with the computed boundary fallback.
+      //
+      // Reject an end equal to the original start too, except at paragraph end:
+      // ["This h", "aas|"] should then keep "haas", not fall back to "aas",
+      // even if another paragraph follows. An end before the caret is still
+      // rejected at paragraph end.
+      if (!expanded_end || *expanded_end < *original_start ||
+          (*expanded_end == *original_start &&
+           !original_start->AtEndOfParagraph())) {
+        word_start = original_start->CreatePreviousWordStartPosition(
+            {AXBoundaryBehavior::kStopAtAnchorBoundary,
+             AXBoundaryDetection::kCheckInitialPosition});
+        expanded_end = word_start->CreateNextWordStartPosition(
+            {AXBoundaryBehavior::kStopAtAnchorBoundary,
+             AXBoundaryDetection::kDontCheckInitialPosition});
+      }
+      SetStart(std::move(word_start));
+      SetEnd(std::move(expanded_end));
       break;
     }
     case TextUnit_Line:
@@ -616,8 +652,9 @@ HRESULT AXPlatformNodeTextRangeProviderWin::FindText(
         GetAppendedNewLinesCountInRange(find_start, find_length,
                                         appended_newlines_indices);
     const int max_end_offset = end_ancestor_position->text_offset();
-    CHECK(start_offset <= end_offset && end_offset <= max_end_offset,
-          base::NotFatalUntil::M163);
+    // TODO(crbug.com/580278606): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
+    DCHECK(start_offset <= end_offset && end_offset <= max_end_offset);
 
     AXPositionInstance start =
         AXNodePosition::CreateTextPosition(*anchor, start_offset,
@@ -696,7 +733,9 @@ HRESULT AXPlatformNodeTextRangeProviderWin::GetAttributeValue(
     // If the iterator creates a null position, then it has likely overrun the
     // range, return failure. This is unexpected but may happen if the range
     // became inverted.
-    CHECK(!it->IsNullPosition(), base::NotFatalUntil::M163);
+    // TODO(crbug.com/582100694): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
+    DCHECK(!it->IsNullPosition());
     if (it->IsNullPosition()) {
       return E_FAIL;
     }
@@ -1667,7 +1706,9 @@ void AXPlatformNodeTextRangeProviderWin::NormalizeTextRange(
     end = std::move(normalized_end);
   }
 
-  CHECK_LE(*start, *end, base::NotFatalUntil::M163);
+  // TODO(crbug.com/580500253): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK_LE(*start, *end);
 }
 
 // static
@@ -1701,7 +1742,9 @@ void AXPlatformNodeTextRangeProviderWin::NormalizeAsUnignoredTextRange(
     return;
   NormalizeAsUnignoredPosition(start);
   NormalizeAsUnignoredPosition(end);
-  CHECK_LE(*start, *end, base::NotFatalUntil::M163);
+  // TODO(crbug.com/580442550): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK_LE(*start, *end);
 }
 
 AXPlatformNodeDelegate* AXPlatformNodeTextRangeProviderWin::GetRootDelegate(
@@ -2087,8 +2130,10 @@ void AXPlatformNodeTextRangeProviderWin::TextRangeEndpoints::
   // AXPosition::SlowCompareTo in the < operator below.
   NormalizeAsUnignoredPosition(new_endpoint);
   NormalizeAsUnignoredPosition(other_endpoint);
-  CHECK(!new_endpoint->IsIgnored(), base::NotFatalUntil::M163);
-  CHECK(!other_endpoint->IsIgnored(), base::NotFatalUntil::M163);
+  // TODO(crbug.com/580099108): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!new_endpoint->IsIgnored());
+  DCHECK(!other_endpoint->IsIgnored());
 
   // If after all the above operations we're still left with a new endpoint that
   // is a descendant of the subtree root being deleted, just point at a null
@@ -2155,7 +2200,9 @@ void AXPlatformNodeTextRangeProviderWin::TextRangeEndpoints::
 
 void AXPlatformNodeTextRangeProviderWin::TextRangeEndpoints::
     OnTextDeletionOrInsertion(const AXNode& node, const AXNodeData& new_data) {
-  CHECK(new_data.IsTextField(), base::NotFatalUntil::M163);
+  // TODO(crbug.com/580133497): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(new_data.IsTextField());
 
   base::span<const int> start_offsets = new_data.GetIntListAttribute(
       ax::mojom::IntListAttribute::kTextOperationStartOffsets);

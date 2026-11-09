@@ -108,6 +108,8 @@ import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.signin.services.UnifiedConsentServiceBridge;
 import org.chromium.chrome.browser.signin.services.UnifiedConsentServiceBridgeJni;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityService;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityServiceFactory;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.SyncTestRule;
 import org.chromium.chrome.browser.sync.ui.PassphraseCreationDialogFragment;
@@ -240,6 +242,10 @@ public class ManageSyncSettingsTest {
     @Mock private HistorySyncHelper mHistorySyncHelperMock;
     @Mock private SyncService mSyncService;
     @Mock private ReauthenticatorBridge mReauthenticatorMock;
+    @Mock private SubscriptionEligibilityService mSubscriptionEligibilityService;
+
+    // Returned by mSubscriptionEligibilityService. Tests set it to 1 to get the AI tier ring.
+    private int mAiSubscriptionTier;
 
     @Before
     public void setUp() {
@@ -266,6 +272,10 @@ public class ManageSyncSettingsTest {
         ThreadUtils.runOnUiThreadBlocking(() -> mFakeExtensionUiBackendRule.setEnabled(false));
 
         PasswordManagerUtilBridgeJni.setInstanceForTesting(mPasswordManagerUtilBridgeJniMock);
+
+        when(mSubscriptionEligibilityService.getAiSubscriptionTier())
+                .thenAnswer(invocation -> mAiSubscriptionTier);
+        SubscriptionEligibilityServiceFactory.setForTesting(mSubscriptionEligibilityService);
     }
 
     @Test
@@ -839,6 +849,29 @@ public class ManageSyncSettingsTest {
     @Test
     @LargeTest
     @Feature({"Sync", "RenderTest"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    public void testSigninSettingsTopAvatarWithAiTierRing() throws Exception {
+        mAiSubscriptionTier = 1;
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+        final ManageSyncSettings fragment = startManageSyncPreferences();
+
+        ViewUtils.waitForVisibleView(withId(R.id.central_account_card));
+        // Don't capture the card before it shows the ring.
+        CriteriaHelper.pollInstrumentationThread(() -> centralAccountCardHasAiTierRing(fragment));
+        View view =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            return fragment.getActivity().findViewById(R.id.central_account_card);
+                        });
+        render(view, "sign_in_settings_top_avatar_with_ai_tier_ring");
+    }
+
+    @Test
+    @LargeTest
+    @Feature({"Sync", "RenderTest"})
     public void testSigninSettingsTopAvatarWithNoName() throws Exception {
         mSyncTestRule.getSigninTestRule().addAccountThenSignin(TestAccounts.TEST_ACCOUNT_NO_NAME);
         final ManageSyncSettings fragment = startManageSyncPreferences();
@@ -906,12 +939,12 @@ public class ManageSyncSettingsTest {
     @Test
     @LargeTest
     @Feature({"Sync", "RenderTest"})
-    @DisableIf.Build(sdk_equals = 35, message = "crbug.com/465817909")
     public void testBottomOfAccountSyncSettingsPage() throws Exception {
         mSyncTestRule.setUpAccountAndSignInForTesting();
         final ManageSyncSettings fragment = startManageSyncPreferences();
         onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_detail))))
                 .perform(RecyclerViewActions.scrollToLastPosition());
+        ViewUtils.waitForVisibleView(withId(R.id.sign_out_button));
         render(fragment, "bottom_of_account_sync_settings_page");
     }
 
@@ -1479,6 +1512,50 @@ public class ManageSyncSettingsTest {
     }
 
     @Test
+    @LargeTest
+    @Feature({"Sync"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    public void testCentralAccountCardShowsAiTierRing() {
+        mAiSubscriptionTier = 1;
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+
+        ManageSyncSettings fragment = startManageSyncPreferences();
+
+        Assert.assertTrue(centralAccountCardHasAiTierRing(fragment));
+    }
+
+    @Test
+    @LargeTest
+    @Feature({"Sync"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    public void testCentralAccountCardHidesAiTierRingWhileIdentityErrorCardShows() {
+        mAiSubscriptionTier = 1;
+        mSyncTestRule.getFakeServerHelper().setCustomPassphraseNigori("passphrase");
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+        SyncService syncService = mSyncTestRule.getSyncService();
+        CriteriaHelper.pollUiThread(() -> syncService.isPassphraseRequiredForPreferredDataTypes());
+
+        // Regression test: the ring used to show if the page was opened with an existing error.
+        ManageSyncSettings fragment = startManageSyncPreferences();
+        Preference identityErrorCard =
+                fragment.findPreference(ManageSyncSettings.PREF_IDENTITY_ERROR_CARD_PREFERENCE);
+        Assert.assertTrue(identityErrorCard.isShown());
+        Assert.assertFalse(centralAccountCardHasAiTierRing(fragment));
+
+        // Resolve the error while the page is open. This also leaves no error for later tests.
+        ThreadUtils.runOnUiThreadBlocking(() -> syncService.setDecryptionPassphrase("passphrase"));
+
+        CriteriaHelper.pollUiThread(() -> !identityErrorCard.isShown());
+        CriteriaHelper.pollInstrumentationThread(() -> centralAccountCardHasAiTierRing(fragment));
+    }
+
+    @Test
     @SmallTest
     @Feature({"Sync"})
     public void testSyncDisabledByPolicy() {
@@ -1623,6 +1700,14 @@ public class ManageSyncSettingsTest {
                 .perform(RecyclerViewActions.scrollTo(hasDescendant(withText(textId))));
         onView(allOf(withText(textId), isDescendantOfA(withId(R.id.preferences_detail))))
                 .check(matches(isDisplayed()));
+    }
+
+    /** Returns whether the image shown by the central account card has the AI tier ring. */
+    private boolean centralAccountCardHasAiTierRing(ManageSyncSettings fragment) {
+        CentralAccountCardPreference preference =
+                fragment.findPreference(ManageSyncSettings.PREF_CENTRAL_ACCOUNT_CARD_PREFERENCE);
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> preference.getProfileDataForTesting().hasAiTierRing());
     }
 
     @Test

@@ -519,11 +519,7 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
 
     /** Build the PropertyModel for the download this page action. */
     protected PropertyModel buildDownloadActionModel(@Nullable Tab currentTab) {
-        int titleId =
-                (ChromeFeatureList.isEnabled(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
-                                && DeviceInfo.isDesktop())
-                        ? R.string.menu_save_page_as
-                        : R.string.download_page;
+        int titleId = DeviceInfo.isDesktop() ? R.string.menu_save_page_as : R.string.download_page;
         PropertyModel downloadButton =
                 AppMenuItemUtils.buildModelForIcon(
                         mContext,
@@ -1344,6 +1340,23 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
             PropertyModel model = buildNewPageZoomModel();
             mPageZoomMenuItemCoordinator.setModel(model);
             return new ListItem(CustomMenuItemType.ZOOM_ITEM, model);
+        }
+        if (ChromeFeatureList.sAndroidZoomImmersive.isEnabled()) {
+            return new ListItem(
+                    AppMenuItemType.TITLE_BUTTON,
+                    AppMenuItemUtils.buildModelForMenuItemWithSecondaryButton(
+                            mContext,
+                            mAppMenuItemTheme,
+                            R.id.page_zoom_id,
+                            R.string.page_zoom_menu_title,
+                            shouldShowIconBeforeItem() ? R.drawable.ic_zoom : Resources.ID_NULL,
+                            R.id.fullscreen_button,
+                            mContext.getString(
+                                    R.string.page_zoom_fullscreen_button_content_description),
+                            assumeNonNull(
+                                    AppCompatResources.getDrawable(
+                                            mContext, R.drawable.ic_fullscreen_enter)),
+                            isMenuIconAtStart()));
         }
         return new ListItem(
                 AppMenuItemType.STANDARD,

@@ -28,11 +28,14 @@ import android.view.animation.Interpolator;
 import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
+import org.jni_zero.JniPtr;
+
 import org.chromium.base.Callback;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.base.MathUtils;
 import org.chromium.base.TimeUtils;
+import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
@@ -327,6 +330,7 @@ public class StripLayoutHelperManager
 
         @Override
         public void click(float x, float y, int buttons, int modifiers) {
+            // Keep getClickedViewForTesting() in sync.
             if (DragDropGlobalState.hasValue()) {
                 return;
             }
@@ -961,11 +965,14 @@ public class StripLayoutHelperManager
     @Override
     public SceneOverlayLayer getUpdatedSceneOverlayTree(
             RectF viewport, RectF visibleViewport, ResourceManager resourceManager) {
-        assert mTabStripTreeProvider != null;
-        mResourceManager = resourceManager;
+        try (TraceEvent e =
+                TraceEvent.scoped("StripLayoutHelperManager.getUpdatedSceneOverlayTree")) {
+            assert mTabStripTreeProvider != null;
+            mResourceManager = resourceManager;
 
-        pushAndUpdateStrip(mSceneLayerYOffset, mSceneLayerVisibleHeight);
-        return mTabStripTreeProvider;
+            pushAndUpdateStrip(mSceneLayerYOffset, mSceneLayerVisibleHeight);
+            return mTabStripTreeProvider;
+        }
     }
 
     private void pushAndUpdateStrip(float yOffsetDp, float visibleHeightDp) {
@@ -978,10 +985,6 @@ public class StripLayoutHelperManager
                                 .getCurrentModel()
                                 .getTabAt(mTabModelSelector.getCurrentModel().index());
         int selectedTabId = selectedTab == null ? TabModel.INVALID_TAB_INDEX : selectedTab.getId();
-        int hoveredTabId =
-                getActiveStripLayoutHelper().getLastHoveredTab() == null
-                        ? TabModel.INVALID_TAB_INDEX
-                        : getActiveStripLayoutHelper().getLastHoveredTab().getTabId();
 
         // When tab strip is hiding, animation will trigger the toolbar moving up and tab strip
         // fade-out in place. We use the visible height to decide the transition progress then
@@ -1003,7 +1006,6 @@ public class StripLayoutHelperManager
                 getActiveStripLayoutHelper().getStripLayoutGroupTitlesToRender(),
                 yOffsetDp,
                 selectedTabId,
-                hoveredTabId,
                 getStripTransitionScrimColor(),
                 mStripTransitionScrimOpacity,
                 getActiveStripLayoutHelper().getLeftPaddingToDraw(),
@@ -1021,7 +1023,7 @@ public class StripLayoutHelperManager
         // TabModelSelectorImpl#onNativeLibraryReady before #setTabModelSelector is called.
         assert tabModel.getProfile() != null;
         mNtbWebUiCoordinator =
-                new NtbWebUiCoordinator(
+                NtbWebUiCoordinator.create(
                         mWindowAndroid,
                         tabModel,
                         (ControlContainer) mControlContainer,
@@ -1055,10 +1057,10 @@ public class StripLayoutHelperManager
 
     /**
      * Returns the pointer to the native TabStripNtbWebUiHost if the WebUI new tab button is in use,
-     * or 0 otherwise.
+     * or null otherwise.
      */
-    public long getNtbWebUiNativePtr() {
-        return mNtbWebUiCoordinator == null ? 0 : mNtbWebUiCoordinator.getNativePtr();
+    public @Nullable JniPtr<NtbWebUiCoordinator.NativeTabStripNtbWebUiHost> getNtbWebUiNativePtr() {
+        return mNtbWebUiCoordinator == null ? null : mNtbWebUiCoordinator.getNativePtr();
     }
 
     @Override
@@ -1389,6 +1391,22 @@ public class StripLayoutHelperManager
         return mTrailingButtonsCoordinator.getModelSelectorButton();
     }
 
+    /**
+     * Returns the view that a touch click at ({@code x}, {@code y}) would reach, without clicking,
+     * or null if the click would reach nothing or a trailing button other than the model selector.
+     * Same order as TabStripEventHandler#click(), so tests can check that a target is clickable
+     * before simulating a click.
+     */
+    public @Nullable StripLayoutView getClickedViewForTesting(float x, float y) {
+        if (DragDropGlobalState.hasValue()) return null;
+        TintedCompositorButton modelSelectorButton = getModelSelectorButton();
+        if (modelSelectorButton != null && modelSelectorButton.checkClickedOrHovered(x, y)) {
+            return modelSelectorButton;
+        }
+        if (mTrailingButtonsCoordinator.checkClickedOrHovered(x, y)) return null;
+        return getActiveStripLayoutHelper().getClickedViewForTesting(x, y);
+    }
+
     @Override
     public void updateObscured(boolean obscureTabContent, boolean obscureToolbar) {
         if (mTabStripObscured == obscureToolbar) return;
@@ -1708,7 +1726,7 @@ public class StripLayoutHelperManager
                     public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
                         if (tab.getId() == lastId) return;
                         getStripLayoutHelper(tab.isIncognitoBranded())
-                                .tabSelected(time(), tab.getId(), lastId, type);
+                                .tabSelected(time(), tab.getId(), lastId);
                     }
 
                     @Override

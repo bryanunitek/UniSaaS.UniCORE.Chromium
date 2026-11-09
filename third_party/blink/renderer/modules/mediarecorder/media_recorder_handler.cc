@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/mediarecorder/media_recorder_handler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -47,6 +48,7 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/timing/performance.h"
 #include "third_party/blink/renderer/modules/mediarecorder/media_recorder.h"
 #include "third_party/blink/renderer/modules/mediarecorder/video_track_recorder.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
@@ -210,8 +212,10 @@ VideoTrackRecorder::CodecProfile VideoStringToCodecProfile(
 
 MediaRecorderHandler::MediaRecorderHandler(
     scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner,
-    KeyFrameRequestProcessor::Configuration key_frame_config)
+    KeyFrameRequestProcessor::Configuration key_frame_config,
+    bool cross_origin_isolated_capability)
     : key_frame_config_(key_frame_config),
+      cross_origin_isolated_capability_(cross_origin_isolated_capability),
       main_thread_task_runner_(std::move(main_thread_task_runner)),
       media_stream_observer_(std::make_unique<MediaStreamObserver>(this)) {}
 
@@ -644,12 +648,13 @@ bool MediaRecorderHandler::Start(int timeslice,
       video_recorders_.emplace_back(
           std::make_unique<VideoTrackRecorderPassthrough>(
               main_thread_task_runner_, video_tracks_[0],
-              weak_video_factory_.GetWeakCell(), key_frame_config_));
+              weak_video_factory_.GetWeakCell(), key_frame_config_,
+              cross_origin_isolated_capability_));
     } else {
       video_recorders_.emplace_back(std::make_unique<VideoTrackRecorderImpl>(
           main_thread_task_runner_, video_codec_profile_, video_tracks_[0],
           weak_video_factory_.GetWeakCell(), video_bits_per_second_,
-          key_frame_config_));
+          key_frame_config_, cross_origin_isolated_capability_));
     }
   }
 
@@ -709,7 +714,7 @@ void MediaRecorderHandler::Pause() {
   for (const auto& audio_recorder : audio_recorders_)
     audio_recorder->Pause();
   if (muxer_adapter_) {
-    muxer_adapter_->Pause();
+    muxer_adapter_->Pause(CoarsenTimestamp(base::TimeTicks::Now()));
   }
 }
 
@@ -722,7 +727,7 @@ void MediaRecorderHandler::Resume() {
   for (const auto& audio_recorder : audio_recorders_)
     audio_recorder->Resume();
   if (muxer_adapter_) {
-    muxer_adapter_->Resume();
+    muxer_adapter_->Resume(CoarsenTimestamp(base::TimeTicks::Now()));
   }
 }
 
@@ -1028,7 +1033,7 @@ void MediaRecorderHandler::HandleEncodedVideo(
   }
   if (!muxer_adapter_->OnEncodedVideo(params, std::move(encoded_data),
                                       std::move(codec_description),
-                                      timestamp)) {
+                                      CoarsenTimestamp(timestamp))) {
     recorder_->OnError(DOMExceptionCode::kUnknownError,
                        "Error muxing video data");
   }
@@ -1046,10 +1051,30 @@ void MediaRecorderHandler::OnEncodedAudio(
   }
   if (!muxer_adapter_->OnEncodedAudio(params, std::move(encoded_data),
                                       std::move(codec_description),
-                                      timestamp)) {
+                                      CoarsenTimestamp(timestamp))) {
     recorder_->OnError(DOMExceptionCode::kUnknownError,
                        "Error muxing audio data");
   }
+}
+
+base::TimeTicks MediaRecorderHandler::CoarsenTimestamp(
+    base::TimeTicks timestamp) const {
+  // The muxer serializes timestamps into the recorded bytes at a resolution
+  // that can be finer than what `performance.now()` exposes (e.g. 30 kHz for
+  // MP4 video), and the bytes are handed to the page. Apply the same clamping
+  // as `performance.now()` so that recordings can't be used as a
+  // high-resolution timer. Clamping absolute time keeps the same grid as
+  // `Performance::MonotonicTimeToDOMHighResTimeStamp()`, and using the
+  // clamper backing `performance.now()` avoids exposing a second, differently
+  // jittered clock that could be combined with it.
+  if (timestamp.is_null()) {
+    return timestamp;
+  }
+  const double clamped_ms = Performance::ClampTimeResolution(
+      timestamp.since_origin(), cross_origin_isolated_capability_);
+  return base::TimeTicks() +
+         base::Microseconds(
+             std::round(clamped_ms * base::Time::kMicrosecondsPerMillisecond));
 }
 
 void MediaRecorderHandler::OnAudioEncodingError(

@@ -642,19 +642,16 @@ ci.thin_tester(
                 mixins = "mac_26_arm64",
                 remove_mixins = "mac_26_vm_optional",
             ),
-            # TODO(crbug.com/436628295): tests fails on VM when host OS
-            # is 26.4 while VM OS is 15.6.1
-            "interactive_ui_tests": targets.per_test_modification(
-                mixins = [
-                    targets.mixin(
-                        swarming = targets.swarming(
-                            shards = 16,
-                        ),
-                    ),
-                    "mac_26_arm64",
-                    "ci_only",
+            "interactive_ui_tests": targets.mixin(
+                # TODO(b/580867054): Remove filter once Mac VM display size is
+                # increased.
+                args = [
+                    "--test-launcher-filter-file=../../testing/buildbot/filters/mac.mac26-arm64-rel.interactive_ui_tests.filter",
                 ],
-                remove_mixins = "mac_26_vm_optional",
+                enable_rts_filtering = True,
+                swarming = targets.swarming(
+                    shards = 16,
+                ),
             ),
             # TODO(crbug.com/500901289): tests are flaky on VM when host OS is 26+ while VM OS is 15.6.1
             "sync_integration_tests": targets.per_test_modification(
@@ -1115,7 +1112,7 @@ ci.thin_tester(
                     "--disable-features=InitialWebUI,WebUIReloadButton,SkipIPCChannelPausingForNonGuests,WebUIInProcessResourceLoadingV2,InitialWebUISyncNavStartToCommit",
                 ],
                 swarming = targets.swarming(
-                    shards = 4,
+                    shards = 8,
                 ),
             ),
             "unit_tests": targets.mixin(
@@ -1308,31 +1305,6 @@ ios_builder(
             "xcode_27_main",
             "xctest",
         ],
-        per_test_modifications = {
-            # TODO(crbug.com/579116520): Remove ci_only on these 20+ minute
-            # suites once high CQ pending times on ios-simulator are resolved.
-            "components_unittests iPad (A16) 27.0": targets.mixin(
-                ci_only = True,
-            ),
-            "components_unittests iPhone 16 26.5": targets.mixin(
-                ci_only = True,
-            ),
-            "components_unittests iPhone 16 27.0": targets.mixin(
-                ci_only = True,
-            ),
-            "ios_chrome_integration_eg2tests_module iPhone 16 27.0": targets.mixin(
-                ci_only = True,
-            ),
-            "ios_chrome_unittests iPad (A16) 27.0": targets.mixin(
-                ci_only = True,
-            ),
-            "ios_chrome_unittests iPhone 16 26.5": targets.mixin(
-                ci_only = True,
-            ),
-            "ios_chrome_unittests iPhone 16 27.0": targets.mixin(
-                ci_only = True,
-            ),
-        },
     ),
     cpu = cpu.ARM64,
     console_view_entry = [

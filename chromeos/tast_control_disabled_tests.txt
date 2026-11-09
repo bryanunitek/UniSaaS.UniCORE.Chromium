@@ -35,8 +35,6 @@ tast.arc.Downloads
 tast.videoconferencing.OpenCLCacher
 
 # b/384060114
-tast.inputs.InputMethodShelfInputs@reven-vmtest
-tast.inputs.InputMethodShelfInputs@betty
 tast.inputs.VirtualKeyboardHandwriting.docked@reven-vmtest
 tast.inputs.VirtualKeyboardHandwriting.floating@reven-vmtest
 
@@ -61,8 +59,6 @@ tast.apps.SystemWebAppsInstallGuest
 # b/422132031
 tast.inputs.VirtualKeyboardHandwriting.docked
 tast.inputs.VirtualKeyboardHandwriting.floating
-tast.inputs.VirtualKeyboardJapaneseInputMode
-tast.inputs.VirtualKeyboardSpeech
 
 # b/424789710
 tast.apps.LaunchGalleryFromNotifications.stable
@@ -78,9 +74,6 @@ tast.bruschetta.Toolkit.qt6_x11@betty
 
 # https://crbug.com/432304431
 tast.featured.FieldTrialEarlyBoot.active_trial
-
-# https://crbug.com/459929970
-tast.crostini.SyncTime.baguette_stable
 
 # https://crbug.com/460052469
 tast.apps.LaunchHelpAppFromShortcut.stable_guest
@@ -114,12 +107,5 @@ tast.crash.ValidateFirmwareDumpGeneration.multi_session_policy_all
 tast.crash.ValidateFirmwareDumpGeneration.policy_all
 tast.crash.ValidateFirmwareDumpGeneration.policy_none
 tast.crash.ValidateFirmwareDumpGeneration.policy_wifi
-
-# b/579292091: Consistently failing on jacuzzi since ChromeOS snapshot 122704
-# (LKGM 16872.0.0-1081298), blocking LKGM uprev.
-# TODO(b/579292091): Re-enable once the ChromeOS-side regression is fixed.
-tast.arc.AudioValidity.record_vm@jacuzzi
-tast.arc.AudioValidity.record_vm_fieldtrial_testing_config_on@jacuzzi
-tast.arc.AudioValidity.record_vm_fieldtrial_testing_config_off@jacuzzi
 
 # READ COMMENT AT TOP BEFORE ADDING NEW TESTS HERE.

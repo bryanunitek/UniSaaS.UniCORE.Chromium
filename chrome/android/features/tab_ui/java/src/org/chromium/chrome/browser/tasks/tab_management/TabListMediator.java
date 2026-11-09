@@ -84,6 +84,7 @@ import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider.TabFaviconFetch
 import org.chromium.chrome.browser.tab_ui.ThumbnailFetcher;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider.MultiThumbnailMetadata;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.UndoBarExplicitTrigger;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabClosureParamsUtils;
@@ -108,11 +109,16 @@ import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabActionS
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
 import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiMetricsHelper.TabListEditorActionMetricGroups;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabGroupItem;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabItem;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabListDataObserver;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabListDataObserver.PayloadType;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabListDataProvider;
+import org.chromium.chrome.browser.tasks.tab_management.data_provider.TabListItem;
 import org.chromium.chrome.browser.tasks.tab_management.labels.TabCardLabelData;
 import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabListProperties.RailCollapseState;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarExplicitTrigger;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.util.TextResolver;
@@ -375,6 +381,7 @@ public class TabListMediator implements TabListNotificationHandler {
             mPriceWelcomeMessageControllerSupplier;
     private final @Nullable DataSharingTabManager mDataSharingTabManager;
     private final TabModelObserver mTabModelObserver;
+    private final TabListDataObserver mTabListDataObserver;
     private final TabListLayoutDelegate mTabListLayoutDelegate;
     private final TabListObserverManager mObserverManager;
     private final TabActionListener mTabClosedListener;
@@ -413,6 +420,10 @@ public class TabListMediator implements TabListNotificationHandler {
     private boolean mSuppressUpdateLayout;
     private boolean mInBatchReset;
     private @Nullable Boolean mTrackPricesOnTabsEnabledForBatch;
+
+    // The quickMode value from the latest resetWithListOfTabs that requested a data reset from the
+    // TabListDataProvider. Consumed by onProviderDataReset.
+    private boolean mPendingQuickMode;
 
     private final ActorUiTabController.Observer mActorObserver =
             new ActorUiTabController.Observer() {
@@ -632,6 +643,8 @@ public class TabListMediator implements TabListNotificationHandler {
         }
         mObserverManager = new TabListObserverManager(mTabListLayoutDelegate);
 
+        // TODO(crbug.com/562590772): Remove mTabModelObserver once all surfaces use
+        // TabListDataProvider.
         mTabModelObserver =
                 new TabModelObserver() {
                     @Override
@@ -727,6 +740,46 @@ public class TabListMediator implements TabListNotificationHandler {
                             int targetIndex = mTabListLayoutDelegate.getInsertionIndexOfTab(tab);
                             mModelList.moveItem(index, targetIndex);
                         }
+                    }
+                };
+
+        mTabListDataObserver =
+                new TabListDataObserver() {
+                    @Override
+                    public void onDataReset(List<? extends TabListItem> items) {
+                        onProviderDataReset(items);
+                    }
+
+                    @Override
+                    public void onItemsInserted(
+                            List<? extends TabListItem> items, @Nullable TabListItem after) {
+                        onProviderItemsInserted(items, after);
+                    }
+
+                    @Override
+                    public void onItemsRemoved(List<? extends TabListItem> items) {
+                        onProviderItemsRemoved(items);
+                    }
+
+                    @Override
+                    public void onItemsMoved(
+                            List<? extends TabListItem> items, @Nullable TabListItem after) {
+                        onProviderItemsMoved(items, after);
+                    }
+
+                    @Override
+                    public void onItemUpdated(TabListItem item, @PayloadType int payload) {
+                        // TODO(crbug.com/562590772): Handle updated items.
+                    }
+
+                    @Override
+                    public void onTabClosureUndone(@TabId int tabId) {
+                        // TODO(crbug.com/562590772): Handle tab closure undone.
+                    }
+
+                    @Override
+                    public void onTabClosureCommitted(@TabId int tabId) {
+                        // TODO(crbug.com/562590772): Handle tab closure committed.
                     }
                 };
 
@@ -861,15 +914,16 @@ public class TabListMediator implements TabListNotificationHandler {
                         ? sTabGroupCreationDialogManagerForTesting
                         : new TabGroupCreationDialogManager(
                                 activity, assumeNonNull(modalDialogManager), onTabGroupCreation);
+        String componentName = TabUiMetricsHelper.getComponentNameForMetrics(componentId);
         mTabGridItemTouchHelperCallback =
                 new TabGridItemTouchHelperCallback(
                         activity,
                         tabGroupCreationDialogManager,
                         mModelList,
                         () -> assertNonNull(mCurrentTabModelSupplier.get()),
-                        swipeSafeTabActionListener,
+                        new TabSwipeHandler(mModelList, swipeSafeTabActionListener, componentName),
                         mUngroupBarStatusHandler,
-                        TabUiMetricsHelper.getComponentNameForMetrics(componentId),
+                        componentName,
                         mLayoutType,
                         onDragStateChangedListener);
 
@@ -980,6 +1034,11 @@ public class TabListMediator implements TabListNotificationHandler {
         mTabListFaviconProvider.initWithNative(originalProfile);
 
         mCurrentTabModelSupplier.addSyncObserverAndCallIfNonNull(mOnTabModelChanged);
+
+        TabListDataProvider dataProvider = mTabListConfig.dataProvider;
+        if (dataProvider != null) {
+            dataProvider.addObserver(mTabListDataObserver);
+        }
 
         mTabGroupSyncService = TabGroupSyncServiceFactory.getForProfile(originalProfile);
         if (mTabGroupSyncService != null) {
@@ -1092,6 +1151,7 @@ public class TabListMediator implements TabListNotificationHandler {
         return tabIds;
     }
 
+    // TODO(crbug.com/562590772): Remove once Virtualization is enabled by default.
     private boolean areTabsUnchanged(@Nullable List<Tab> tabs) {
         int tabsCount = 0;
         for (int i = 0; i < mModelList.size(); i++) {
@@ -1132,17 +1192,39 @@ public class TabListMediator implements TabListNotificationHandler {
      */
     public void resetWithListOfTabs(
             @Nullable List<Tab> tabs, @Nullable List<String> tabGroupSyncIds, boolean quickMode) {
-        mInBatchReset = true;
-        mTrackPricesOnTabsEnabledForBatch = null;
+        TabListDataProvider dataProvider = mTabListConfig.dataProvider;
         mTrackingTabs = tabs != null;
         TabModel tabModel = mCurrentTabModelSupplier.get();
+        if (tabs == null) {
+            removeObservers(tabModel);
+        }
+
+        if (dataProvider != null) {
+            assert tabGroupSyncIds == null
+                    : "Saved tab group sync IDs are not yet supported with TabListDataProvider.";
+            if (tabs == null) {
+                mPendingQuickMode = false;
+                dataProvider.stop();
+                clearProviderTabCards();
+                return;
+            }
+            assert tabModel != null;
+            recordPriceAnnotationsEnabledMetrics();
+            mPendingQuickMode = quickMode;
+            dataProvider.requestDataReset();
+            return;
+        }
+
+        mInBatchReset = true;
+        mTrackPricesOnTabsEnabledForBatch = null;
+
+        // TODO(crbug.com/562590772): Remove the legacy TabModel-backed tab/group path
+        // (addObservers, areTabsUnchanged, addTabCardToModel, insertChildTabs,
+        // mTabModelObserver, mTabGroupModelFilterObserver) once Flat, Grouped, and Nested
+        // use TabListDataProvider; only tabGroupSyncIds (saved tab groups) will remain.
         if (tabs != null) {
             assert tabModel != null;
             addObservers(tabModel, tabs);
-        } else {
-            removeObservers(tabModel);
-        }
-        if (tabs != null) {
             recordPriceAnnotationsEnabledMetrics();
         }
         // Only update tabs in place if there are no saved tab groups to be shown.
@@ -1247,6 +1329,11 @@ public class TabListMediator implements TabListNotificationHandler {
     /** Prepares the tab list for hiding by detaching observers before the exit animation. */
     void prepareHiding() {
         if (!mTrackingTabs) return;
+        TabListDataProvider dataProvider = mTabListConfig.dataProvider;
+        if (dataProvider != null) {
+            mPendingQuickMode = false;
+            dataProvider.stop();
+        }
         removeObservers(mCurrentTabModelSupplier.get());
         mTrackingTabs = false;
     }
@@ -1523,6 +1610,10 @@ public class TabListMediator implements TabListNotificationHandler {
             mModelList.removeObserver(mListObserver);
         }
         removeObservers(mCurrentTabModelSupplier.get());
+        TabListDataProvider dataProvider = mTabListConfig.dataProvider;
+        if (dataProvider != null) {
+            dataProvider.removeObserver(mTabListDataObserver);
+        }
         mCurrentTabModelSupplier.removeObserver(mOnTabModelChanged);
 
         if (mComponentCallbacks != null) {
@@ -2513,6 +2604,28 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     /**
+     * Resolves the UI index in the model list of the card representing the given tab group.
+     *
+     * @param tabGroupId The {@link Token} of the tab group to locate.
+     * @return The UI index in the model list, or {@link TabModel#INVALID_TAB_INDEX} if not found.
+     */
+    int getIndexFromTabGroupId(Token tabGroupId) {
+        int index = mModelList.indexFromTabGroupId(tabGroupId);
+        if (index != TabModel.INVALID_TAB_INDEX) {
+            return index;
+        }
+        // Fallback for legacy representative tab cards when CARD_TYPE is TAB.
+        if (!TabUiFeatureUtilities.isAndroidTabUiRefactorEnabled()) {
+            TabModel tabModel = mCurrentTabModelSupplier.get();
+            if (tabModel == null) return TabModel.INVALID_TAB_INDEX;
+            int tabId = TabGroupUtils.getFirstTabIdInGroup(tabModel, tabGroupId);
+            if (tabId == Tab.INVALID_TAB_ID) return TabModel.INVALID_TAB_INDEX;
+            return getIndexForTabIdWithRelatedTabs(tabId);
+        }
+        return TabModel.INVALID_TAB_INDEX;
+    }
+
+    /**
      * Resolves the {@link PropertyModel} of the card representing the given tab.
      *
      * @param tabId The ID of the tab to locate.
@@ -2597,6 +2710,8 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     private void addObservers(TabModel tabModel, List<Tab> tabs) {
+        if (mTabListConfig.dataProvider != null) return;
+
         boolean supportsTabGroups = mTabListConfig.supportsTabGroups;
         for (Tab tab : tabs) {
             Token tabGroupId = tab.getTabGroupId();
@@ -2626,6 +2741,260 @@ public class TabListMediator implements TabListNotificationHandler {
         tabModel.removeObserver(mTabModelObserver);
         mObserverManager.removeTabGroupObserver(tabModel);
     }
+
+    // TabListDataProvider consumer methods.
+
+    /** Removes all tab and tab group cards, leaving non-tab items such as message cards. */
+    private void clearProviderTabCards() {
+        for (int i = mModelList.size() - 1; i >= 0; i--) {
+            if (TabProperties.isTabOrTabGroup(mModelList.get(i).model)) {
+                mModelList.removeAt(i);
+            }
+        }
+        mLastSelectedTabListModelIndex = TabList.INVALID_TAB_INDEX;
+    }
+
+    /**
+     * Rebuilds the tab and tab group cards from a full snapshot emitted by the {@link
+     * TabListDataProvider}, preserving any non-tab items (e.g. message cards).
+     *
+     * @param items The snapshot of items to display, in display order.
+     */
+    private void onProviderDataReset(List<? extends TabListItem> items) {
+        boolean quickMode = mPendingQuickMode;
+        mPendingQuickMode = false;
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        if (!mTrackingTabs || tabModel == null) return;
+        removeObservers(tabModel);
+
+        boolean itemsUnchanged = mModelList.matchesItems(items);
+        if (!itemsUnchanged) {
+            beginProviderUpdate();
+            clearProviderTabCards();
+            mTabListLayoutDelegate.reset();
+        }
+
+        mInBatchReset = true;
+        mTrackPricesOnTabsEnabledForBatch = null;
+        if (itemsUnchanged) {
+            int itemsIndex = 0;
+            for (int i = 0; i < mModelList.size(); i++) {
+                PropertyModel model = mModelList.get(i).model;
+                if (!TabProperties.isTabOrTabGroup(model)) continue;
+                boolean applied =
+                        addOrUpdateCardForItem(
+                                tabModel,
+                                items.get(itemsIndex),
+                                i,
+                                /* updateInPlace= */ true,
+                                quickMode);
+                // The snapshot matched the cards and comes from the same TabModel, so every
+                // item resolves.
+                assert applied;
+                itemsIndex++;
+            }
+        } else {
+            insertProviderItems(tabModel, items, mModelList.tabRegionStart());
+        }
+        mInBatchReset = false;
+        mTrackPricesOnTabsEnabledForBatch = null;
+
+        if (itemsUnchanged) {
+            mLastSelectedTabListModelIndex = TabList.INVALID_TAB_INDEX;
+        } else {
+            endProviderUpdate();
+        }
+    }
+
+    /**
+     * Inserts cards for items emitted by the {@link TabListDataProvider} and attaches per-tab
+     * observers.
+     *
+     * @param items The items to insert, in display order.
+     * @param after The item immediately preceding the insertion, or null to insert at the start of
+     *     the tab region.
+     */
+    private void onProviderItemsInserted(
+            List<? extends TabListItem> items, @Nullable TabListItem after) {
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        if (!mTrackingTabs || tabModel == null || !tabModel.isTabStateInitialized()) return;
+
+        int insertionIndex = mModelList.resolveInsertionIndex(after);
+        if (insertionIndex == TabModel.INVALID_TAB_INDEX) return;
+
+        beginProviderUpdate();
+        insertProviderItems(tabModel, items, insertionIndex);
+        endProviderUpdate();
+    }
+
+    /**
+     * Moves cards for items moved by the {@link TabListDataProvider}. Moved items keep their tabs,
+     * so per-tab observers are unchanged.
+     *
+     * @param items The items that were moved, in display order.
+     * @param after The item immediately preceding the moved items after the move, or null if they
+     *     moved to the start of the tab region.
+     */
+    private void onProviderItemsMoved(
+            List<? extends TabListItem> items, @Nullable TabListItem after) {
+        if (!mTrackingTabs || mCurrentTabModelSupplier.get() == null) return;
+
+        beginProviderUpdate();
+        // An expanded group arrives as one move: its header followed by its child tabs (see
+        // GroupedTabListDataProvider#moveGroupItem). Place each card after the previous one so
+        // the group stays contiguous.
+        TabListItem anchor = after;
+        for (TabListItem item : items) {
+            int from = mModelList.indexFromItem(item);
+            if (from == TabModel.INVALID_TAB_INDEX) continue;
+            int to = mModelList.resolveInsertionIndex(anchor);
+            if (to == TabModel.INVALID_TAB_INDEX) break;
+            // The target index counts the moved card; moveItem removes it first.
+            if (from < to) to--;
+            mModelList.moveItem(from, to);
+            anchor = item;
+        }
+        endProviderUpdate();
+    }
+
+    /**
+     * Removes cards for items removed by the {@link TabListDataProvider} and detaches per-tab
+     * observers, including for tabs already removed from the {@link TabModel}.
+     *
+     * @param items The items that were removed.
+     */
+    private void onProviderItemsRemoved(List<? extends TabListItem> items) {
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        if (!mTrackingTabs || tabModel == null) return;
+
+        beginProviderUpdate();
+        for (TabListItem item : items) {
+            int index = mModelList.indexFromItem(item);
+            if (index != TabModel.INVALID_TAB_INDEX) {
+                mModelList.removeAt(index);
+            }
+
+            if (item instanceof TabItem tabItem) {
+                Tab tab = mObserverManager.getObservedTabById(tabItem.getTabId());
+                if (tab == null) continue;
+                // A tab merged into a group is removed as a TabItem but is still shown by the
+                // group card, so keep observing it.
+                if (tabModel.getTabById(tab.getId()) != null
+                        && mTabListLayoutDelegate.isChildTabRepresentedByGroupCard(tab)) {
+                    continue;
+                }
+                removeObserversForTab(tab);
+            } else if (item instanceof TabGroupItem groupItem) {
+                // The observer manager returns a copy since removeObserversForTab() mutates the
+                // observed set.
+                for (Tab tab : mObserverManager.getObservedTabsInGroup(groupItem.getTabGroupId())) {
+                    removeObserversForTab(tab);
+                }
+            } else {
+                assert false : "Unsupported TabListItem: " + item;
+            }
+        }
+        endProviderUpdate();
+    }
+
+    /** Suppresses layout updates while applying a batch of provider changes to the model list. */
+    private void beginProviderUpdate() {
+        assert !mSuppressUpdateLayout;
+        mSuppressUpdateLayout = true;
+    }
+
+    /**
+     * Re-enables layout updates after a provider batch, updates the layout, and clears the cached
+     * selected index since cards may have shifted.
+     */
+    private void endProviderUpdate() {
+        mSuppressUpdateLayout = false;
+        updateLayout();
+        mLastSelectedTabListModelIndex = TabList.INVALID_TAB_INDEX;
+    }
+
+    /**
+     * Inserts cards for {@code items} starting at {@code insertionIndex} and attaches per-tab
+     * observers.
+     */
+    private void insertProviderItems(
+            TabModel tabModel, List<? extends TabListItem> items, int insertionIndex) {
+        for (TabListItem item : items) {
+            if (addOrUpdateCardForItem(
+                    tabModel,
+                    item,
+                    insertionIndex,
+                    /* updateInPlace= */ false,
+                    /* quickMode= */ false)) {
+                insertionIndex++;
+            }
+        }
+    }
+
+    /**
+     * Shows {@code item} as the card at {@code cardIndex} and starts observing its tabs.
+     *
+     * <p>If {@code updateInPlace} is true, refreshes the existing card at {@code cardIndex} with
+     * the item's current tab data and keeps its model. Otherwise inserts a new card at {@code
+     * cardIndex}. A tab group card is filled from the group's first tab.
+     *
+     * @param tabModel Used to look up the item's tabs.
+     * @param item The tab or tab group to show.
+     * @param cardIndex The card to refresh, or where to insert the new card.
+     * @param updateInPlace Whether to refresh the existing card instead of inserting one.
+     * @param quickMode Whether to skip the forced thumbnail refresh of the selected and last
+     *     selected cards. Only used when refreshing in place.
+     * @return False if the item's tabs no longer exist, so no card was added or refreshed.
+     */
+    private boolean addOrUpdateCardForItem(
+            TabModel tabModel,
+            TabListItem item,
+            int cardIndex,
+            boolean updateInPlace,
+            boolean quickMode) {
+        if (item instanceof TabItem tabItem) {
+            Tab tab = tabModel.getTabById(tabItem.getTabId());
+            if (tab == null) return false;
+            if (updateInPlace) {
+                updateTabInPlace(cardIndex, tab, quickMode);
+            } else {
+                addTabInfoToModelForTab(tab, cardIndex);
+            }
+            addObserversForTab(tab);
+            return true;
+        } else if (item instanceof TabGroupItem groupItem) {
+            Token tabGroupId = groupItem.getTabGroupId();
+            List<Tab> groupTabs = tabModel.getTabsInGroup(tabGroupId);
+            if (groupTabs.isEmpty()) return false;
+            Tab firstTab = groupTabs.get(0);
+            if (updateInPlace) {
+                updateTabInPlace(cardIndex, firstTab, quickMode);
+            } else {
+                addTabInfoToModelForGroup(firstTab, tabGroupId, cardIndex);
+            }
+            // Observe member tabs only when the group card stands in for them (GROUPED). NESTED
+            // group headers don't show member tab state.
+            if (mTabListLayoutDelegate.isChildTabRepresentedByGroupCard(firstTab)) {
+                for (Tab groupTab : groupTabs) {
+                    addObserversForTab(groupTab);
+                }
+            }
+            return true;
+        }
+        assert false : "Unsupported TabListItem: " + item;
+        return false;
+    }
+
+    /**
+     * Updates the card at {@code index} in place for {@code tab}, updating the card's tab id if the
+     * primary tab changed.
+     */
+    private void updateTabInPlace(int index, Tab tab, boolean quickMode) {
+        PropertyModel model = mModelList.get(index).model;
+        updateTab(model, index, tab, model.get(TAB_ID) != tab.getId(), quickMode);
+    }
+
+    // End TabListDataProvider consumer methods.
 
     /**
      * @param itemIdentifier The itemIdentifier to match.
@@ -3074,10 +3443,15 @@ public class TabListMediator implements TabListNotificationHandler {
             if (!mTabListConfig.supportsTabGroups) return;
 
             Token tabGroupId = tab.getTabGroupId();
-            int index =
-                    TabUiFeatureUtilities.isAndroidTabUiRefactorEnabled() && tabGroupId != null
-                            ? mModelList.indexFromTabGroupId(tabGroupId)
-                            : getIndexForTabIdWithRelatedTabs(tab.getId());
+            int index;
+            if (TabUiFeatureUtilities.isAndroidTabUiRefactorEnabled()) {
+                index =
+                        tabGroupId != null
+                                ? mModelList.indexFromTabGroupId(tabGroupId)
+                                : getIndexFromTabId(tab.getId());
+            } else {
+                index = getIndexForTabIdWithRelatedTabs(tab.getId());
+            }
             if (mModelList.isValidIndex(index)) {
                 if (mTabListConfig.supportsShrinkCloseAnimation) {
                     mModelList

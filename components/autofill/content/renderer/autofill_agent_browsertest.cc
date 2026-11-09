@@ -29,6 +29,7 @@
 #include "components/autofill/content/common/mojom/autofill_driver.mojom.h"
 #include "components/autofill/content/renderer/autofill_agent_test_api.h"
 #include "components/autofill/content/renderer/autofill_renderer_test.h"
+#include "components/autofill/content/renderer/custom_form_control_script_executor.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/form_cache_test_api.h"
 #include "components/autofill/content/renderer/test_util.h"
@@ -41,6 +42,7 @@
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/test_utils/autofill_form_test_util.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_utils.h"
@@ -273,19 +275,38 @@ TEST_F(AutofillAgentTest, TriggerFormExtractionWithResponse) {
   WaitForFormsSeen();
   base::MockOnceCallback<void(bool)> mock_callback;
   EXPECT_CALL(mock_callback, Run).Times(0);
-  autofill_agent().TriggerFormExtractionWithResponse(mock_callback.Get());
+  autofill_agent().TriggerFormExtractionWithResponse(/*force=*/false,
+                                                     mock_callback.Get());
   task_environment_.FastForwardBy(AutofillAgent::kFormsSeenThrottle / 2);
   EXPECT_CALL(mock_callback, Run(true));
   task_environment_.FastForwardBy(AutofillAgent::kFormsSeenThrottle / 2);
 }
 
-TEST_F(AutofillAgentTest, ClearFormCache) {
+// Tests that the agent only has a custom form control script executor once
+// custom form control scripts are enabled, and that the executor runs scripts
+// in the agent's frame.
+TEST_F(AutofillAgentTest, EnableCustomFormControlScripts) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillCustomFormControlScripts};
+  EXPECT_FALSE(
+      test_api(autofill_agent()).custom_form_control_script_executor());
+  autofill_agent().EnableCustomFormControlScripts(
+      /*world_id=*/content::ISOLATED_WORLD_ID_CONTENT_END + 1);
+  CustomFormControlScriptExecutor* executor =
+      test_api(autofill_agent()).custom_form_control_script_executor();
+  ASSERT_TRUE(executor);
+  EXPECT_TRUE(executor->LoadScript(
+      "function createCustomFormControlManager() { return {}; }"));
+  EXPECT_TRUE(executor->has_manager());
+}
+
+TEST_F(AutofillAgentTest, TriggerFormExtractionWithResponse_Force) {
   EXPECT_CALL(autofill_driver(), FormsSeen(SizeIs(1), _)).Times(2);
   LoadHTML(R"(<body> <input> </body>)");
   WaitForFormsSeen();
-  autofill_agent().ClearFormCache();
   base::MockOnceCallback<void(bool)> mock_callback;
-  autofill_agent().TriggerFormExtractionWithResponse(mock_callback.Get());
+  autofill_agent().TriggerFormExtractionWithResponse(/*force=*/true,
+                                                     mock_callback.Get());
   task_environment_.FastForwardBy(AutofillAgent::kFormsSeenThrottle);
 }
 
@@ -696,9 +717,11 @@ TEST_F(AutofillAgentTest, TriggerFormExtractionWithResponse_CalledTwice) {
   LoadHTML(R"(<body> <input> </body>)");
   WaitForFormsSeen();
   base::MockOnceCallback<void(bool)> mock_callback;
-  autofill_agent().TriggerFormExtractionWithResponse(mock_callback.Get());
+  autofill_agent().TriggerFormExtractionWithResponse(/*force=*/false,
+                                                     mock_callback.Get());
   EXPECT_CALL(mock_callback, Run(false));
-  autofill_agent().TriggerFormExtractionWithResponse(mock_callback.Get());
+  autofill_agent().TriggerFormExtractionWithResponse(/*force=*/false,
+                                                     mock_callback.Get());
 }
 
 // Tests that `AutofillAgent::TriggerSuggestions()` triggers
@@ -858,6 +881,50 @@ TEST_F(AutofillAgentTest, SelectControlChanged) {
   ASSERT_TRUE(SimulateElementClick("color"));
   ExecuteJavaScriptForTests(change_value.c_str());
   std::move(run_loop).Run();
+}
+
+// Tests that `document.execCommand('insertText', ...)` on a focused text field
+// with transient user activation does not trigger
+// `mojom::AutofillDriver::TextFieldValueChanged`, whereas user input does.
+TEST_F(AutofillAgentTest, TextFieldValueChangedIgnoresExecCommand) {
+  LoadHTML(
+      "<html>"
+      "<form>"
+      "<input type='email' id='email'>"
+      "<button type='button' id='button'>Continue</button>"
+      "</form>"
+      "</html>");
+  WaitForFormsSeen();
+
+  EXPECT_CALL(autofill_driver(), TextFieldValueChanged).Times(0);
+
+  // Give the frame transient user activation via an ordinary click.
+  ASSERT_TRUE(SimulateElementClick("button"));
+  ExecuteJavaScriptForTests(
+      "var email = document.getElementById('email');"
+      "email.focus();"
+      "document.execCommand('insertText', false, 'sample@example.com');");
+  task_environment_.RunUntilIdle();
+
+  WebInputElement email_element = GetInputElementById("email");
+  EXPECT_EQ(email_element.Value().Utf16(), u"sample@example.com");
+  EXPECT_FALSE(autofill_agent().field_data_manager().DidUserType(
+      GetFieldRendererIdById("email")));
+
+  // Genuine user typing into the field still notifies the driver.
+  base::RunLoop run_loop;
+  EXPECT_CALL(
+      autofill_driver(),
+      TextFieldValueChanged(
+          Property(&FormData::fields,
+                   ElementsAre(test::FormFieldDescriptionEq(
+                       {.name = u"email", .value = u"typed@example.com"}))),
+          GetFieldRendererIdById("email"), _))
+      .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
+  SimulateUserInputChangeForElement(email_element, "typed@example.com");
+  std::move(run_loop).Run();
+  EXPECT_TRUE(autofill_agent().field_data_manager().DidUserType(
+      GetFieldRendererIdById("email")));
 }
 
 // A test fixture that sets the autofill agent's `focus_requires_scroll` config
@@ -2018,6 +2085,62 @@ TEST_F(AutofillAgentTest,
           .ShouldThrottleAskForValuesToFill(
               FieldRendererId(1),
               AutofillSuggestionTriggerSource::kFormControlElementClicked));
+}
+
+// Tests that `ApplyFieldAction` with `FieldActionType::kReplaceAll` fills and
+// previews `FormControlType::kSelectOne` (`<select>`) elements (used by
+// `send_tab_to_self::ReceivedTabFormsFiller`).
+TEST_F(AutofillAgentTest, ApplyFieldAction_SelectOneElement) {
+  using mojom::ActionPersistence;
+  using mojom::FieldActionType;
+
+  LoadHTML(R"(
+    <form id="form_id">
+      <select id="select_id">
+        <option value="">Choose...</option>
+        <option value="US">United States</option>
+        <option value="CA">Canada</option>
+      </select>
+    </form>
+  )");
+
+  WebSelectElement select =
+      GetWebElementById("select_id").DynamicTo<WebSelectElement>();
+  ASSERT_TRUE(select);
+  FieldRendererId field_id = form_util::GetFieldRendererId(select);
+
+  autofill_agent().ApplyFieldAction(FieldActionType::kReplaceAll,
+                                    ActionPersistence::kPreview, field_id,
+                                    u"US");
+  EXPECT_EQ(select.SuggestedValue().Utf16(), u"US");
+  EXPECT_EQ(select.Value().Utf16(), u"");
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kPreviewed);
+
+  autofill_agent().ClearPreviewedForm();
+  EXPECT_TRUE(select.SuggestedValue().IsEmpty());
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kNotFilled);
+
+  autofill_agent().ApplyFieldAction(FieldActionType::kReplaceAll,
+                                    ActionPersistence::kPreview, field_id,
+                                    u"INVALID");
+  EXPECT_TRUE(select.SuggestedValue().IsEmpty());
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kNotFilled);
+
+  autofill_agent().ApplyFieldAction(FieldActionType::kReplaceAll,
+                                    ActionPersistence::kFill, field_id, u"CA");
+  EXPECT_EQ(select.Value().Utf16(), u"CA");
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kAutofilled);
+
+  autofill_agent().ApplyFieldAction(FieldActionType::kSelectAll,
+                                    ActionPersistence::kFill, field_id, u"");
+  EXPECT_EQ(select.Value().Utf16(), u"CA");
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kAutofilled);
+
+  autofill_agent().ApplyFieldAction(FieldActionType::kReplaceAll,
+                                    ActionPersistence::kFill, field_id,
+                                    u"INVALID");
+  EXPECT_TRUE(select.Value().IsEmpty());
+  EXPECT_EQ(select.GetAutofillState(), WebAutofillState::kNotFilled);
 }
 
 // Malicious web pages can attempt to steal saved autofill data via a

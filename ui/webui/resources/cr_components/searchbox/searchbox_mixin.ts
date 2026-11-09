@@ -308,6 +308,8 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       this.dropdownIsVisible = false;
       this.result = null;
       this.getDropdownElement().unselect();
+      // The default match the additional text describes is gone.
+      this.getInputElement().clearAdditionalText();
       this.pageHandler().stopAutocomplete(/*clearResult=*/ true);
       // Autocomplete sends updates once it is stopped. Invalidate those results
       // by setting `activeQueryId` to -1.
@@ -468,6 +470,7 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         this.getInputElement().setInput({
           text: this.lastQueriedInput ?? '',
           inline: firstMatch.inlineAutocompletion,
+          additionalText: firstMatch.additionalText,
         });
 
         // Navigate to the default up-to-date match if the user typed and
@@ -579,7 +582,11 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
           this.getInputElement().inputElement?.selectionStart ?? null;
       const event = e.detail.event ?? null;
 
-      if (this.keywordModeManager_.acceptInputTrigger(
+      // Like the Views omnibox, don't change keyword mode while composing,
+      // which would replace the text under the IME. The text is checked again
+      // once the composition ends.
+      if (!e.detail.isComposing &&
+          this.keywordModeManager_.acceptInputTrigger(
               input, cursorPosition, event)) {
         const isSpaceInMiddle = this.keywordModeManager_.entryMethod ===
             KeywordModeEntryMethod.SPACE_IN_MIDDLE;
@@ -829,14 +836,14 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       const isKeywordMode = this.keywordModeManager_.isInKeywordMode ||
           selection.state === SelectionLineState.kKeywordMode;
       const isNormal = selection.state === SelectionLineState.kNormal;
-      const newInline = isNormal && !isKeywordMode && selection.line === 0 &&
-              match.allowedToBeDefaultMatch ?
-          match.inlineAutocompletion :
-          '';
+      const isDefaultMatch = isNormal && !isKeywordMode &&
+          selection.line === 0 && match.allowedToBeDefaultMatch;
+      const newInline = isDefaultMatch ? match.inlineAutocompletion : '';
       const newFillEnd = newFill.length - newInline.length;
       this.getInputElement().setInput({
         text: newFill.substr(0, newFillEnd),
         inline: newInline,
+        additionalText: isDefaultMatch ? match.additionalText : '',
         moveCursorToEnd: newInline.length === 0,
         isMatchPreview: this.isMatchPreview_(match, selection.line),
       });
@@ -1162,10 +1169,10 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       // Update the input.
       if (this.selectedMatch) {
         const newFill = this.computeMatchFillIntoEdit(this.selectedMatch);
-        const newInline = this.selectedMatchIndex === 0 &&
-                this.selectedMatch.allowedToBeDefaultMatch ?
-            this.selectedMatch.inlineAutocompletion :
-            '';
+        const isDefaultMatch = this.selectedMatchIndex === 0 &&
+            this.selectedMatch.allowedToBeDefaultMatch;
+        const newInline =
+            isDefaultMatch ? this.selectedMatch.inlineAutocompletion : '';
         const newFillEnd = newFill.length - newInline.length;
         const text = newFill.substr(0, newFillEnd);
         if (!this.keywordModeManager_.isInKeywordMode) {
@@ -1176,6 +1183,8 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         this.getInputElement().setInput({
           text: text,
           inline: newInline,
+          additionalText: isDefaultMatch ? this.selectedMatch.additionalText :
+                                           '',
           moveCursorToEnd: newInline.length === 0,
           isMatchPreview: isMatchPreview,
         });

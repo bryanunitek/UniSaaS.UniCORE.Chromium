@@ -1247,7 +1247,9 @@ ci.builder(
     ),
     contact_team_email = "clank-engprod@google.com",
     siso_output_local_strategy = "full",
-    siso_remote_jobs = siso.remote_jobs.DEFAULT,
+    # Local ThinLTO links are much faster than remote ones (e.g. ~2 minutes
+    # vs ~8 minutes for libchrome.so).
+    siso_remote_linking = False,
 )
 
 ci.builder(
@@ -1810,7 +1812,6 @@ ci.thin_tester(
             "14-x64-emulator",
             "emulator-8-cores",
             "has_native_resultdb_integration",
-            "isolate_profile_data",
             "linux-jammy",
         ],
     ),
@@ -1859,7 +1860,6 @@ ci.thin_tester(
             "15-x64-emulator",
             "emulator-8-cores",
             "has_native_resultdb_integration",
-            "isolate_profile_data",
             "linux-jammy",
         ],
     ),
@@ -2342,7 +2342,6 @@ ci.builder(
         ],
         mixins = [
             "has_native_resultdb_integration",
-            "isolate_profile_data",
             "10-x86-emulator",
             "emulator-4-cores",
             "linux-jammy",
@@ -2913,7 +2912,6 @@ ci.builder(
             "12-x64-emulator",
             "emulator-8-cores",
             "has_native_resultdb_integration",
-            "isolate_profile_data",
             "linux-jammy",
         ],
         per_test_modifications = {

@@ -14,13 +14,12 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/prefs/scoped_user_pref_update.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_sessions/fake_open_tabs_ui_delegate.h"
 #include "components/sync_sessions/mock_session_sync_service.h"
+#include "components/sync_sessions/session_sync_prefs.h"
 #include "components/sync_sessions/synced_session.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
@@ -38,6 +37,8 @@ using ::l10n_util::GetPluralStringFUTF8;
 using ::l10n_util::GetStringUTF8;
 using ::sync_sessions::FakeOpenTabsUIDelegate;
 using ::sync_sessions::MockSessionSyncService;
+using ::sync_sessions::SessionSyncPrefs;
+using ::sync_sessions::SessionVisibility;
 using ::sync_sessions::SyncedSession;
 using ::syncer::DeviceInfo;
 using ::testing::_;
@@ -46,6 +47,7 @@ using ::testing::ExplainMatchResult;
 using ::testing::IsEmpty;
 using ::testing::NiceMock;
 using ::testing::Return;
+using ::testing::Test;
 using FormFactor = ::syncer::DeviceInfo::FormFactor;
 
 constexpr char kCallbackId[] = "device-tab-visibility-callback-id";
@@ -106,13 +108,6 @@ MATCHER_P(IsWebUIListResponse, list_matcher, "") {
                             result_listener);
 }
 
-MATCHER_P(IsWebUIBoolResponse, expected_value, "") {
-  return arg->function_name() == kWebUIResponse && arg->arg1() &&
-         *arg->arg1() == base::Value(kCallbackId) && arg->arg2() &&
-         *arg->arg2() == base::Value(true) && arg->arg3() &&
-         *arg->arg3() == base::Value(expected_value);
-}
-
 MATCHER_P(IsListChangedEvent, list_matcher, "") {
   return arg->function_name() == kWebUIListenerCallback && arg->arg1() &&
          *arg->arg1() == base::Value(kListChangedEvent) && arg->arg2() &&
@@ -134,22 +129,9 @@ std::unique_ptr<SyncedSession> CreateSyncedSession(const std::string& tag,
   return session;
 }
 
-bool IsSessionHiddenInPrefs(const PrefService& prefs, std::string_view tag) {
-  return prefs.GetDict(prefs::kDeviceTabVisibilityHiddenSessions).contains(tag);
-}
-
-void SetSessionHidden(PrefService* prefs, std::string_view tag, bool hidden) {
-  ScopedDictPrefUpdate update(prefs, prefs::kDeviceTabVisibilityHiddenSessions);
-  if (hidden) {
-    update->Set(tag, true);
-  } else {
-    update->Remove(tag);
-  }
-}
-
 }  // namespace
 
-class DeviceTabVisibilityHandlerTest : public testing::Test {
+class DeviceTabVisibilityHandlerTest : public Test {
  public:
   void SetUp() override {
     TestingProfile::Builder builder;
@@ -181,7 +163,6 @@ class DeviceTabVisibilityHandlerTest : public testing::Test {
 
   void SendSetVisibilityMessage(std::string_view tag, bool visible) {
     base::ListValue args;
-    args.Append(kCallbackId);
     args.Append(tag);
     args.Append(visible);
     web_ui_.HandleReceivedMessage(kSetVisibilityMessage, args);
@@ -234,7 +215,7 @@ TEST_F(DeviceTabVisibilityHandlerTest, GetListWhenDelegateUnavailable) {
 
 // Verifies that `getDeviceTabVisibilityList` populates form factors, active
 // time labels across time ranges (including future clock skew), and visibility
-// states from `prefs::kDeviceTabVisibilityHiddenSessions`.
+// states from `SessionSyncPrefs`.
 TEST_F(DeviceTabVisibilityHandlerTest, GetListPopulatesDevices) {
   const base::Time now = base::Time::Now();
   // Add sessions spanning each supported form factor and active-time bucket
@@ -252,7 +233,8 @@ TEST_F(DeviceTabVisibilityHandlerTest, GetListPopulatesDevices) {
       kUnknownTag, kUnknownName, now - base::Days(kUnknownActiveDays),
       FormFactor::kUnknown));
   // Pre-hide the tablet session in prefs to verify initial `visible` state.
-  SetSessionHidden(profile()->GetPrefs(), kTabletTag, true);
+  SessionSyncPrefs(profile()->GetPrefs())
+      .SetSessionVisibility(kTabletTag, SessionVisibility::kHidden);
 
   SendGetListMessage();
   EXPECT_THAT(
@@ -279,37 +261,43 @@ TEST_F(DeviceTabVisibilityHandlerTest, GetListPopulatesDevices) {
 }
 
 // Verifies that `setDeviceTabVisibility` persists hiding and re-enabling a
-// device in `prefs::kDeviceTabVisibilityHiddenSessions` and fires the WebUI
-// listener via `PrefChangeRegistrar` only when the preference actually changes.
+// device in `SessionSyncPrefs` and fires the WebUI listener via
+// `SessionSyncPrefs::SubscribeToSessionVisibilityChanged()` only when the
+// preference actually changes.
 TEST_F(DeviceTabVisibilityHandlerTest, SetVisibilityUpdatesPrefAndNotifies) {
-  PrefService* prefs = profile()->GetPrefs();
+  SessionSyncPrefs session_sync_prefs(profile()->GetPrefs());
   fake_open_tabs_ui_delegate().AddForeignSession(CreateSyncedSession(
       kPhoneTag, kPhoneName, base::Time::Now(), FormFactor::kPhone));
-  EXPECT_FALSE(IsSessionHiddenInPrefs(*prefs, kPhoneTag));
+  EXPECT_EQ(session_sync_prefs.GetSessionVisibility(kPhoneTag),
+            SessionVisibility::kVisible);
 
-  // Hide `kPhoneTag` and verify only that session is recorded as hidden.
+  // Hide `kPhoneTag` (and repeat idempotently) and verify only that session is
+  // recorded as hidden without firing a redundant listener event on the no-op
+  // call.
   SendSetVisibilityMessage(kPhoneTag, false);
-  EXPECT_TRUE(IsSessionHiddenInPrefs(*prefs, kPhoneTag));
-  EXPECT_FALSE(IsSessionHiddenInPrefs(*prefs, kSession2Tag));
+  SendSetVisibilityMessage(kPhoneTag, false);
+  EXPECT_EQ(session_sync_prefs.GetSessionVisibility(kPhoneTag),
+            SessionVisibility::kHidden);
+  EXPECT_EQ(session_sync_prefs.GetSessionVisibility(kSession2Tag),
+            SessionVisibility::kVisible);
 
   // Re-enable `kPhoneTag` (and repeat idempotently) and verify the pref entry
   // is removed without firing a redundant listener event on the no-op call.
   SendSetVisibilityMessage(kPhoneTag, true);
   SendSetVisibilityMessage(kPhoneTag, true);
-  EXPECT_FALSE(IsSessionHiddenInPrefs(*prefs, kPhoneTag));
+  EXPECT_EQ(session_sync_prefs.GetSessionVisibility(kPhoneTag),
+            SessionVisibility::kVisible);
 
-  // External updates to `prefs::kDeviceTabVisibilityHiddenSessions` (e.g. from
-  // another open Settings tab) also notify the active WebUI listener.
-  SetSessionHidden(prefs, kPhoneTag, true);
+  // External updates to `SessionSyncPrefs` (e.g. from another open Settings
+  // tab or `SessionSyncBridge` pruning) also notify the active WebUI listener.
+  session_sync_prefs.SetSessionVisibility(kPhoneTag,
+                                          SessionVisibility::kHidden);
 
   EXPECT_THAT(web_ui()->call_data(),
-              ElementsAre(IsWebUIBoolResponse(true),
-                          IsListChangedEvent(ElementsAre(DictionaryHasValue(
+              ElementsAre(IsListChangedEvent(ElementsAre(DictionaryHasValue(
                               kVisibleKey, base::Value(false)))),
-                          IsWebUIBoolResponse(true),
                           IsListChangedEvent(ElementsAre(DictionaryHasValue(
                               kVisibleKey, base::Value(true)))),
-                          IsWebUIBoolResponse(true),
                           IsListChangedEvent(ElementsAre(DictionaryHasValue(
                               kVisibleKey, base::Value(false))))));
 }
@@ -328,16 +316,20 @@ TEST_F(DeviceTabVisibilityHandlerTest, ForeignSessionsChangedNotifiesWebUI) {
   // foreign session or preference notifications are ignored.
   handler()->DisallowJavascript();
   NotifyForeignSessionsChanged();
-  SetSessionHidden(profile()->GetPrefs(), kSession1Tag, true);
+  SessionSyncPrefs(profile()->GetPrefs())
+      .SetSessionVisibility(kSession1Tag, SessionVisibility::kHidden);
 
-  // Re-allowing JavaScript re-subscribes without re-initializing
-  // `PrefChangeRegistrar`.
+  // Re-allowing JavaScript re-subscribes to preference and foreign session
+  // updates.
   SendGetListMessage();
+  SessionSyncPrefs(profile()->GetPrefs())
+      .SetSessionVisibility(kSession2Tag, SessionVisibility::kHidden);
 
   EXPECT_THAT(
       web_ui()->call_data(),
       ElementsAre(IsWebUIListResponse(IsEmpty()), IsListChangedEvent(IsEmpty()),
-                  IsWebUIListResponse(IsEmpty())));
+                  IsWebUIListResponse(IsEmpty()),
+                  IsListChangedEvent(IsEmpty())));
 }
 
 }  // namespace settings

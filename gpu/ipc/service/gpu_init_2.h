@@ -91,21 +91,25 @@ class GPU_IPC_SERVICE_EXPORT GpuInit2 : public GpuInit {
   bool ReinitializeGLWithWarp(InitState& state);
   void SaveHardwareGpuInfoAndGpuFeatureInfo();
   void AdjustInfoToWarp();
-  void MaybeFallbackToWarpEarly(InitState& state);
+  void MaybeFallbackToWarpEarly(const InitState& state);
 #endif  // BUILDFLAG(IS_WIN)
   bool InitializeDawn();
   bool InitializeVulkan();
   void SetSkiaBackendType();
   void RecordUMA();
 
-  // InitializeAndStartSandbox steps helper functions.
-  void RecordStartupCrashKeys(InitState& state);
+  // Helper functions for the steps of InitializeAndStartSandbox(). Some are
+  // also used by InitializeInProcess().
+  void RecordStartupCrashKeys(const InitState& state);
   bool CollectBasicInfoAndComputeFeatures(InitState& state);
   void ConfigureGpuSelection();
   void StartWatchdogAndMaybeSandboxEarly(InitState& state);
   bool InitializeGLBindingsAndDisplay(InitState& state);
-  void SelectCommandDecoder(InitState& state);
+  void SelectCommandDecoder();
   bool FinalizeFeaturesWithContextInfo(InitState& state);
+  // Collects context GPU info, then recomputes `gpu_feature_info_`. Returns
+  // false if the info collection fails, unless in-process.
+  bool CollectContextInfoAndRecomputeFeatures(InitState& state);
   bool ResolveGrContextType(InitState& state);
   bool InitializeVulkanIfNeeded();
   bool FinalizeGLInitialization(InitState& state);
@@ -130,7 +134,7 @@ class GPU_IPC_SERVICE_EXPORT GpuInit2 : public GpuInit {
   bool init_successful_ = false;
 
   // The following data are collected from hardware GPU and saved before
-  // switching to software GL / WARP.
+  // switching to WARP on Windows. They stay empty on other platforms.
   std::optional<GPUInfo> gpu_info_for_hardware_gpu_;
   std::optional<GpuFeatureInfo> gpu_feature_info_for_hardware_gpu_;
 

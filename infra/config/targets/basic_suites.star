@@ -180,6 +180,21 @@ targets.legacy_basic_suite(
 )
 
 targets.legacy_basic_suite(
+    name = "chromeos_disk_usage_tast_test",
+    tests = {
+        "disk_usage_tast_test": targets.legacy_test_config(
+            ci_only = True,
+            skylab = targets.skylab(
+                timeout_sec = 3600,
+                cros_test_names = ["tast.platform.ReportDiskUsage"],
+                strip_chrome = True,
+            ),
+            experiment_percentage = 100,
+        ),
+    },
+)
+
+targets.legacy_basic_suite(
     name = "chromeos_integration_tests_suite",
     tests = {
         "chromeos_integration_tests": targets.legacy_test_config(
@@ -1166,17 +1181,6 @@ targets.legacy_basic_suite(
     },
 )
 
-targets.legacy_basic_suite(
-    name = "gpu_webgl_conformance_vulkan_passthrough_telemetry_tests",
-    tests = {
-        "webgl_conformance_vulkan_passthrough_tests": targets.legacy_test_config(
-            swarming = targets.swarming(
-                shards = 2,
-            ),
-        ),
-    },
-)
-
 # END tests which run on the GPU bots
 
 targets.legacy_basic_suite(
@@ -1774,6 +1778,9 @@ targets.legacy_basic_suite(
                 "external/wpt/webrtc-stats",
                 "external/wpt/webrtc-svc",
             ],
+            swarming = targets.swarming(
+                shards = 4,
+            ),
         ),
     },
 )

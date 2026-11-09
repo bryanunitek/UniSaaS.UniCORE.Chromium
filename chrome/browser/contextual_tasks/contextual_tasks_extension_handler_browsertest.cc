@@ -14,6 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
@@ -76,6 +77,7 @@
 #include "third_party/lens_server_proto/lens_overlay_visual_search_interaction_data.pb.h"
 #include "third_party/lens_server_proto/search_communication.pb.h"
 #include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
+#include "third_party/omnibox_proto/input_type.pb.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
@@ -572,8 +574,79 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
+                       HandleLensButtonClick_RecordsPageStateHistogram) {
+  using PageState = ContextualTasksWebContentsUserData::PageState;
+  constexpr char kPageStateHistogram[] =
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked.PageState";
+
+  EmbedHandlerInSidePanel();
+  base::HistogramTester histogram_tester;
+
+  ASSERT_TRUE(mock_lens_controller_);
+  ASSERT_TRUE(composebox_handler_remote_.is_bound());
+
+  EXPECT_CALL(*mock_lens_controller_, IsShowingUI())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(*mock_lens_controller_, OpenLensOverlay(_, _))
+      .Times(testing::AnyNumber());
+
+  auto click = [&]() {
+    composebox_handler_remote_->HandleLensButtonClick();
+    composebox_handler_remote_.FlushForTesting();
+  };
+
+  // Click before the AI Mode page has reported its state.
+  click();
+  histogram_tester.ExpectUniqueSample(kPageStateHistogram, PageState::kUnknown,
+                                      1);
+
+  // Click while the AI Mode page reports the zero state.
+  SendOnPageChanged(/*is_zero_state=*/true);
+  click();
+  histogram_tester.ExpectBucketCount(kPageStateHistogram, PageState::kZeroState,
+                                     1);
+
+  // Submitting a query transitions `kZeroState` -> `kThread` even though the AI
+  // Mode page does not send `OnPageChanged(false)` on submit.
+  lens::SearchToClientMessage submit_msg;
+  submit_msg.mutable_on_submit_query_request();
+  SendSearchMessage(submit_msg);
+  click();
+  histogram_tester.ExpectBucketCount(kPageStateHistogram, PageState::kThread,
+                                     1);
+
+  // `OnDocumentConnected()` resets the state back to `kUnknown` until the page
+  // next reports its state.
+  auto* user_data =
+      ContextualTasksWebContentsUserData::GetOrCreateForWebContents(
+          panel_web_contents_.get());
+  user_data->OnDocumentConnected(panel_web_contents_->GetPrimaryMainFrame());
+  click();
+  histogram_tester.ExpectBucketCount(kPageStateHistogram, PageState::kUnknown,
+                                     2);
+
+  // Click while the AI Mode page reports it is mid-thread.
+  SendOnPageChanged(/*is_zero_state=*/false);
+  click();
+  histogram_tester.ExpectBucketCount(kPageStateHistogram, PageState::kThread,
+                                     2);
+
+  // A task change clears the input plate, so the state is unknown again until
+  // the page next reports it.
+  user_data->OnTaskChanged();
+  click();
+  histogram_tester.ExpectBucketCount(kPageStateHistogram, PageState::kUnknown,
+                                     3);
+
+  histogram_tester.ExpectTotalCount(kPageStateHistogram, 6);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked", true, 6);
+}
+
+IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
                        HandleLensButtonClick_NotInSidePanel_DoesNothing) {
   base::UserActionTester user_action_tester;
+  base::HistogramTester histogram_tester;
 
   ASSERT_TRUE(mock_lens_controller_);
   ASSERT_TRUE(composebox_handler_remote_.is_bound());
@@ -586,6 +659,10 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
 
   EXPECT_EQ(0, user_action_tester.GetActionCount(
                    "ContextualTasks.Composebox.UserAction.LensButtonClicked"));
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked", 0);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked.PageState", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -674,6 +751,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
           [&](std::vector<searchbox::mojom::TabInfoPtr> tabs) {
             EXPECT_FALSE(tabs.empty());
             EXPECT_EQ(tabs[0]->url, GURL("https://www.google.com/test"));
+            EXPECT_TRUE(tabs[0]->recent_tab);
             run_loop.Quit();
           }));
 
@@ -698,7 +776,9 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
           [&](std::vector<searchbox::mojom::TabInfoPtr> tabs) {
             EXPECT_GE(tabs.size(), 2u);
             EXPECT_EQ(tabs[0]->url, GURL("https://www.google.com/test2"));
+            EXPECT_TRUE(tabs[0]->recent_tab);
             EXPECT_EQ(tabs[1]->url, GURL("https://www.google.com/test1"));
+            EXPECT_FALSE(tabs[1]->recent_tab);
             run_loop.Quit();
           }));
 
@@ -717,15 +797,18 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
   const GURL aim_search_url("https://www.google.com/search?q=test&udm=50");
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), regular_search_url, WindowOpenDisposition::kNewForegroundTab,
+      browser(), regular_search_url,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), aim_zero_state_url, WindowOpenDisposition::kNewForegroundTab,
+      browser(), aim_zero_state_url,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), aim_search_url, WindowOpenDisposition::kNewForegroundTab,
+      browser(), aim_search_url,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   base::RunLoop run_loop;
@@ -1437,6 +1520,64 @@ IN_PROC_BROWSER_TEST_F(
                             UploadType::CONTEXTUAL_INPUT_UPLOAD_TYPE_EXPLICIT));
 }
 
+IN_PROC_BROWSER_TEST_F(
+    ContextualTasksExtensionHandlerContextualizerBrowserTest,
+    OnSubmitQueryRequest_ReuploadsChangedActiveTabWhenRegionOnlyOverlaySkipped) {
+  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
+  Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
+  NiceMock<MockLensOverlayController> mock_overlay(
+      active_tab_, mock_lens_controller_, profile->GetPrefs());
+  NiceMock<lens::MockLensOverlayQueryController> mock_query_controller(nullptr);
+
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_controller())
+      .WillRepeatedly(Return(&mock_overlay));
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_query_controller())
+      .WillRepeatedly(Return(&mock_query_controller));
+  EXPECT_CALL(*mock_lens_controller_, IsCurrentTabSameOrigin())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_overlay, HasRegionSelection()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_session_handle_, search_session_id())
+      .WillRepeatedly(Return("session_sticky_id"));
+
+  const base::UnguessableToken overlay_token = base::UnguessableToken::Create();
+  EXPECT_CALL(*mock_lens_controller_->mock_router(),
+              overlay_tab_context_file_token())
+      .WillRepeatedly(Return(overlay_token));
+
+  contextual_search::FileInfo region_only_file;
+  region_only_file.file_token = overlay_token;
+  region_only_file.is_implicit_upload = true;
+  lens::LensOverlayRequestId req_id;
+  req_id.set_uuid(777);
+  req_id.set_context_id(888);
+  req_id.set_image_sequence_id(1);
+  req_id.set_media_type(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE);
+  region_only_file.request_id = req_id;
+  region_only_file.upload_status =
+      contextual_search::ContextUploadStatus::kUploadSuccessful;
+  region_only_file.input_data = std::make_unique<lens::ContextualInputData>();
+  region_only_file.input_data->upload_type = UploadType::
+      CONTEXTUAL_INPUT_UPLOAD_TYPE_CONTEXTUAL_SEARCHBOX_INITIAL_QUERY;
+
+  mock_session_handle_->SetSubmittedContextTokens({overlay_token});
+  std::vector<contextual_search::FileInfo> submitted_files = {region_only_file};
+  EXPECT_CALL(*mock_session_handle_, GetSubmittedContextFileInfos())
+      .WillRepeatedly(Return(submitted_files));
+
+  const base::UnguessableToken old_token = SeedUploadedActiveTab({1, 2, 3});
+  SetActiveTabPageContext({4, 5, 6});
+
+  // Skipping the region-only overlay upload when `!has_lens_crop` must reset
+  // `overlay_token` so `GetTabsToRecontextualize()` still re-uploads the
+  // changed active tab.
+  EXPECT_THAT(
+      Submit(),
+      testing::ElementsAre(
+          UploadType::CONTEXTUAL_INPUT_UPLOAD_TYPE_RECONTEXTUALIZATION));
+  ASSERT_EQ(attached().size(), 1u);
+  EXPECT_NE(attached()[0].context_token, old_token);
+}
+
 IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerContextualizerBrowserTest,
                        DeleteContext_SupersededTokenRemovesTab) {
   const base::UnguessableToken old_token = SeedUploadedActiveTab({1, 2, 3});
@@ -1731,6 +1872,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE));
         run_loop.Quit();
       });
 
@@ -2050,7 +2193,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate an LRP region search where `overlay_tab_context_file_token` was
   // already submitted on the initial LRP load (so `lens_crop()` was never set
   // on `InputStateModel`) and carries separate webpage + viewport request IDs.
-  auto model = handler_->GetOrCreateInputStateModelForTesting();
+  // Because no Lens crop chip is mounted in the composebox, the follow-up query
+  // must attach the webpage and viewport tab context WITHOUT resending
+  // `visual_search_interaction_data` from Turn 0.
+  const base::WeakPtr<contextual_search::InputStateModel> model =
+      handler_->GetOrCreateInputStateModelForTesting();
   ASSERT_TRUE(model);
   EXPECT_FALSE(model->lens_crop().has_value());
 
@@ -2070,6 +2217,8 @@ IN_PROC_BROWSER_TEST_F(
 
   contextual_search::FileInfo overlay_file_info;
   overlay_file_info.file_token = overlay_token;
+  overlay_file_info.tab_session_id =
+      sessions::SessionTabHelper::IdForTab(web_contents_);
   overlay_file_info.is_implicit_upload = true;
   lens::LensOverlayRequestId page_req_id;
   page_req_id.set_uuid(999);
@@ -2105,18 +2254,12 @@ IN_PROC_BROWSER_TEST_F(
       .WillRepeatedly(Return(std::vector<contextual_search::FileInfo>{}));
   EXPECT_CALL(*mock_session_handle_, GetSubmittedContextFileInfos())
       .WillRepeatedly(Return(submitted_files));
-
-  lens::LensOverlayVisualSearchInteractionData mock_vsint;
-  mock_vsint.set_interaction_type(
-      lens::LensOverlayInteractionRequestMetadata::REGION_SEARCH);
-  mock_vsint.mutable_zoomed_crop()->mutable_crop()->set_center_x(0.35f);
-  EXPECT_CALL(*mock_session_handle_,
-              GetVisualSearchInteractionData(overlay_token, _))
-      .WillOnce(Return(std::make_optional(mock_vsint)));
+  EXPECT_CALL(*mock_session_handle_, GetVisualSearchInteractionData(_, _))
+      .Times(0);
 
   base::RunLoop run_loop;
   EXPECT_CALL(mock_page_, PostSearchMessage(_))
-      .WillRepeatedly([&](mojo_base::ProtoWrapper wrapper) {
+      .WillRepeatedly([&run_loop](mojo_base::ProtoWrapper wrapper) {
         auto message = wrapper.As<lens::ClientToSearchMessage>();
         if (!message.has_value() || !message->has_on_submit_query_response()) {
           return;
@@ -2146,14 +2289,7 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_TRUE(viewport_added.request_id().has_chrome_tab_data());
         EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE,
                   viewport_added.request_id().media_type());
-        EXPECT_TRUE(viewport_added.has_visual_search_interaction_data());
-        EXPECT_EQ(
-            lens::LensOverlayInteractionRequestMetadata::REGION_SEARCH,
-            viewport_added.visual_search_interaction_data().interaction_type());
-        EXPECT_FLOAT_EQ(0.35f, viewport_added.visual_search_interaction_data()
-                                   .zoomed_crop()
-                                   .crop()
-                                   .center_x());
+        EXPECT_FALSE(viewport_added.has_visual_search_interaction_data());
         EXPECT_EQ(
             lens::LensOverlayContextualInputUploadType::
                 CONTEXTUAL_INPUT_UPLOAD_TYPE_CONTEXTUAL_SEARCHBOX_INITIAL_QUERY,
@@ -2174,6 +2310,279 @@ IN_PROC_BROWSER_TEST_F(
   mock_page_.FlushForTesting();
   EXPECT_THAT(mock_session_handle_->GetSubmittedContextTokens(),
               testing::ElementsAre(overlay_token));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextualTasksExtensionHandlerBrowserTest,
+    OnWebviewMessage_OnSubmitQueryRequest_LrpFollowUpWithoutLensCrop_CombinedWebpageAndImageDoesNotResendRegionCrop) {
+  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
+
+  NiceMock<MockLensOverlayController> mock_overlay(tab, mock_lens_controller_,
+                                                   profile->GetPrefs());
+  NiceMock<lens::MockLensOverlayQueryController> mock_query_controller(nullptr);
+
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_controller())
+      .WillRepeatedly(Return(&mock_overlay));
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_query_controller())
+      .WillRepeatedly(Return(&mock_query_controller));
+  EXPECT_CALL(*mock_lens_controller_, IsCurrentTabSameOrigin())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_overlay, HasRegionSelection()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_session_handle_, search_session_id())
+      .WillRepeatedly(Return("session_sticky_id"));
+
+  const base::WeakPtr<contextual_search::InputStateModel> model =
+      handler_->GetOrCreateInputStateModelForTesting();
+  ASSERT_TRUE(model);
+  EXPECT_FALSE(model->lens_crop().has_value());
+
+  base::UnguessableToken overlay_token = base::UnguessableToken::Create();
+  EXPECT_CALL(*mock_lens_controller_->mock_router(),
+              overlay_tab_context_file_token())
+      .WillRepeatedly(Return(overlay_token));
+
+  SessionID active_tab_id = sessions::SessionTabHelper::IdForTab(web_contents_);
+  contextual_search::FileInfo overlay_file_info;
+  overlay_file_info.file_token = overlay_token;
+  overlay_file_info.tab_session_id = active_tab_id;
+  overlay_file_info.is_implicit_upload = true;
+  lens::LensOverlayRequestId page_req_id;
+  page_req_id.set_uuid(999);
+  page_req_id.set_context_id(888);
+  page_req_id.set_sequence_id(1);
+  page_req_id.set_image_sequence_id(1);
+  page_req_id.set_long_context_id(1);
+  page_req_id.set_has_chrome_tab_data(true);
+  page_req_id.set_media_type(
+      lens::LensOverlayRequestId::MEDIA_TYPE_WEBPAGE_AND_IMAGE);
+  overlay_file_info.request_id = page_req_id;
+  overlay_file_info.upload_status =
+      contextual_search::ContextUploadStatus::kUploadSuccessful;
+  overlay_file_info.input_data = std::make_unique<lens::ContextualInputData>();
+  overlay_file_info.input_data->upload_type =
+      lens::LensOverlayContextualInputUploadType::
+          CONTEXTUAL_INPUT_UPLOAD_TYPE_CONTEXTUAL_SEARCHBOX_INITIAL_QUERY;
+
+  mock_session_handle_->SetSubmittedContextTokens({overlay_token});
+  std::vector<contextual_search::FileInfo> submitted_files = {
+      overlay_file_info};
+  EXPECT_CALL(*mock_session_handle_, GetUploadedContextFileInfos())
+      .WillRepeatedly(Return(std::vector<contextual_search::FileInfo>{}));
+  EXPECT_CALL(*mock_session_handle_, GetSubmittedContextFileInfos())
+      .WillRepeatedly(Return(submitted_files));
+  EXPECT_CALL(*mock_session_handle_, GetVisualSearchInteractionData(_, _))
+      .Times(0);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_page_, PostSearchMessage(_))
+      .WillRepeatedly([&run_loop](mojo_base::ProtoWrapper wrapper) {
+        auto message = wrapper.As<lens::ClientToSearchMessage>();
+        if (!message.has_value() || !message->has_on_submit_query_response()) {
+          return;
+        }
+        const auto& response = message->on_submit_query_response();
+        ASSERT_EQ(1, response.added_contexts_size());
+        const auto& page_added = response.added_contexts(0);
+        EXPECT_EQ("session_sticky_id", page_added.search_session_id());
+        EXPECT_EQ(999u, page_added.request_id().uuid());
+        EXPECT_EQ(888, page_added.request_id().context_id());
+        EXPECT_EQ(lens::LensOverlayRequestId::MEDIA_TYPE_WEBPAGE_AND_IMAGE,
+                  page_added.request_id().media_type());
+        EXPECT_FALSE(page_added.has_visual_search_interaction_data());
+        run_loop.Quit();
+      });
+
+  lens::SearchToClientMessage request;
+  request.mutable_on_submit_query_request();
+  const size_t size = request.ByteSizeLong();
+  std::vector<uint8_t> serialized_message(size);
+  request.SerializeToArray(serialized_message.data(), size);
+
+  SimulateUserInteraction();
+  ContextualTasksWebContentsUserData::GetOrCreateForWebContents(web_contents_)
+      ->OnSearchMessageReceived(serialized_message);
+  run_loop.Run();
+  mock_page_.FlushForTesting();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextualTasksExtensionHandlerBrowserTest,
+    OnWebviewMessage_OnSubmitQueryRequest_LrpFollowUpWithoutLensCrop_RegionOnlyUploadSkipped) {
+  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
+
+  NiceMock<MockLensOverlayController> mock_overlay(tab, mock_lens_controller_,
+                                                   profile->GetPrefs());
+  NiceMock<lens::MockLensOverlayQueryController> mock_query_controller(nullptr);
+
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_controller())
+      .WillRepeatedly(Return(&mock_overlay));
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_query_controller())
+      .WillRepeatedly(Return(&mock_query_controller));
+  EXPECT_CALL(*mock_lens_controller_, IsCurrentTabSameOrigin())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_overlay, HasRegionSelection()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_session_handle_, search_session_id())
+      .WillRepeatedly(Return("session_sticky_id"));
+
+  const base::WeakPtr<contextual_search::InputStateModel> model =
+      handler_->GetOrCreateInputStateModelForTesting();
+  ASSERT_TRUE(model);
+  EXPECT_FALSE(model->lens_crop().has_value());
+
+  base::UnguessableToken overlay_token = base::UnguessableToken::Create();
+  EXPECT_CALL(*mock_lens_controller_->mock_router(),
+              overlay_tab_context_file_token())
+      .WillRepeatedly(Return(overlay_token));
+
+  // Simulate a `ContextUploadMode::kSelectedRegionOnly` upload on Turn 0:
+  // `tab_session_id` and `viewport_request_id` are unset and `media_type` is
+  // `MEDIA_TYPE_DEFAULT_IMAGE`.
+  contextual_search::FileInfo region_only_file;
+  region_only_file.file_token = overlay_token;
+  region_only_file.is_implicit_upload = true;
+  lens::LensOverlayRequestId req_id;
+  req_id.set_uuid(777);
+  req_id.set_context_id(888);
+  req_id.set_image_sequence_id(1);
+  req_id.set_media_type(lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE);
+  region_only_file.request_id = req_id;
+  region_only_file.upload_status =
+      contextual_search::ContextUploadStatus::kUploadSuccessful;
+  region_only_file.input_data = std::make_unique<lens::ContextualInputData>();
+  region_only_file.input_data->upload_type =
+      lens::LensOverlayContextualInputUploadType::
+          CONTEXTUAL_INPUT_UPLOAD_TYPE_CONTEXTUAL_SEARCHBOX_INITIAL_QUERY;
+
+  mock_session_handle_->SetSubmittedContextTokens({overlay_token});
+  std::vector<contextual_search::FileInfo> submitted_files = {region_only_file};
+  EXPECT_CALL(*mock_session_handle_, GetUploadedContextFileInfos())
+      .WillRepeatedly(Return(std::vector<contextual_search::FileInfo>{}));
+  EXPECT_CALL(*mock_session_handle_, GetSubmittedContextFileInfos())
+      .WillRepeatedly(Return(submitted_files));
+  EXPECT_CALL(*mock_session_handle_, GetVisualSearchInteractionData(_, _))
+      .Times(0);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_page_, PostSearchMessage(_))
+      .WillRepeatedly([&run_loop](mojo_base::ProtoWrapper wrapper) {
+        auto message = wrapper.As<lens::ClientToSearchMessage>();
+        if (!message.has_value() || !message->has_on_submit_query_response()) {
+          return;
+        }
+        const auto& response = message->on_submit_query_response();
+        EXPECT_EQ(0, response.added_contexts_size());
+        run_loop.Quit();
+      });
+
+  lens::SearchToClientMessage request;
+  request.mutable_on_submit_query_request();
+  const size_t size = request.ByteSizeLong();
+  std::vector<uint8_t> serialized_message(size);
+  request.SerializeToArray(serialized_message.data(), size);
+
+  SimulateUserInteraction();
+  ContextualTasksWebContentsUserData::GetOrCreateForWebContents(web_contents_)
+      ->OnSearchMessageReceived(serialized_message);
+  run_loop.Run();
+  mock_page_.FlushForTesting();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextualTasksExtensionHandlerBrowserTest,
+    OnWebviewMessage_OnSubmitQueryRequest_LrpFollowUpWithoutLensCrop_DeselectedTabSkipped) {
+  content::RenderFrameHost* rfh = web_contents_->GetPrimaryMainFrame();
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
+
+  NiceMock<MockLensOverlayController> mock_overlay(tab, mock_lens_controller_,
+                                                   profile->GetPrefs());
+  NiceMock<lens::MockLensOverlayQueryController> mock_query_controller(nullptr);
+
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_controller())
+      .WillRepeatedly(Return(&mock_overlay));
+  EXPECT_CALL(*mock_lens_controller_, lens_overlay_query_controller())
+      .WillRepeatedly(Return(&mock_query_controller));
+  EXPECT_CALL(*mock_lens_controller_, IsCurrentTabSameOrigin())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_overlay, HasRegionSelection()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_session_handle_, search_session_id())
+      .WillRepeatedly(Return("session_sticky_id"));
+
+  const base::WeakPtr<contextual_search::InputStateModel> model =
+      handler_->GetOrCreateInputStateModelForTesting();
+  ASSERT_TRUE(model);
+  EXPECT_FALSE(model->lens_crop().has_value());
+
+  const base::UnguessableToken overlay_token = base::UnguessableToken::Create();
+  EXPECT_CALL(*mock_lens_controller_->mock_router(),
+              overlay_tab_context_file_token())
+      .WillRepeatedly(Return(overlay_token));
+
+  const SessionID active_tab_id =
+      sessions::SessionTabHelper::IdForTab(web_contents_);
+  const GURL tab_url("https://example.com");
+  const std::string tab_title = "Example";
+  contextual_search::FileInfo overlay_file_info;
+  overlay_file_info.file_token = overlay_token;
+  overlay_file_info.tab_session_id = active_tab_id;
+  overlay_file_info.tab_url = tab_url;
+  overlay_file_info.tab_title = tab_title;
+  overlay_file_info.is_implicit_upload = true;
+  lens::LensOverlayRequestId page_req_id;
+  page_req_id.set_uuid(999);
+  page_req_id.set_context_id(888);
+  page_req_id.set_has_chrome_tab_data(true);
+  page_req_id.set_media_type(
+      lens::LensOverlayRequestId::MEDIA_TYPE_WEBPAGE_AND_IMAGE);
+  overlay_file_info.request_id = page_req_id;
+  overlay_file_info.upload_status =
+      contextual_search::ContextUploadStatus::kUploadSuccessful;
+  overlay_file_info.input_data = std::make_unique<lens::ContextualInputData>();
+  overlay_file_info.input_data->upload_type =
+      lens::LensOverlayContextualInputUploadType::
+          CONTEXTUAL_INPUT_UPLOAD_TYPE_CONTEXTUAL_SEARCHBOX_INITIAL_QUERY;
+
+  // Simulate the user deselecting the Turn-0 overlay tab chip on LRP before
+  // submitting the Turn-1 follow-up query.
+  mock_session_handle_->set_deselected_tabs_urls(
+      {{active_tab_id, {tab_url, tab_title}}});
+  mock_session_handle_->SetSubmittedContextTokens({overlay_token});
+  std::vector<contextual_search::FileInfo> submitted_files = {
+      overlay_file_info};
+  EXPECT_CALL(*mock_session_handle_, GetUploadedContextFileInfos())
+      .WillRepeatedly(Return(std::vector<contextual_search::FileInfo>{}));
+  EXPECT_CALL(*mock_session_handle_, GetSubmittedContextFileInfos())
+      .WillRepeatedly(Return(submitted_files));
+  EXPECT_CALL(*mock_session_handle_, GetVisualSearchInteractionData(_, _))
+      .Times(0);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_page_, PostSearchMessage(_))
+      .WillRepeatedly([&run_loop](mojo_base::ProtoWrapper wrapper) {
+        auto message = wrapper.As<lens::ClientToSearchMessage>();
+        if (!message.has_value() || !message->has_on_submit_query_response()) {
+          return;
+        }
+        const auto& response = message->on_submit_query_response();
+        EXPECT_EQ(0, response.added_contexts_size());
+        run_loop.Quit();
+      });
+
+  lens::SearchToClientMessage request;
+  request.mutable_on_submit_query_request();
+  const size_t size = request.ByteSizeLong();
+  std::vector<uint8_t> serialized_message(size);
+  request.SerializeToArray(serialized_message.data(), size);
+
+  SimulateUserInteraction();
+  ContextualTasksWebContentsUserData::GetOrCreateForWebContents(web_contents_)
+      ->OnSearchMessageReceived(serialized_message);
+  run_loop.Run();
+  mock_page_.FlushForTesting();
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -2621,6 +3030,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE));
         run_loop.Quit();
       });
   handler_->OnLensThumbnailCreatedForTesting("data:image/png;base64,test_crop");
@@ -2711,6 +3122,8 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE));
         run_loop.Quit();
       });
   handler_->OnLensThumbnailCreatedForTesting("data:image/png;base64,test_crop");
@@ -2851,6 +3264,8 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE));
         run_loop.Quit();
       });
 
@@ -2883,6 +3298,8 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE));
         run_loop.Quit();
       });
 
@@ -2957,6 +3374,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
         EXPECT_EQ(client_message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_UPLOADING);
+        EXPECT_THAT(client_message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_BROWSER_TAB));
         run_loop_add.Quit();
       });
 
@@ -2988,12 +3407,118 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
         EXPECT_EQ(client_message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_NONE);
+        EXPECT_THAT(client_message->on_context_state_changed().input_types(),
+                    testing::IsEmpty());
         run_loop_clear.Quit();
       });
 
   static_cast<searchbox::mojom::PageHandler*>(handler_)->ClearFiles(
       /*should_block_auto_suggested_tabs=*/false);
   run_loop_clear.Run();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextualTasksExtensionHandlerBrowserTest,
+    OnContextStateChanged_PopulatesInputTypesAndDeduplicatesAcrossUpdates) {
+  tabs::TabInterface* first_tab =
+      TabListInterface::From(browser())->GetActiveTab();
+  ASSERT_NE(first_tab, nullptr);
+  int32_t first_tab_id = first_tab->GetHandle().raw_value();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("about:blank"),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+  tabs::TabInterface* second_tab =
+      TabListInterface::From(browser())->GetActiveTab();
+  ASSERT_NE(second_tab, nullptr);
+  int32_t second_tab_id = second_tab->GetHandle().raw_value();
+  ASSERT_NE(first_tab_id, second_tab_id);
+
+  std::vector<lens::ClientToSearchMessage::OnContextStateChanged>
+      context_state_messages;
+  ON_CALL(mock_page_, PostSearchMessage(testing::_))
+      .WillByDefault([&](mojo_base::ProtoWrapper wrapper) {
+        auto client_message = wrapper.As<lens::ClientToSearchMessage>();
+        if (client_message.has_value() &&
+            client_message->has_on_context_state_changed()) {
+          context_state_messages.push_back(
+              client_message->on_context_state_changed());
+        }
+      });
+
+  // Attach first tab -> [INPUT_TYPE_BROWSER_TAB].
+  static_cast<searchbox::mojom::PageHandler*>(handler_)->AddTabContext(
+      first_tab_id, /*delay_upload=*/true,
+      searchbox::mojom::TabAttachmentSource::kContextMenu, base::DoNothing());
+  mock_page_.FlushForTesting();
+  ASSERT_EQ(context_state_messages.size(), 1u);
+  EXPECT_EQ(
+      context_state_messages.back().context_state(),
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_READY);
+  EXPECT_THAT(context_state_messages.back().input_types(),
+              testing::ElementsAre(omnibox::INPUT_TYPE_BROWSER_TAB));
+
+  // Attach second tab while ContextState is already CONTEXT_STATE_READY ->
+  // deduplicating by serialized bytes still emits an updated message with two
+  // INPUT_TYPE_BROWSER_TAB entries.
+  context_state_messages.clear();
+  static_cast<searchbox::mojom::PageHandler*>(handler_)->AddTabContext(
+      second_tab_id, /*delay_upload=*/true,
+      searchbox::mojom::TabAttachmentSource::kContextMenu, base::DoNothing());
+  mock_page_.FlushForTesting();
+  ASSERT_EQ(context_state_messages.size(), 1u);
+  EXPECT_EQ(
+      context_state_messages.back().context_state(),
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_READY);
+  EXPECT_THAT(context_state_messages.back().input_types(),
+              testing::ElementsAre(omnibox::INPUT_TYPE_BROWSER_TAB,
+                                   omnibox::INPUT_TYPE_BROWSER_TAB));
+
+  // Mount a Lens crop while ContextState is already CONTEXT_STATE_READY ->
+  // emits [INPUT_TYPE_LENS_IMAGE, INPUT_TYPE_BROWSER_TAB,
+  // INPUT_TYPE_BROWSER_TAB].
+  context_state_messages.clear();
+  handler_->OnLensThumbnailCreatedForTesting("data:image/png;base64,crop_1");
+  mock_page_.FlushForTesting();
+  ASSERT_EQ(context_state_messages.size(), 1u);
+  EXPECT_EQ(
+      context_state_messages.back().context_state(),
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_READY);
+  EXPECT_THAT(context_state_messages.back().input_types(),
+              testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE,
+                                   omnibox::INPUT_TYPE_BROWSER_TAB,
+                                   omnibox::INPUT_TYPE_BROWSER_TAB));
+
+  // Updating the Lens crop URI in-place leaves serialized bytes unchanged ->
+  // no duplicate OnContextStateChanged is emitted.
+  context_state_messages.clear();
+  handler_->OnLensThumbnailCreatedForTesting("data:image/png;base64,crop_2");
+  mock_page_.FlushForTesting();
+  EXPECT_TRUE(context_state_messages.empty());
+
+  // Removing the Lens crop drops INPUT_TYPE_LENS_IMAGE while keeping the two
+  // attached browser tabs.
+  handler_->RemoveLensCrop();
+  mock_page_.FlushForTesting();
+  ASSERT_EQ(context_state_messages.size(), 1u);
+  EXPECT_EQ(
+      context_state_messages.back().context_state(),
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_READY);
+  EXPECT_THAT(context_state_messages.back().input_types(),
+              testing::ElementsAre(omnibox::INPUT_TYPE_BROWSER_TAB,
+                                   omnibox::INPUT_TYPE_BROWSER_TAB));
+
+  // Clearing all files resets to CONTEXT_STATE_NONE with empty `input_types`.
+  context_state_messages.clear();
+  static_cast<searchbox::mojom::PageHandler*>(handler_)->ClearFiles(
+      /*should_block_auto_suggested_tabs=*/false);
+  mock_page_.FlushForTesting();
+  ASSERT_EQ(context_state_messages.size(), 1u);
+  EXPECT_EQ(
+      context_state_messages.back().context_state(),
+      lens::ClientToSearchMessage::OnContextStateChanged::CONTEXT_STATE_NONE);
+  EXPECT_THAT(context_state_messages.back().input_types(), testing::IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionHandlerBrowserTest,
@@ -5294,8 +5819,9 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(model->lens_crop().has_value());
 
   // Attaching a delayed tab to the session notifies the user data, which mounts
-  // the context library (CONTEXT_LIBRARY, is_active=true). The context state
-  // stays CONTEXT_STATE_READY, so no OnContextStateChanged is emitted.
+  // the context library (CONTEXT_LIBRARY, is_active=true) and emits an updated
+  // OnContextStateChanged with both INPUT_TYPE_LENS_IMAGE and
+  // INPUT_TYPE_BROWSER_TAB.
   base::RunLoop context_library_run_loop;
   EXPECT_CALL(mock_page_, PostSearchMessage(_))
       .WillOnce([&](mojo_base::ProtoWrapper wrapper) {
@@ -5306,6 +5832,17 @@ IN_PROC_BROWSER_TEST_F(
             message->inject_chrome_input().input_type(),
             lens::ClientToSearchMessage::InjectChromeInput::CONTEXT_LIBRARY);
         EXPECT_TRUE(message->inject_chrome_input().is_active());
+      })
+      .WillOnce([&](mojo_base::ProtoWrapper wrapper) {
+        auto message = wrapper.As<lens::ClientToSearchMessage>();
+        ASSERT_TRUE(message.has_value());
+        ASSERT_TRUE(message->has_on_context_state_changed());
+        EXPECT_EQ(message->on_context_state_changed().context_state(),
+                  lens::ClientToSearchMessage::OnContextStateChanged::
+                      CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_LENS_IMAGE,
+                                         omnibox::INPUT_TYPE_BROWSER_TAB));
         context_library_run_loop.Quit();
       });
   mock_session_handle_->AddPendingDelayedTab(123, GURL("https://example.com"),
@@ -5349,6 +5886,16 @@ IN_PROC_BROWSER_TEST_F(
       .WillOnce([&](mojo_base::ProtoWrapper wrapper) {
         auto message = wrapper.As<lens::ClientToSearchMessage>();
         ASSERT_TRUE(message.has_value());
+        ASSERT_TRUE(message->has_on_context_state_changed());
+        EXPECT_EQ(message->on_context_state_changed().context_state(),
+                  lens::ClientToSearchMessage::OnContextStateChanged::
+                      CONTEXT_STATE_READY);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::ElementsAre(omnibox::INPUT_TYPE_BROWSER_TAB));
+      })
+      .WillOnce([&](mojo_base::ProtoWrapper wrapper) {
+        auto message = wrapper.As<lens::ClientToSearchMessage>();
+        ASSERT_TRUE(message.has_value());
         ASSERT_TRUE(message->has_inject_chrome_input());
         EXPECT_EQ(
             message->inject_chrome_input().input_type(),
@@ -5362,6 +5909,8 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_EQ(message->on_context_state_changed().context_state(),
                   lens::ClientToSearchMessage::OnContextStateChanged::
                       CONTEXT_STATE_NONE);
+        EXPECT_THAT(message->on_context_state_changed().input_types(),
+                    testing::IsEmpty());
         clear_run_loop.Quit();
       });
 
@@ -6259,12 +6808,15 @@ IN_PROC_BROWSER_TEST_F(
   auto* user_data =
       ContextualTasksWebContentsUserData::FromWebContents(panel_contents);
   ASSERT_NE(user_data, nullptr);
+  // The panel's initial page is opened in a new foreground tab that is
+  // associated with the task, so wait for it before returning to `tab1`.
   ASSERT_TRUE(base::test::RunUntil([&] {
-    return user_data->GetSelectedTabs().size() == 1u &&
+    return !user_data->GetSelectedTabs().empty() &&
            browser()->tab_strip_model()->count() == 2;
   }));
   browser()->tab_strip_model()->ActivateTabAt(0);
   ShowSidePanel();
+  ASSERT_EQ(user_data->GetSelectedTabs().size(), 1u);
   EXPECT_FALSE(user_data->GetSelectedTabs()[0].pending_delayed_upload);
 
   lens::SearchToClientMessage msg;
@@ -6854,7 +7406,7 @@ IN_PROC_BROWSER_TEST_F(
   const GURL dogs_url = embedded_test_server()->GetURL("/title2.html");
   handler_ = nullptr;
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), cats_url, WindowOpenDisposition::kNewBackgroundTab,
+      browser(), cats_url, ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), dogs_url));
 
@@ -6926,7 +7478,7 @@ IN_PROC_BROWSER_TEST_F(
   // 2. Opening a new tab (`url2`) associated with the task next to the side
   // panel switches the implicit tab context to `url2`.
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url2, WindowOpenDisposition::kNewForegroundTab,
+      browser(), url2, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   auto* tab_list = TabListInterface::From(browser());
   ASSERT_EQ(tab_list->GetTabCount(), 2);

@@ -990,7 +990,7 @@ base::Time GetTimeInThePast(base::Time base_time,
                             int hours_since_midnight,
                             int minutes = 0,
                             int seconds = 0) {
-  base::Time past_midnight = MidnightNDaysLater(base_time, -days_back);
+  base::Time past_midnight = base_time.LocalMidnightWithOffset(-days_back);
 
   return past_midnight + base::Hours(hours_since_midnight) +
          base::Minutes(minutes) + base::Seconds(seconds);
@@ -1758,7 +1758,6 @@ TEST_F(OrderingHistoryServiceTest, EnsureCorrectOrder) {
   VisitRow deleted_visit_row = VisitRow();
   deleted_visit_row.visit_time = visit_time;
   DeletedVisit deleted_visit(deleted_visit_row, deleted_visited_link);
-  std::vector<DeletedVisit> deleted_visits = {deleted_visit};
 
   // Prepare a mock `AddPage` request for the VisitedLink.
   HistoryAddPageArgs request(

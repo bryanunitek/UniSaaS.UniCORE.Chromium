@@ -393,38 +393,6 @@ void DismissUnboundedSurfaceOnKeyDown(
   }
 }
 
-gfx::Rect ClampPopupBoundsToDisplay(const gfx::Rect& bounds,
-                                    RenderWidgetHostViewBase* view) {
-  // More than twice the width of an 8K display, so it never constrains a
-  // real popup, while keeping the area (2^28) well inside int.
-  constexpr int kMaxPopupWidthOrHeight = 16384;
-  static_assert(kMaxPopupWidthOrHeight <= std::numeric_limits<int>::max() / 4 /
-                                              kMaxPopupWidthOrHeight,
-                "kMaxPopupWidthOrHeight squared must stay well inside int");
-
-  // Ozone headless reports a 1x1 display unless --ozone-override-screen-size
-  // overrides it, which describes no real estate to clamp against. Fall back
-  // to a fixed maximum there, and likewise with no screen or an empty work
-  // area.
-  gfx::Size max_size(kMaxPopupWidthOrHeight, kMaxPopupWidthOrHeight);
-  display::Screen* screen = display::Screen::Get();
-  if (screen && !screen->IsHeadless()) {
-    // The view does not exist yet when the popup is first shown, in which
-    // case fall back to whichever display the requested bounds land on.
-    const display::Display display =
-        view ? screen->GetDisplayNearestView(view->GetNativeView())
-             : screen->GetDisplayMatching(bounds);
-    if (!display.work_area().IsEmpty()) {
-      max_size = display.work_area().size();
-    }
-  }
-
-  gfx::Rect clamped(bounds);
-  clamped.set_width(std::clamp(clamped.width(), 0, max_size.width()));
-  clamped.set_height(std::clamp(clamped.height(), 0, max_size.height()));
-  return clamped;
-}
-
 }  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1776,8 +1744,6 @@ void RenderWidgetHostImpl::ForwardMouseEventWithLatencyInfo(
     return;
   }
 
-  AddExpectedUserActivationNotification(mouse_event);
-
   input::MouseEventWithLatencyInfo mouse_with_latency(mouse_event, latency);
   GetRenderInputRouter()->DispatchInputEventWithLatencyInfo(
       mouse_with_latency.event, &mouse_with_latency.latency,
@@ -1976,8 +1942,6 @@ void RenderWidgetHostImpl::ForwardKeyboardEventWithCommands(
   if (touch_emulator && touch_emulator->HandleKeyboardEvent(key_event)) {
     return;
   }
-
-  AddExpectedUserActivationNotification(key_event);
 
   input::NativeWebKeyboardEventWithLatencyInfo key_event_with_latency(key_event,
                                                                       latency);
@@ -2555,7 +2519,7 @@ void RenderWidgetHostImpl::ImeSetComposition(
   GetWidgetInputHandler()->ImeSetComposition(
       text, ime_text_spans, replacement_range, selection_start, selection_end,
       ime_state, /*target_dom_node_id=*/blink::DOMNodeIdType(),
-      base::OnceClosure());
+      blink::mojom::WidgetInputHandler::ImeSetCompositionCallback());
 #if BUILDFLAG(IS_ANDROID)
   for (auto& observer : ime_input_event_observers_) {
     observer.OnImeSetComposingTextEvent(text);
@@ -2593,27 +2557,30 @@ void RenderWidgetHostImpl::ImeCancelComposition() {
   GetWidgetInputHandler()->ImeSetComposition(
       std::u16string(), std::vector<ui::ImeTextSpan>(),
       gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
-      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::OnceClosure());
+      /*target_dom_node_id=*/blink::DOMNodeIdType(),
+      blink::mojom::WidgetInputHandler::ImeSetCompositionCallback());
 }
 
 void RenderWidgetHostImpl::SetExternallySourcedComposition(
     const std::u16string& text,
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
+    const gfx::Range& replacement_range,
     const GlobalDOMNodeId& target_dom_node_id,
-    base::OnceClosure on_complete) {
+    base::OnceCallback<void(const gfx::Range&)> on_complete) {
   int length = text.length();
   GetWidgetInputHandler()->ImeSetComposition(
-      text, ime_text_spans, gfx::Range::InvalidRange(), length, length,
+      text, ime_text_spans, replacement_range, length, length,
       blink::mojom::ImeState::kNone, target_dom_node_id.target_element_dom_id,
       std::move(on_complete));
 }
 
 void RenderWidgetHostImpl::CommitExternallySourcedComposition(
     const std::u16string& text,
+    const gfx::Range& replacement_range,
     const GlobalDOMNodeId& target_dom_node_id,
     base::OnceClosure on_complete) {
   GetWidgetInputHandler()->ImeCommitText(
-      text, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
+      text, std::vector<ui::ImeTextSpan>(), replacement_range, 0,
       target_dom_node_id.target_element_dom_id, std::move(on_complete));
 }
 
@@ -2884,8 +2851,7 @@ void RenderWidgetHostImpl::SetPopupBounds(const gfx::Rect& bounds,
   if (view_ && !waiting_for_screen_rects_ack_) {
     gfx::Rect constrained_bounds =
         delegate_ ? delegate_->ConstrainPopupBounds(bounds) : bounds;
-    view_->SetBounds(
-        ClampPopupBoundsToDisplay(constrained_bounds, view_.get()));
+    view_->SetBounds(constrained_bounds);
   }
   std::move(callback).Run();
 }
@@ -2999,6 +2965,10 @@ void RenderWidgetHostImpl::NotifyObserversOfInputEventWithSource(
   for (auto& observer : input_event_observers_) {
     observer.OnInputEvent(*this, event, source);
   }
+
+  // This call includes non-dispatched events, see the header file comment.
+  AddExpectedUserActivationNotification(event);
+
   if (dispatched_to_renderer) {
     delegate_->DidReceiveInputEvent(this, event);
   }
@@ -3068,10 +3038,8 @@ void RenderWidgetHostImpl::ShowPopup(const gfx::Rect& initial_screen_rect,
   // `delegate_` may be null since this message may be received from when
   // the delegate shutdown but this widget is not yet destroyed.
   if (delegate_) {
-    delegate_->ShowCreatedWidget(
-        GetProcess()->GetID(), GetRoutingID(),
-        ClampPopupBoundsToDisplay(initial_screen_rect, view_.get()),
-        anchor_screen_rect);
+    delegate_->ShowCreatedWidget(GetProcess()->GetID(), GetRoutingID(),
+                                 initial_screen_rect, anchor_screen_rect);
   }
   std::move(callback).Run();
 }
@@ -4745,19 +4713,14 @@ void RenderWidgetHostImpl::CompositorMetricRecorder::TryToRecordMetrics() {
   }
 }
 
-// TODO(https://crbug.com/40091540): WebContentsImpl has a "parallel" user
-// activation tracker through HandleUserInteractionForInputEvent which is
-// primarily used for OS clipboard messages. We need to consolidate that tracker
-// into RenderWidgetHostImpl. Not sure why gesture scroll begin events are
-// included there, this is incompatible with the web exposed user activation
-// state here.
 void RenderWidgetHostImpl::AddExpectedUserActivationNotification(
     const blink::WebInputEvent& event) {
   if (base::FeatureList::IsEnabled(
           blink::features::kTrustedUserActivationTriggers) &&
       (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
        event.GetType() == blink::WebInputEvent::Type::kKeyDown ||
-       event.GetType() == blink::WebInputEvent::Type::kRawKeyDown)) {
+       event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
+       event.GetType() == blink::WebInputEvent::Type::kTouchStart)) {
     expected_user_activation_notification_timer_.Start(
         FROM_HERE, kUserActivationVerificationTimeout,
         base::BindOnce(

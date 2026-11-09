@@ -95,6 +95,7 @@ Host::Host(Profile* profile,
            GlicInstance* glic_instance,
            InstanceDelegate* instance_delegate)
     : profile_(profile),
+      pending_provider_change_(GlicEnabling::GetPendingProviderChange(profile)),
       instance_delegate_(instance_delegate),
       glic_instance_(glic_instance),
       sharing_manager_provider_(sharing_manager_provider) {
@@ -130,6 +131,7 @@ void Host::HibernateImpl(bool is_destroying) {
   // failure. This also keeps `Reload()` (Hibernate() then Awaken()) from
   // carrying a failure from the old load into the new one.
   client_load_failed_ = false;
+  client_load_error_reason_.reset();
   if (contents_) {
     metrics_.OnContentsDestroyed();
   }
@@ -204,13 +206,6 @@ void Host::Reload() {
   UnsetWebClient();
   Hibernate();
   Awaken();
-  delegate_->OnReload();
-}
-
-void Host::OnWebContentsNavigated() {
-  if (delegate_) {
-    delegate_->OnReload();
-  }
 }
 
 void Host::Awaken() {
@@ -232,6 +227,7 @@ void Host::Awaken() {
   contents_->AttachToHost(this);
   UpdateVisibility();
   UpdateNativeLoadingState();
+  observers_.Notify(&Observer::ContentsCreated);
 }
 
 void Host::OnActiveWebContentsChanged(content::WebContents* new_contents) {
@@ -315,7 +311,7 @@ void Host::WebUIPageHandlerAdded(GlicPageHandler* page_handler) {
     // is momentarily two page handlers for the same web contents. Since this
     // can affect real users, it needs to be handled specially here.
     WebUiStateChanged(page_handler_, mojom::WebUiState::kUninitialized);
-    SetClientLoadFailed(false);
+    ClearClientLoadFailed();
     // TODO(harringtond): Web client liveness needs detangled from the page
     // handler. This is currently needed because, on reload, the web client
     // isn't cleared soon enough otherwise.
@@ -335,7 +331,7 @@ void Host::WebUIPageHandlerRemoved(GlicPageHandler* page_handler) {
   page_handler_ = nullptr;
   login_page_committed_ = false;
   WebUiStateChanged(page_handler, mojom::WebUiState::kUninitialized);
-  SetClientLoadFailed(false);
+  ClearClientLoadFailed();
   // TODO(harringtond): Web client liveness needs detangled from the page
   // handler. This is currently needed because, on reload, the web client
   // isn't cleared soon enough otherwise.
@@ -480,7 +476,8 @@ void Host::WebClientInitialized() {
 }
 
 void Host::WebClientInitializeFailed() {
-  SetClientLoadFailed(true);
+  SetClientLoadFailed(
+      client_load_error_reason_.value_or(ClientLoadErrorReason::kClientError));
   observers_.Notify(&Observer::WebClientInitializeFailed);
 }
 
@@ -680,23 +677,36 @@ void Host::ClientLoadErrorOccurred(ClientLoadErrorReason reason) {
   observers_.Notify(&Observer::ClientLoadErrorOccurred, reason);
 }
 
-void Host::SetClientLoadFailed(bool failed) {
-  client_load_failed_ = failed;
-  if (!failed) {
-    // The failure is withdrawn (reload, retry on show), and with it its cause.
-    // A host that fails again reports the new cause before the new failure.
-    client_load_error_reason_.reset();
-  }
+void Host::SetClientLoadFailed(ClientLoadErrorReason error_reason) {
+  client_load_failed_ = true;
+  client_load_error_reason_ = error_reason;
   UpdateClientLoadState();
 }
 
-void Host::SetClientLoadFailed(GlicPageHandler* page_handler, bool failed) {
+void Host::ClearClientLoadFailed() {
+  // The failure is withdrawn (reload, retry on show), and with it its cause.
+  // A host that fails again reports the new cause before or with the new
+  // failure.
+  client_load_failed_ = false;
+  client_load_error_reason_.reset();
+  UpdateClientLoadState();
+}
+
+void Host::SetClientLoadFailed(GlicPageHandler* page_handler,
+                               ClientLoadErrorReason error_reason) {
   if (page_handler != page_handler_) {
     // A page handler that is no longer current is on its way out; its report
     // describes the load being replaced, not the one in progress.
     return;
   }
-  SetClientLoadFailed(failed);
+  SetClientLoadFailed(error_reason);
+}
+
+void Host::ClearClientLoadFailed(GlicPageHandler* page_handler) {
+  if (page_handler != page_handler_) {
+    return;
+  }
+  ClearClientLoadFailed();
 }
 
 void Host::UpdateClientLoadState() {
@@ -804,6 +814,7 @@ bool Host::ComputeIsShowingNativeLoading() const {
     case mojom::WebUiState::kLocationMismatch:
     case mojom::WebUiState::kIneligibleAccount:
     case mojom::WebUiState::kGuestLoaded:
+    case mojom::WebUiState::kPendingProviderChangeGeminiToGeic:
       return false;
   }
 }

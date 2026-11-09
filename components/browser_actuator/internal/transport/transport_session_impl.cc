@@ -16,7 +16,9 @@
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
+#include "components/browser_actuator/internal/transport/downstream_message_sequencer.h"
 #include "components/browser_actuator/internal/transport/metrics_utils.h"
 #include "components/browser_actuator/internal/transport/proto/transport_messages.pb.h"
 #include "components/browser_actuator/public/transport/payload_type_mapping.h"
@@ -31,14 +33,11 @@ namespace browser_actuator::transport {
 namespace {
 
 // `Any::Is<T>()` is unavailable for LITE_RUNTIME protos, so `type_url` is
-// compared by hand. An empty value is accepted; the server does not always
-// populate it.
-// TODO(crbug.com/572804026): Require `type_url` once the server always sets
-// it.
+// compared by hand against `ExpectedTypeUrl(payload_type)`.
 bool HasExpectedTypeUrl(const ActuatorDownstreamTypedPayload& typed_payload,
                         PayloadType payload_type) {
-  const std::string& type_url = typed_payload.proto_payload().type_url();
-  return type_url.empty() || type_url == ExpectedTypeUrl(payload_type);
+  return typed_payload.proto_payload().type_url() ==
+         ExpectedTypeUrl(payload_type);
 }
 
 // Returns true if `message` carries a `ControlCommand` that tears down the
@@ -74,7 +73,8 @@ TransportSessionImpl::TransportSessionImpl(
     : session_id_(session_id),
       channel_(std::move(channel)),
       on_downstream_message_(std::move(on_downstream_message)),
-      start_time_(base::TimeTicks::Now()) {
+      start_time_(base::TimeTicks::Now()),
+      last_activity_time_(start_time_) {
   DCHECK(channel_);
 }
 
@@ -92,10 +92,13 @@ TransportSessionImpl::SendUpstreamMessage(
     PayloadType payload_type,
     const google::protobuf::MessageLite& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  last_activity_time_ = base::TimeTicks::Now();
   if (channel_) {
     std::optional<int64_t> responding_to_sequence_number =
-        payload_type == PayloadType::kControl ? dispatching_sequence_number_
-                                              : std::nullopt;
+        (payload_type == PayloadType::kControl ||
+         payload_type == PayloadType::kProbe)
+            ? dispatching_sequence_number_
+            : std::nullopt;
     channel_->SendUpstreamMessage(session_id_, payload_type, message,
                                   responding_to_sequence_number);
     return {};
@@ -106,6 +109,7 @@ TransportSessionImpl::SendUpstreamMessage(
 void TransportSessionImpl::OnMessage(PayloadType payload_type,
                                      std::string_view serialized_payload) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  last_activity_time_ = base::TimeTicks::Now();
   // This entry point exists for the out-of-band FCM wake-up path, which
   // carries `sequence_number = 0`. Setting `dispatching_sequence_number_ = 0`
   // ensures synchronous control replies (e.g. `StartSessionAck`) populate
@@ -295,13 +299,19 @@ base::expected<void, DownstreamMessageSequencer::Error>
 TransportSessionImpl::ProcessDownstreamMessage(
     ActuatorDownstreamMessage message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // TODO(crbug.com/563605505): Consider whether server heartbeat messages
+  // should count as session activity.
+  last_activity_time_ = base::TimeTicks::Now();
   const bool is_new_terminating_command =
+      DownstreamMessageSequencer::IsValidSequenceNumber(
+          message.sequence_number()) &&
       message.sequence_number() > sequencer_.last_seen_sequence_number() &&
       HasTerminatingControlCommand(message);
 
   std::vector<ActuatorDownstreamMessage> deliverable;
   if (is_new_terminating_command) {
     consecutive_invalid_sequence_numbers_ = 0;
+    consecutive_buffer_full_errors_ = 0;
     // Flush any buffered messages and bypass capacity-bounded buffering so a
     // full reorder buffer cannot reject session or channel teardown.
     deliverable = sequencer_.Flush();
@@ -311,19 +321,27 @@ TransportSessionImpl::ProcessDownstreamMessage(
           return seq < msg.sequence_number();
         });
     deliverable.insert(it, std::move(message));
+    sequencer_.AdvanceLastSeenTo(deliverable.back().sequence_number());
   } else {
     base::expected<std::vector<ActuatorDownstreamMessage>,
                    DownstreamMessageSequencer::Error>
         ready_messages = sequencer_.AddMessage(std::move(message));
     if (!ready_messages.has_value()) {
-      if (ready_messages.error() ==
-          DownstreamMessageSequencer::Error::kInvalidSequenceNumber) {
-        ++consecutive_invalid_sequence_numbers_;
+      switch (ready_messages.error()) {
+        case DownstreamMessageSequencer::Error::kInvalidSequenceNumber:
+          ++consecutive_invalid_sequence_numbers_;
+          break;
+        case DownstreamMessageSequencer::Error::kBufferFull:
+          ++consecutive_buffer_full_errors_;
+          break;
       }
       return base::unexpected(ready_messages.error());
     }
     consecutive_invalid_sequence_numbers_ = 0;
     deliverable = std::move(*ready_messages);
+    if (!deliverable.empty()) {
+      consecutive_buffer_full_errors_ = 0;
+    }
   }
 
   base::WeakPtr<TransportSessionImpl> weak_this = GetWeakPtr();

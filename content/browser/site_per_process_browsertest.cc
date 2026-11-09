@@ -119,6 +119,7 @@
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/policy_container_utils.h"
+#include "content/public/test/popup_test_utils.h"
 #include "content/public/test/render_frame_host_test_support.h"
 #include "content/public/test/test_devtools_protocol_client.h"
 #include "content/public/test/test_frame_navigation_observer.h"
@@ -8123,8 +8124,6 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   RenderFrameProxyHost* root_proxy =
       iframe_node->render_manager()->GetProxyToParent();
   EXPECT_TRUE(root_proxy->IsInertForTesting());
-
-  std::string focused_element;
 
   // Attempt to change focus in the inert subframe. This should work.
   // The setTimeout ensures that the inert bit can propagate before the

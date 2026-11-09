@@ -1365,9 +1365,7 @@ void MenuController::OnMouseReleased(SubmenuView* source,
       part.menu->GetDelegate()->ExecuteCommand(command, event.flags());
       return;
     }
-    if ((!part.menu->NonIconChildViewsCount() ||
-         part.menu->GetTriggerActionWithNonIconChildViews()) &&
-        part.menu->GetDelegate()->IsTriggerableEvent(part.menu, event)) {
+    if (CanPointerReleaseActivate(part.menu, event)) {
       Accept(part.menu, event.flags());
       return;
     }
@@ -1519,8 +1517,7 @@ void MenuController::OnGestureEvent(SubmenuView* source,
               command, *event)) {
         item_selected_by_touch_ = true;
         part.menu->GetDelegate()->ExecuteCommand(command, 0);
-      } else if (part.menu->GetDelegate()->IsTriggerableEvent(part.menu,
-                                                              *event)) {
+      } else if (CanPointerReleaseActivate(part.menu, *event)) {
         item_selected_by_touch_ = true;
         Accept(part.menu, event->flags());
       }
@@ -2676,6 +2673,23 @@ void MenuController::UpdateInitialLocation(const gfx::Rect& anchor_bounds,
 
   // Calculate the bounds of the monitor we'll show menus on. Do this once to
   // avoid repeated system queries for the info.
+  if (ShouldIgnoreScreenBoundsForMenus()) {
+    // On platforms without global screen coordinates (such as Ozone/Wayland),
+    // `anchor_bounds` is in parent-local coordinates, so
+    // `GetDisplayNearestPoint` can match the wrong display and the display's
+    // work area may have a non-zero offset origin. Query the display from
+    // `owner_` and shift the work area origin to (0, 0).
+    const display::Display display =
+        (owner_ && owner_->GetNativeWindow())
+            ? display::Screen::Get()->GetDisplayNearestWindow(
+                  owner_->GetNativeWindow())
+            : display::Screen::Get()->GetDisplayNearestPoint(
+                  anchor_bounds.origin());
+    pending_state_.monitor_bounds = display.work_area();
+    pending_state_.monitor_bounds.set_origin(gfx::Point(0, 0));
+    return;
+  }
+
   const display::Display display =
       display::Screen::Get()->GetDisplayNearestPoint(anchor_bounds.origin());
   pending_state_.monitor_bounds = display.work_area();
@@ -3715,6 +3729,14 @@ gfx::Rect MenuController::CalculateBubbleMenuBounds(
 // static
 size_t MenuController::MenuDepth(MenuItemView* item) {
   return item ? (MenuDepth(item->GetParentMenuItem()) + 1) : size_t{0};
+}
+
+// static
+bool MenuController::CanPointerReleaseActivate(MenuItemView* item,
+                                               const ui::Event& event) {
+  return (!item->NonIconChildViewsCount() ||
+          item->GetTriggerActionWithNonIconChildViews()) &&
+         item->GetDelegate()->IsTriggerableEvent(item, event);
 }
 
 void MenuController::IncrementSelection(

@@ -6,13 +6,18 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/enterprise/connectors/core/features.h"
+#include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/enterprise/connectors/core/reporting_test_utils.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -194,6 +199,48 @@ TEST_F(ExtensionActorTrackerTest, ExtensionNavigationStartKeepsActor) {
             ExtensionActorTracker::GetActiveActor(web_contents()));
 }
 
+TEST_F(ExtensionActorTrackerTest, ExtensionHistoryNavigationKeepsActor) {
+  // These commands start browser-initiated navigations without
+  // `PAGE_TRANSITION_FROM_API`.
+  const ui::PageTransition kBackForward = ui::PageTransitionFromInt(
+      ui::PAGE_TRANSITION_LINK | ui::PAGE_TRANSITION_FORWARD_BACK);
+  const std::pair<const char*, ui::PageTransition> kCommands[] = {
+      {"tabs.reload", ui::PAGE_TRANSITION_RELOAD},
+      {"tabs.goBack", kBackForward},
+      {"tabs.goForward", kBackForward},
+  };
+  for (const auto& [command, transition] : kCommands) {
+    SCOPED_TRACE(command);
+    ExtensionActorTracker::SetActiveActor(web_contents(), "extension_alpha",
+                                          "Runtime.evaluate");
+    ExtensionActorTracker::SetActiveActor(web_contents(), "extension_alpha",
+                                          command);
+
+    NiceMock<content::MockNavigationHandle> history_nav(web_contents());
+    history_nav.set_url(GURL("https://example.com/previous"));
+    history_nav.set_is_in_primary_main_frame(true);
+    history_nav.set_is_renderer_initiated(false);
+    history_nav.set_page_transition(transition);
+    tracker()->DidStartNavigation(&history_nav);
+    EXPECT_EQ("extension_alpha",
+              ExtensionActorTracker::GetActiveActor(web_contents()));
+
+    history_nav.set_has_committed(true);
+    tracker()->DidFinishNavigation(&history_nav);
+    EXPECT_EQ("extension_alpha",
+              ExtensionActorTracker::GetActiveActor(web_contents()));
+
+    // The next browser-initiated navigation is user input again.
+    NiceMock<content::MockNavigationHandle> typed_nav(web_contents());
+    typed_nav.set_is_in_primary_main_frame(true);
+    typed_nav.set_is_renderer_initiated(false);
+    typed_nav.set_page_transition(ui::PAGE_TRANSITION_TYPED);
+    tracker()->DidStartNavigation(&typed_nav);
+    EXPECT_EQ(std::nullopt,
+              ExtensionActorTracker::GetActiveActor(web_contents()));
+  }
+}
+
 TEST_F(ExtensionActorTrackerTest, AboutBlankDoesNotConsumeInitialNavigation) {
   ExtensionActorTracker::SetActiveActor(web_contents(), "extension_alpha",
                                         "tabs.create");
@@ -309,6 +356,17 @@ TEST_F(ExtensionActorTrackerTest, DisabledWhenFeatureOrEnterprisePolicyOff) {
   scoped_feature_list_.InitAndDisableFeature(
       kEnterpriseExtensionActorAttribution);
   EXPECT_FALSE(ExtensionActorTracker::IsEnabled(browser_context()));
+}
+
+TEST_F(ExtensionActorTrackerTest, EnabledWithRealTimeUrlCheckOnly) {
+  test::SetOnSecurityEventReporting(profile()->GetPrefs(), /*enabled=*/false);
+  EXPECT_FALSE(ExtensionActorTracker::IsEnabled(browser_context()));
+
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckMode,
+                                    REAL_TIME_CHECK_FOR_MAINFRAME_ENABLED);
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_MACHINE);
+  EXPECT_TRUE(ExtensionActorTracker::IsEnabled(browser_context()));
 }
 
 }  // namespace

@@ -163,7 +163,8 @@ public class HubCoordinator implements PaneHubController, BackPressHandler, Pane
                         userEducationHelper,
                         hubLayoutController.getIsAnimatingSupplier(),
                         bottomToolbarVisibilitySupplier,
-                        this::onToolbarCloseButtonPressed);
+                        this::onToolbarCloseButtonPressed,
+                        mPaneTransitionProgressSupplier);
 
         // Dynamically add bottom toolbar if delegate is available and enabled
         if (bottomToolbarDelegate != null && bottomToolbarDelegate.isBottomToolbarEnabled()) {
@@ -325,6 +326,7 @@ public class HubCoordinator implements PaneHubController, BackPressHandler, Pane
         Pane nextPane = getAdjacentPane(isSwipeLeft);
         if (nextPane != null) {
             nextPane.notifyLoadHint(LoadHint.WARM);
+            nextPane.prepareForSwipeReveal();
             return nextPane.getRootView();
         }
         return null;

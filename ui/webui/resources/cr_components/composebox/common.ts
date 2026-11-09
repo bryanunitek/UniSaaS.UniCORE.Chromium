@@ -207,6 +207,9 @@ export interface ComposeboxState {
   error?: DriveUploadError;
   mode: ToolMode;
   model: ModelMode;
+  // Whether to open in AI Mode (e.g. from the AI Mode button), which selects
+  // the default model. Only matters with dynamic AIM fulfillment.
+  enterAimMode?: boolean;
   suggestInventory?: SuggestInventory;
   // <if expr="not is_android">
   smartTabSharingActive: boolean;
@@ -307,6 +310,7 @@ export class ComposeboxInputModel {
                // flight. This mirrors `pendingUploads`, which gates the submit
                // button, so the skeleton and the disabled submit button agree.
                isLoading: !isContextUploadStatusTerminal(file.status),
+               recentTab: false,
              } as TabInfo));
   }
 
@@ -684,6 +688,39 @@ export function hasAllowedInputs(
 export function getLoadTimeBoolean(id: string, defaultValue: boolean): boolean {
   return loadTimeData.valueExists(id) ? loadTimeData.getBoolean(id) :
                                         defaultValue;
+}
+
+// MIME types of HEIC/HEIF images, keyed by lowercase file extension.
+const HEIF_MIME_TYPES_BY_EXTENSION = new Map<string, string>([
+  ['heic', 'image/heic'],
+  ['heif', 'image/heif'],
+]);
+
+function getLowercaseExtension(fileName?: string): string {
+  if (!fileName) {
+    return '';
+  }
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex === -1 ? '' : fileName.slice(dotIndex + 1).toLowerCase();
+}
+
+// Returns the MIME type of `file`. Some platforms do not report a MIME type
+// for HEIC/HEIF files (e.g. uppercase `.HEIC` on Linux, or Windows without the
+// HEIF extension installed), so infer it from the file extension in that case.
+export function getFileMimeType(file: {name?: string, type?: string}): string {
+  if (file.type) {
+    return file.type;
+  }
+  return HEIF_MIME_TYPES_BY_EXTENSION.get(getLowercaseExtension(file.name)) ??
+      '';
+}
+
+// Returns true if `file` is a HEIC/HEIF image, which Chrome cannot render in
+// an <img> element.
+export function isHeifImage(file: {name?: string, type?: string}): boolean {
+  const type = (file.type ?? '').toLowerCase();
+  return type === 'image/heic' || type === 'image/heif' ||
+      HEIF_MIME_TYPES_BY_EXTENSION.has(getLowercaseExtension(file.name));
 }
 
 export function isContextUploadStatusTerminal(status: ContextUploadStatus):

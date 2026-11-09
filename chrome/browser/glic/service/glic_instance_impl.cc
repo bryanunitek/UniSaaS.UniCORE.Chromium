@@ -44,8 +44,10 @@
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_fre_store.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/glic_provider_spec.h"
 #include "chrome/browser/glic/public/glic_side_panel_coordinator.h"
 #include "chrome/browser/glic/service/glic_instance_helper.h"
 #include "chrome/browser/glic/service/glic_tab_group_utils.h"
@@ -183,6 +185,8 @@ void GlicInstanceImpl::MaybeDaisyChainToTab(tabs::TabInterface* source_tab,
     side_panel_options.suppress_opening_animation = true;
     side_panel_options.pin_trigger = GlicPinTrigger::kDaisyChain;
     side_panel_options.prefer_peek = true;
+    side_panel_options.pin_on_bind =
+        service_->provider_spec().PinOnBindEnabled();
 
     auto show_options = ShowOptions{side_panel_options};
     switch (source) {
@@ -431,6 +435,10 @@ bool GlicInstanceImpl::IsActuating() const {
   return actor_task_manager_ && actor_task_manager_->IsActuating();
 }
 
+bool GlicInstanceImpl::HasLiveSurface() const {
+  return GetLastActiveSurface().has_value();
+}
+
 bool GlicInstanceImpl::IsLiveMode() const {
   return interaction_mode_ == mojom::WebClientMode::kAudio;
 }
@@ -483,21 +491,23 @@ void GlicInstanceImpl::Show(ShowOptions options) {
 
   EmbedderKey new_key = GetEmbedderKey(options);
 
-  if (IsActiveEmbedder(new_key)) {
-    if (!options.reinitialize_if_already_active) {
-      // The panel is already up, so there is nothing to re-show. Unless this
-      // is an automatic reshow (such as OnBrowserActivated() when focusing a
-      // window whose panel is already open), the page still gets told: a show
-      // is also what makes it retry a client that failed to load, and someone
-      // invoking Glic again at a failed panel should get that retry rather than
-      // the stale failure. This is a no-op for a page whose client is up.
-      if (options.invocation_source !=
-          mojom::InvocationSource::kReshowInactive) {
-        host_.NotifyWindowIntentToShow();
-      }
-      return;
+  if (IsActiveEmbedder(new_key) && !options.reinitialize_if_already_active) {
+    // The panel is already up, so there is nothing to re-show. Unless this
+    // is an automatic reshow (such as OnBrowserActivated() when focusing a
+    // window whose panel is already open), the page still gets told: a show
+    // is also what makes it retry a client that failed to load, and someone
+    // invoking Glic again at a failed panel should get that retry rather than
+    // the stale failure. This is a no-op for a page whose client is up.
+    if (options.invocation_source != mojom::InvocationSource::kReshowInactive) {
+      host_.NotifyWindowIntentToShow();
     }
-  } else {
+    return;
+  }
+
+  instance_metrics().OnWillShow(options.invocation_source,
+                                conversation_id().has_value());
+
+  if (!IsActiveEmbedder(new_key)) {
     DeactivateCurrentEmbedder();
     // Ensure that there is a WebContents for the embedder to use.
     EnsureHostAwake();
@@ -592,6 +602,10 @@ void GlicInstanceImpl::Attach(tabs::TabHandle tab) {
   auto show_options = ShowOptions::ForSidePanel(*tab_to_attach_to);
   show_options.invocation_source = mojom::InvocationSource::kDetachAttachButton;
   Show(show_options);
+}
+
+void GlicInstanceImpl::AcceptNativeFre() {
+  service_->provider_spec().GetFreStore().CompleteOnboarding(profile_);
 }
 
 void GlicInstanceImpl::Close(EmbedderKey key, const CloseOptions& options) {
@@ -732,15 +746,17 @@ void GlicInstanceImpl::CreateTab(
     return;
   }
 
+  const bool pin_on_bind = service_->provider_spec().PinOnBindEnabled();
+
   // If showing the side panel is not requested, we only bind the tab.
   if (!show_side_panel) {
-    BindTab(created_tab, GlicPinTrigger::kDaisyChain, /*pin_on_bind=*/true);
+    BindTab(created_tab, GlicPinTrigger::kDaisyChain, pin_on_bind);
   } else if (base::FeatureList::IsEnabled(
                  kGlicBindOnlyForDaisyChainingFromFloatingUi) &&
              IsDetached()) {
     // If the floating UI is active and the feature flag is enabled, bind the
     // tab and keep focus on the floating UI.
-    BindTab(created_tab, GlicPinTrigger::kDaisyChain, /*pin_on_bind=*/true);
+    BindTab(created_tab, GlicPinTrigger::kDaisyChain, pin_on_bind);
     if (embedder_has_focus) {
       GetActiveEmbedder()->Focus();
     }
@@ -748,6 +764,7 @@ void GlicInstanceImpl::CreateTab(
     SidePanelShowOptions side_panel_options{*created_tab};
     side_panel_options.suppress_opening_animation = true;
     side_panel_options.prefer_peek = true;
+    side_panel_options.pin_on_bind = pin_on_bind;
     auto show_options = ShowOptions{side_panel_options};
     show_options.invocation_source =
         mojom::InvocationSource::kDaisyChainOnFollowLink;
@@ -1417,7 +1434,7 @@ void GlicInstanceImpl::MaybeWarmZeroStateSuggestions(
     mojom::InvocationSource invocation_source) {
   if (conversation_id() ||
       !GlicEnabling::IsEnabledAndConsentForProfile(profile_) ||
-      !IsZeroStateSuggestionsEnabled()) {
+      !IsZeroStateSuggestionsEnabled(profile_)) {
     return;
   }
 
@@ -1628,6 +1645,11 @@ void GlicInstanceImpl::ClientReadyToShow(
   instance_metrics_.OnClientReady();
 }
 
+void GlicInstanceImpl::ContentsCreated() {
+  // Offscreen rendering must follow the new contents, e.g. after a reload.
+  offscreen_rendering_controller_.UpdateState();
+}
+
 void GlicInstanceImpl::WebUiStateChanged(mojom::WebUiState state) {
   TRACE_EVENT_INSTANT("glic", "GlicInstanceImpl::WebUiStateChanged",
                       perfetto::Flow::FromPointer(this), "state", state);
@@ -1816,12 +1838,7 @@ bool GlicInstanceImpl::IsHibernated() const {
 }
 
 void GlicInstanceImpl::EnsureHostAwake() {
-  if (IsHibernated()) {
-    if (coordinator_delegate_) {
-      coordinator_delegate_->OnInstanceWillAwaken();
-    }
-    host_.Awaken();
-  }
+  host_.Awaken();
 }
 
 void GlicInstanceImpl::Hibernate() {

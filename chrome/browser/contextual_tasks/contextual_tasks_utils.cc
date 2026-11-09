@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/containers/fixed_flat_map.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
@@ -37,6 +38,7 @@
 #include "net/http/http_response_headers.h"
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/contextual_tasks/active_task_context_provider.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_web_contents_user_data.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
@@ -44,12 +46,15 @@
 #include "chrome/browser/ui/contextual_search/tab_contextualization_controller.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/views/contextual_tasks/contextual_tasks_ephemeral_button_controller.h"
+#include "chrome/grit/branded_strings.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/lens/contextual_input.h"
+#include "components/lens/lens_overlay_mime_type.h"
 #include "components/omnibox/common/composebox_features.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/session_id.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/actions/actions.h"
 #endif
 #include "chrome/common/webui_url_constants.h"
@@ -71,7 +76,8 @@
 #include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "third_party/lens_server_proto/search_communication.pb.h"
 #include "ui/base/device_form_factor.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/color/color_provider_key.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -423,7 +429,8 @@ CaptureAndUploadTabContext(
     int32_t tab_id,
     contextual_search::ContextualSearchSessionHandle* session_handle,
     base::RepeatingClosure on_context_uploaded,
-    BrowserWindowInterface* browser_window_interface) {
+    BrowserWindowInterface* browser_window_interface,
+    ContextualTasksWebContentsUserData* user_data) {
   if (!session_handle) {
     return base::unexpected(
         contextual_search::ContextUploadErrorType::kBrowserProcessingError);
@@ -470,20 +477,34 @@ CaptureAndUploadTabContext(
   }
 
   auto context_token = session_handle->CreateContextToken();
+  if (user_data) {
+    user_data->OnTabContextUploadStarted(context_token);
+  }
 
   tab_contextualization_controller->GetPageContext(base::BindOnce(
       [](base::UnguessableToken context_token,
          base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
              session_handle,
+         base::WeakPtr<ContextualTasksWebContentsUserData> user_data,
          base::RepeatingClosure on_context_uploaded,
          std::unique_ptr<lens::ContextualInputData> page_content_data) {
-        if (!session_handle || !page_content_data) {
+        if (!session_handle) {
           return;
         }
         auto uploaded_context_tokens =
             session_handle->GetUploadedContextTokens();
         if (std::ranges::find(uploaded_context_tokens, context_token) ==
             uploaded_context_tokens.end()) {
+          return;
+        }
+        if (!page_content_data) {
+          if (user_data) {
+            user_data->OnContextUploadStatusChanged(
+                context_token, lens::MimeType::kUnknown,
+                contextual_search::ContextUploadStatus::kValidationFailed,
+                contextual_search::ContextUploadErrorType::
+                    kBrowserProcessingError);
+          }
           return;
         }
         session_handle->StartTabContextUploadFlow(context_token,
@@ -494,6 +515,7 @@ CaptureAndUploadTabContext(
         }
       },
       context_token, session_handle->AsWeakPtr(),
+      user_data ? user_data->AsWeakPtr() : nullptr,
       std::move(on_context_uploaded)));
 
   return base::ok(context_token);
@@ -727,12 +749,24 @@ void UpdatePinButtonVisibilityState(BrowserWindowInterface* browser_window) {
             is_pinning_eligible ? actions::ActionPinnableState::kPinnable
                                 : actions::ActionPinnableState::kNotPinnable));
 
-    bool should_show_ephemeral = false;
-    if (auto* ephemeral_controller =
-            ContextualTasksEphemeralButtonController::From(browser_window)) {
-      should_show_ephemeral = ephemeral_controller->ShouldShowEphemeralButton();
+    if (!browser_window->GetProfile()->IsOffTheRecord()) {
+      // Unpinned toolbar presence is owned by `ShowActionEphemerallyInToolbar`;
+      // hiding `action_item` directly bypasses `AnimatingLayoutManager`
+      // fade-out and leaves a popped-out button queued for removal that
+      // resurrects if eligibility is restored before layout completes.
+      if (!GetEffectivePinState(browser_window->GetProfile())) {
+        action_item->SetVisible(true);
+        return;
+      }
+
+      bool should_show_ephemeral = false;
+      if (auto* ephemeral_controller =
+              ContextualTasksEphemeralButtonController::From(browser_window)) {
+        should_show_ephemeral =
+            ephemeral_controller->ShouldShowEphemeralButton();
+      }
+      action_item->SetVisible(is_pinning_eligible || should_show_ephemeral);
     }
-    action_item->SetVisible(is_pinning_eligible || should_show_ephemeral);
     return;
   }
 
@@ -746,6 +780,80 @@ void UpdatePinButtonVisibilityState(BrowserWindowInterface* browser_window) {
         action_item->SetVisible(is_pinning_eligible);
       }
     }
+  }
+}
+
+int GetContextualTasksPinningStringId(int default_resource_id) {
+  const auto variant = GetContextualTasksPinningStringVariant();
+  if (variant == PinningStringVariant::kAiMode) {
+    return default_resource_id;
+  }
+
+  struct VariantIds {
+    int side_panel;
+    int in_side_panel;
+    int in_chrome;
+    int panel;
+  };
+#define CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(base_id)        \
+  {                                                              \
+    base_id, {                                                   \
+      base_id##_SIDE_PANEL, base_id##_IN_SIDE_PANEL,             \
+          base_id##_IN_CHROME, base_id##_PANEL                   \
+    }                                                            \
+  }
+  static constexpr auto kVariants =
+      base::MakeFixedFlatMap<int, VariantIds>({
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_SIDE_PANEL_REOPEN_TOOL_TIP),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_SIDE_PANEL_CONTEXTUAL_TASKS_PINNABLE_IPH),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_EPHEMERAL_TOOLBAR_BUTTON_IPH),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_EPHEMERAL_TOOLBAR_BUTTON_IPH_SCREENREADER),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_PINNED_ICON_CHANGED_IPH),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_CONTEXTUAL_TASKS_PINNED_ICON_CHANGED_IPH_SCREENREADER),
+          CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS(
+              IDS_TUTORIAL_CONTEXTUAL_TASKS_STEP3),
+      });
+#undef CONTEXTUAL_TASKS_PINNING_STRING_VARIANTS
+
+  const auto it = kVariants.find(default_resource_id);
+  if (it == kVariants.end()) {
+    return default_resource_id;
+  }
+
+  switch (variant) {
+    case PinningStringVariant::kAiMode:
+      return default_resource_id;
+    case PinningStringVariant::kSidePanel:
+      return it->second.side_panel;
+    case PinningStringVariant::kInSidePanel:
+      return it->second.in_side_panel;
+    case PinningStringVariant::kInChrome:
+      return it->second.in_chrome;
+    case PinningStringVariant::kPanel:
+      return it->second.panel;
+  }
+}
+
+int GetContextualTasksEphemeralButtonContextMenuCloseTextId() {
+  switch (GetEphemeralButtonContextMenuOption()) {
+    case EphemeralButtonContextMenuOption::kHideSidePanel:
+      return IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_REMOVE;
+    case EphemeralButtonContextMenuOption::kCloseSidePanel:
+      return IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_CLOSE;
+    case EphemeralButtonContextMenuOption::kDismissActiveSearch:
+      return IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_DISMISS_ACTIVE_SEARCH;
+    case EphemeralButtonContextMenuOption::kDismissActiveSearchInTab:
+      return IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_DISMISS_ACTIVE_SEARCH_IN_TAB;
   }
 }
 #endif
@@ -809,23 +917,24 @@ void RecordExtensionQueuedSearchMessagesDropped(size_t count) {
       count);
 }
 
-void RecordSidePanelLinkClickedMetrics(WindowOpenDisposition disposition) {
+void RecordSidePanelLinkClickedMetrics(
+    ui::mojom::WindowOpenDisposition disposition) {
   ContextualTasksLinkOpenDisposition open_disposition =
       ContextualTasksLinkOpenDisposition::kOther;
   switch (disposition) {
-    case WindowOpenDisposition::kCurrentTab:
+    case ui::mojom::WindowOpenDisposition::kCurrentTab:
       open_disposition = ContextualTasksLinkOpenDisposition::kCurrentTab;
       break;
-    case WindowOpenDisposition::kNewForegroundTab:
+    case ui::mojom::WindowOpenDisposition::kNewForegroundTab:
       open_disposition = ContextualTasksLinkOpenDisposition::kNewForegroundTab;
       break;
-    case WindowOpenDisposition::kNewBackgroundTab:
+    case ui::mojom::WindowOpenDisposition::kNewBackgroundTab:
       open_disposition = ContextualTasksLinkOpenDisposition::kNewBackgroundTab;
       break;
-    case WindowOpenDisposition::kNewWindow:
+    case ui::mojom::WindowOpenDisposition::kNewWindow:
       open_disposition = ContextualTasksLinkOpenDisposition::kNewWindow;
       break;
-    case WindowOpenDisposition::kOffTheRecord:
+    case ui::mojom::WindowOpenDisposition::kOffTheRecord:
       open_disposition = ContextualTasksLinkOpenDisposition::kOffTheRecord;
       break;
     default:
@@ -841,16 +950,27 @@ void RecordSidePanelLinkClickedMetrics(WindowOpenDisposition disposition) {
       open_disposition);
 }
 
-bool ShouldUseDarkMode(Profile* profile, const GURL& url) {
-  std::optional<bool> url_dark_mode = GetDarkModeFromUrl(url);
-  if (url_dark_mode.has_value()) {
+bool ShouldUseDarkMode(content::WebContents* web_contents, const GURL& url) {
+  CHECK(web_contents);
+  // 1. An explicit CS URL param wins.
+  if (std::optional<bool> url_dark_mode = GetDarkModeFromUrl(url)) {
     return *url_dark_mode;
   }
-  return ShouldUseDarkMode(profile);
+  // 2. Use dark mode if it's incognito or the Desktop theme is dark.
+  if (ShouldUseDarkModeForProfile(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()))) {
+    return true;
+  }
+#if BUILDFLAG(IS_ANDROID)
+  // 3. TODO(crbug.com/536100150): Android has no ThemeService, so fall back to
+  // the WebContents color mode, which follows the app's light/dark setting.
+  return web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kDark;
+#else
+  return false;
+#endif
 }
 
-bool ShouldUseDarkMode(Profile* profile) {
-#if !BUILDFLAG(IS_ANDROID)
+bool ShouldUseDarkModeForProfile(Profile* profile) {
   // Assume light mode as fallback.
   if (!profile) {
     return false;
@@ -861,6 +981,7 @@ bool ShouldUseDarkMode(Profile* profile) {
     return true;
   }
 
+#if !BUILDFLAG(IS_ANDROID)
   // In all other cases, respect the theme service dark mode preferences.
   ThemeService* theme_service = ThemeServiceFactory::GetForProfile(profile);
   return theme_service && theme_service->BrowserUsesDarkColors();

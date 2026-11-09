@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <string>
 
 #include "base/check.h"
 #include "base/check_deref.h"
@@ -105,6 +106,43 @@ bool CanLiveModeBehaviorTakeEffect(const Target& target) {
   }
 }
 
+// TODO(b/571546684): Move all special-case FRE selection into Chrome as
+// explicit FreOverrides and remove this exclusion list. Until then, skip
+// native FRE for experiments and invocation sources where the web client
+// overrides the default FRE while Chrome leaves `fre_override` as
+// `kUnspecified`.
+bool HasSpecialCaseWebFre(const GlicInvokeOptions& options) {
+  if (options.feature_mode.value_or(mojom::FeatureMode::kUnspecified) !=
+      mojom::FeatureMode::kUnspecified) {
+    return true;
+  }
+  if (base::FeatureList::IsEnabled(features::kGlicMessageFirstFre) ||
+      base::FeatureList::IsEnabled(features::kGlicActionFirstFRE)) {
+    return true;
+  }
+  switch (options.GetInvocationSource()) {
+    case mojom::InvocationSource::kNavigationCapture:
+    case mojom::InvocationSource::kUniversalCart:
+    case mojom::InvocationSource::kPasswordChange:
+    case mojom::InvocationSource::kIndigoPageAction:
+    case mojom::InvocationSource::kPromotionPage:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Returns whether an invocation should open in native FRE mode.
+// Eligible profiles get the Android native FRE when no entry point or
+// experiment asked for a specific web FRE. An explicit `fre_override` (for
+// example kTrustFirstInline or kTrustFirstClick) is kept, so those entry
+// points keep their web FRE.
+bool CanUseNativeFre(const GlicInvokeOptions& options, Profile* profile) {
+  return options.fre_override == mojom::FreOverride::kUnspecified &&
+         !HasSpecialCaseWebFre(options) &&
+         GlicEnabling::IsProfileEligibleForNativeFre(profile);
+}
+
 constexpr base::MemoryConsumerTraits kGlicInstanceCoordinatorTraits(
     // Each awake Glic instance can use up to a hundred megabytes.
     base::MemoryConsumerTraits::EstimatedMemoryUsage::kLarge,
@@ -157,10 +195,11 @@ GlicInstanceCoordinatorImpl::GlicInstanceCoordinatorImpl(
       this, profile_, enabling);
   onboarding_tracker_ =
       std::make_unique<GlicOnboardingTracker>(profile_, enabling);
-  metrics_.StartPeriodicMemoryMetricsRecording();
+  metrics_.StartPeriodicMetricsRecording();
 }
 
 GlicInstanceCoordinatorImpl::~GlicInstanceCoordinatorImpl() {
+  metrics_.OnShutdown();
   CHECK(active_instance_sharing_manager_);
   active_instance_sharing_manager_->SetActiveSharingManager(nullptr);
 
@@ -207,13 +246,6 @@ void GlicInstanceCoordinatorImpl::OnInstanceActivationChanged(
   }
   NotifyActiveInstanceChanged();
   ComputeContentAccessIndicator();
-}
-
-void GlicInstanceCoordinatorImpl::OnInstanceWillAwaken() {
-  // Before an existing instance creates its WebUI container and awakens,
-  // enforce the max awake limit so that older background instances are pruned
-  // to make room for this one if we are already at capacity.
-  ApplyMaxAwakeInstancesLimit();
 }
 
 void GlicInstanceCoordinatorImpl::OnInstanceVisibilityChanged(
@@ -655,6 +687,8 @@ bool GlicInstanceCoordinatorImpl::MaybeStartWarming(
 }
 
 void GlicInstanceCoordinatorImpl::Shutdown() {
+  metrics_.OnShutdown();
+
   // Take ownership of the handlers to avoid iterator invalidation when
   // Cancel() removes them from invoke_handlers_.
   std::multimap<GlicInstance*, std::unique_ptr<GlicInvokeHandler>> handlers(
@@ -731,6 +765,12 @@ base::WeakPtr<GlicInstanceImpl> GlicInstanceCoordinatorImpl::InvokeInternal(
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(options.on_error), error));
     }
+    if (options.on_error_with_diagnostics_) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(options.on_error_with_diagnostics_), error,
+                         std::string()));
+    }
   };
 
   if (!GlicEnabling::IsEnabledForProfile(profile_)) {
@@ -773,9 +813,7 @@ base::WeakPtr<GlicInstanceImpl> GlicInstanceCoordinatorImpl::InvokeInternal(
   if (options.RequiresContextClipboardPolicyCheck() &&
       options.RequiresPromptClipboardPolicyCheck()) {
     metrics->RecordError(GlicInvokeError::kInvalidConfiguration);
-    if (options.on_error) {
-      std::move(options.on_error).Run(GlicInvokeError::kInvalidConfiguration);
-    }
+    notify_error(GlicInvokeError::kInvalidConfiguration);
     return nullptr;
   }
 
@@ -934,6 +972,11 @@ base::WeakPtr<GlicInstanceImpl> GlicInstanceCoordinatorImpl::InvokeInternal(
     if (!resolve_surface()) {
       return nullptr;
     }
+  }
+
+  // Route eligible profiles to Android native FRE.
+  if (CanUseNativeFre(options, profile_)) {
+    options.fre_override = mojom::FreOverride::kNativeFre;
   }
 
   // Only invocations that send an invoke message to the web client conflict
@@ -1526,6 +1569,10 @@ void GlicInstanceCoordinatorImpl::ContextAccessIndicatorChanged(
 
 std::unique_ptr<GlicWebContentsManager>
 GlicInstanceCoordinatorImpl::CreateWebContentsManager() {
+  // Before an existing instance creates its WebUI container and awakens,
+  // enforce the max awake limit so that older background instances are pruned
+  // to make room for this one if we are already at capacity.
+  ApplyMaxAwakeInstancesLimit();
   metrics_.RecordCountAwakeOnContentsCreated();
   return web_contents_warming_pool_->TakeContainer();
 }

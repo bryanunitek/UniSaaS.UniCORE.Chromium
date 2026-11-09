@@ -12,6 +12,7 @@
 #include "base/run_loop.h"
 #include "base/supports_user_data.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/scoped_path_override.h"
 #include "build/build_config.h"
 #include "chrome/browser/ai/ai_manager.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
@@ -139,10 +140,19 @@ class AITestUtils {
     base::test::ScopedFeatureList scoped_feature_list_;
     std::unique_ptr<optimization_guide::FakeModelBrokerAndroid> fake_broker_;
 #else
+    optimization_guide::ScopedModelBrokerFeatureList model_broker_feature_list_;
     std::unique_ptr<optimization_guide::FakeManifestBroker> fake_broker_;
 #endif
 
     std::unique_ptr<AIManager> ai_manager_;
+
+   private:
+    // When the "On-device AI" setting or the
+    // GenAILocalFoundationalModelSettings policy disallows the model, the
+    // Semantic Embedder launcher deletes the AI embeddings component's files
+    // under DIR_COMPONENT_USER, which unit tests otherwise resolve to the
+    // real user data directory.
+    base::ScopedPathOverride component_user_dir_override_;
   };
 
   // Converts string language codes to AILanguageCode mojo struct.

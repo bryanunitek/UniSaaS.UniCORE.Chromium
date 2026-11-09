@@ -60,6 +60,8 @@ import org.chromium.chrome.browser.hub.ShrinkExpandAnimationData;
 import org.chromium.chrome.browser.hub.ShrinkExpandHubLayoutAnimationFactory;
 import org.chromium.chrome.browser.hub.TabListHubLayoutAnimationFactory;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetManager;
+import org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetUtils;
 import org.chromium.chrome.browser.tab_ui.RecyclerViewPosition;
 import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
@@ -291,6 +293,16 @@ public abstract class TabSwitcherPaneBase extends PaneBase
     }
 
     @Override
+    public void prepareForSwipeReveal() {
+        // Cancel the soft cleanup that the WARM hint just scheduled so the cards keep their
+        // thumbnails and favicons while the swipe shows this pane. A cancelled swipe sends WARM
+        // again, which reschedules it.
+        removeDelayedCallbacks();
+        // Scroll to the current tab now so the pane does not jump when the swipe completes.
+        setInitialScrollIndexOffset();
+    }
+
+    @Override
     public MonotonicObservableSupplier<FullButtonData> getActionButtonDataSupplier() {
         if (BottomBarConfigUtils.isBottomBarEnabled(mContext)
                 && BottomBarConfigUtils.shouldShowOnGts()) {
@@ -354,7 +366,7 @@ public abstract class TabSwitcherPaneBase extends PaneBase
                     hubContainerView, HUB_LAYOUT_FADE_DURATION_MS, mOnToolbarAlphaChange);
         }
 
-        @ColorInt int backgroundColor = getAnimationBackgroundColor();
+        @ColorInt int backgroundColor = getExpandAnimationBackgroundColor(tab);
         SyncOneshotSupplier<ShrinkExpandAnimationData> animationDataSupplier =
                 requestAnimationData(hubContainerView, /* isShrink= */ false, tab);
         return ShrinkExpandHubLayoutAnimationFactory.createExpandTabAnimatorProvider(
@@ -374,6 +386,23 @@ public abstract class TabSwitcherPaneBase extends PaneBase
     @Override
     public NonNullObservableSupplier<Float> getSearchBoxVisibilityFractionSupplier() {
         return mSearchBoxVisibilityFractionSupplier;
+    }
+
+    /**
+     * Returns the color for the part of the expanding tab that its thumbnail doesn't cover. If a
+     * tab bottom sheet comes back in peek mode once the Hub hides, that part is where the sheet
+     * will be, so use the sheet's color to avoid a color change when the sheet appears.
+     */
+    @VisibleForTesting
+    @ColorInt
+    int getExpandAnimationBackgroundColor(Tab tab) {
+        TabBottomSheetManager tabBottomSheetManager =
+                TabBottomSheetUtils.getManagerFromWindow(tab.getWindowAndroid());
+        @Nullable Integer sheetColor =
+                tabBottomSheetManager == null
+                        ? null
+                        : tabBottomSheetManager.getSheetColorToReshowAfterTabSwitcher(tab);
+        return sheetColor != null ? sheetColor : getAnimationBackgroundColor();
     }
 
     private @ColorInt int getAnimationBackgroundColor() {
@@ -599,6 +628,8 @@ public abstract class TabSwitcherPaneBase extends PaneBase
 
     @Override
     public boolean requestOpenTabGroupDialog(Token tabGroupId) {
+        if (!mIsVisibleSupplier.get()) return false;
+
         @Nullable TabSwitcherPaneCoordinator coordinator =
                 mTabSwitcherPaneCoordinatorSupplier.get();
         if (coordinator != null) {

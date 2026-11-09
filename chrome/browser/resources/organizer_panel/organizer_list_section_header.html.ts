@@ -12,8 +12,8 @@ export function getHtml(this: OrganizerListSectionHeaderElement) {
 <cr-expand-button id="expandButton" no-hover ?expanded="${this.expanded}"
     ?disabled="${this.disabled}" @expanded-changed="${this.onExpandedChanged_}"
     @keydown="${this.onExpandButtonKeydown_}" expand-title="$i18n{expand}"
-    collapse-title="$i18n{collapse}">
-  <slot></slot>
+    collapse-title="$i18n{collapse}" aria-label="${this.title}">
+  <span id="headerTitle">${this.title}</span>
 </cr-expand-button>
 <cr-icon-button id="menuButton" iron-icon="cr:more-vert"
     aria-label="$i18n{options}" title="$i18n{options}"

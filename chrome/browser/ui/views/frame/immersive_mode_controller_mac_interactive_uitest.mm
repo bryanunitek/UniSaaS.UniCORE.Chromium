@@ -7,15 +7,18 @@
 #import <Cocoa/Cocoa.h>
 
 #include <tuple>
+#include <utility>
 
 #include "base/apple/foundation_util.h"
 #import "base/mac/mac_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/views/find_bar_host.h"
@@ -28,12 +31,16 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
+#include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+#import "ui/base/cocoa/window_size_constants.h"
 #include "ui/base/hit_test.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #import "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/interaction/element_tracker_views.h"
@@ -41,6 +48,38 @@
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/native_widget_mac.h"
 #include "ui/views/widget/widget.h"
+
+// A window that only keeps the immersive toolbar revealed while it is key, like
+// the omnibox popup.
+@interface KeyOnlyRevealLockTestWindow : NativeWidgetMacNSWindow
+@end
+
+@implementation KeyOnlyRevealLockTestWindow
+- (BOOL)immersiveRevealLockRequiresKey {
+  return YES;
+}
+@end
+
+namespace {
+
+class KeyOnlyRevealLockNativeWidgetMac : public views::NativeWidgetMac {
+ public:
+  using views::NativeWidgetMac::NativeWidgetMac;
+
+ protected:
+  NativeWidgetMacNSWindow* CreateNSWindow(
+      const remote_cocoa::mojom::CreateWindowParams* params) override {
+    KeyOnlyRevealLockTestWindow* window = [[KeyOnlyRevealLockTestWindow alloc]
+        initWithContentRect:ui::kWindowSizeDeterminedLater
+                  styleMask:params->style_mask
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    window.releasedWhenClosed = NO;
+    return window;
+  }
+};
+
+}  // namespace
 
 class ScopedAlwaysShowToolbar {
  public:
@@ -688,11 +727,11 @@ IN_PROC_BROWSER_TEST_F(ImmersiveModeControllerMacInteractiveTest,
   // Add an NTP tab and a regular tab.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("chrome://newtab"),
-      WindowOpenDisposition::kNewForegroundTab,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://example.com"),
-      WindowOpenDisposition::kNewForegroundTab,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Enter immersive fullscreen.
@@ -717,4 +756,95 @@ IN_PROC_BROWSER_TEST_F(ImmersiveModeControllerMacInteractiveTest,
 
   // Confirm that the immersive toolbar isn't revealed.
   EXPECT_FALSE(controller->IsRevealed());
+}
+
+// Tests that a child window of the overlay that only keeps the toolbar revealed
+// while it is key doesn't hold the toolbar while it isn't key.
+IN_PROC_BROWSER_TEST_F(ImmersiveModeControllerMacInteractiveTest,
+                       RevealLockRequiresKey) {
+  ScopedAlwaysShowToolbar scoped_always_show(browser(), false);
+  // Keep focus out of top chrome, which would hold the toolbar revealed when
+  // the browser window becomes key again.
+  browser()->tab_strip_model()->GetActiveWebContents()->Focus();
+  ui_test_utils::ToggleFullscreenModeAndWait(browser());
+  ImmersiveModeController* controller =
+      ImmersiveModeController::From(browser());
+  auto wait_for_revealed = [controller](bool revealed) {
+    ui_test_utils::CheckWaiter(
+        base::BindRepeating(&ImmersiveModeController::IsRevealed,
+                            base::Unretained(controller)),
+        revealed, base::Seconds(3))
+        .Wait();
+    EXPECT_EQ(controller->IsRevealed(), revealed);
+  };
+  wait_for_revealed(false);
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  auto widget = std::make_unique<views::Widget>();
+  views::Widget::InitParams params(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  params.parent = browser_view->overlay_widget()->GetNativeView();
+  params.bounds = gfx::Rect(100, 100, 200, 200);
+  params.native_widget = new KeyOnlyRevealLockNativeWidgetMac(widget.get());
+  widget->Init(std::move(params));
+
+  // Shown but not key: the toolbar stays hidden.
+  widget->ShowInactive();
+  wait_for_revealed(false);
+
+  // Key: the toolbar is revealed.
+  views::test::PropertyWaiter widget_active(
+      base::BindRepeating(&views::Widget::IsActive,
+                          base::Unretained(widget.get())),
+      true);
+  widget->Activate();
+  EXPECT_TRUE(widget_active.Wait());
+  wait_for_revealed(true);
+
+  // The browser window takes key back: the toolbar hides again.
+  views::test::PropertyWaiter browser_active(
+      base::BindRepeating(&views::Widget::IsActive,
+                          base::Unretained(browser_view->GetWidget())),
+      true);
+  browser_view->GetWidget()->Activate();
+  EXPECT_TRUE(browser_active.Wait());
+  wait_for_revealed(false);
+
+  widget->CloseNow();
+}
+
+class ImmersiveModeControllerMacTabStripUnificationInteractiveTest
+    : public ImmersiveModeControllerMacInteractiveTest {
+ public:
+  ImmersiveModeControllerMacTabStripUnificationInteractiveTest() {
+    scoped_feature_list_.InitAndEnableFeature(tabs::kTabStripUnification);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Regression test verifying that closing the last tab of a browser window in
+// macOS immersive fullscreen (which triggers exiting immersive fullscreen and
+// reparenting the tab strip while the closing TabView is still in the view
+// tree) does not crash.
+IN_PROC_BROWSER_TEST_F(
+    ImmersiveModeControllerMacTabStripUnificationInteractiveTest,
+    CloseLastTabInFullscreen) {
+  BrowserWindowInterface* second_browser =
+      CreateBrowser(browser()->GetProfile());
+  BrowserView* second_browser_view =
+      BrowserView::GetBrowserViewForBrowser(second_browser);
+  if (!second_browser_view->tab_overlay_view()) {
+    GTEST_SKIP() << "Tab strip is not hosted in a separate overlay.";
+  }
+
+  ui_test_utils::ToggleFullscreenModeAndWait(second_browser);
+  ASSERT_EQ(second_browser_view->tab_strip_view()->parent(),
+            second_browser_view->tab_overlay_view());
+
+  ui_test_utils::BrowserDestroyedObserver destroyed_observer(second_browser);
+  std::exchange(second_browser, nullptr)->GetTabStripModel()->CloseAllTabs();
+  destroyed_observer.Wait();
 }

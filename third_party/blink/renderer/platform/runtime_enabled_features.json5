@@ -345,7 +345,18 @@
     },
     {
       name: "AIEmbeddingsAPI",
-      status: "test",
+      status: {
+        "Win": "experimental",
+        "Mac": "experimental",
+        "Linux": "experimental",
+        "ChromeOS": "experimental",
+        "default": "",
+      },
+      origin_trial_feature_name: "AISemanticEmbedderAPI",
+      origin_trial_os: ["win", "mac", "linux", "chromeos"],
+      origin_trial_allows_third_party: true,
+      base_feature_status: "enabled",
+      copied_from_base_feature_if: "overridden",
     },
     {
       name: "AIEmbeddingsAPIForWorkers",
@@ -638,6 +649,12 @@
       // positioning adjustments to occur even in cases where there is no
       // scrollable overflow.
       name: "AnchorPositionAdjustmentWithoutOverflow",
+      status: "stable",
+    },
+    {
+      // https://crbug.com/543008837: Ensure anchor-positioned elements are
+      // consistent with a full relayout once scrolling stops.
+      name: "AnchorPositionRelayoutOnScrollEnd",
       status: "stable",
     },
     {
@@ -1013,6 +1030,11 @@
     {
       name: "BoxDecorationBreakCloneLineBreaking",
       status: "test",
+    },
+    {
+      // crbug.com/41485013
+      name: "BreakIteratorRightSingleQuotationMark",
+      status: "stable",
     },
     {
       name: "BrowserInitiatedAutomaticPictureInPicture",
@@ -1666,8 +1688,9 @@
       // https://drafts.csswg.org/css-values-4/ Appendix A
       // https://drafts.csswg.org/css-backgrounds/#layering
       // https://github.com/w3c/csswg-drafts/issues/7164
+      // Ship in M159, should be removed in M161.
       name: "CSSBackgroundLayerCountIndependence",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "CSSBorderRadiusSideShorthands",
@@ -1847,6 +1870,11 @@
       status: "stable",
     },
     {
+      // https://chromestatus.com/feature/5123480866783232
+      name: "CSSImportRuleStyleSheetNullable",
+      status: "stable",
+    },
+    {
       // The inherit() function works like var(), except that it grabs
       // the computed value of the specified property from the parent style
       // instead of the current style.
@@ -1860,11 +1888,6 @@
       // <input type=time> elements with a reversed range.
       // https://html.spec.whatwg.org/multipage/input.html#has-a-reversed-range
       name: "CSSInRangeOutOfRangeReversedRanges",
-      status: "stable",
-    },
-    {
-      // https://chromestatus.com/feature/6289894144212992
-      name: "CSSKeyframesRuleLength",
       status: "stable",
     },
     {
@@ -2368,6 +2391,11 @@
       name: "Database",
     },
     {
+      // Killswitch for https://crbug.com/40622827
+      name: "DateTimeFieldTypeWithoutSelection",
+      status: "stable",
+    },
+    {
       // https://crbug.com/473454959
       name: "DateTimeInputTypeEarlyAdvanceFix",
       status: "stable",
@@ -2386,7 +2414,6 @@
     {
       name: "DeclarativeFragment",
       status: "experimental",
-      depends_on: ["DocumentPatching"],
     },
     {
       name: "DeclarativePerformanceObserver",
@@ -2660,12 +2687,6 @@
       status: "stable",
       copied_from_base_feature_if: "overridden",
     },
-    // https://chromestatus.com/feature/5111042975465472
-    // <template patchfor> etc.
-    {
-      name: "DocumentPatching",
-      status: "stable",
-    },
     {
       name: "DocumentPictureInPictureAPI",
       status: {
@@ -2690,6 +2711,13 @@
         "Android": "",
         "default": "stable",
       },
+    },
+    // Kill switch for letting Blink look up a document's picture-in-picture
+    // window and owner on Android, which lets the window focus its opener
+    // (crbug.com/581052751). Only checked on Android.
+    {
+      name: "DocumentPictureInPictureWindowLookupAndroid",
+      status: "stable",
     },
     // Enables the ability to use Document Policy header to control feature
     // DocumentDomain.
@@ -2989,6 +3017,10 @@
         // EyeDropper UI is available on Android, ChromeOS, Linux (x11), Mac, and Win.
         // This list should match the supported operating systems for the
         // kEyeDropper base::Feature.
+        // There is an override in SetCustomizedRuntimeFeaturesFromCombinedArgs
+        // to disable this on Android versions below CinnamonBun (API 37), where
+        // the system EyeDropper intent is not supported, so that the EyeDropper
+        // WebIDL interface is omitted on older Android versions.
         "Android": "stable",
         "ChromeOS": "stable",
         "Linux": "stable",
@@ -3006,6 +3038,10 @@
       status: "experimental",
     },
     {
+      name: "FastCommonGraphemeClusterPrefixLength",
+      status: "stable",
+    },
+    {
       name: "FastCompositionCharacterBounds",
       status: "stable",
     },
@@ -3016,6 +3052,10 @@
     {
       name: "FastPositionIterator",
       // Not enabled due to a RTL issue. crbug.com/1421016.
+    },
+    {
+      name: "FastTypingCommandCreateSelection",
+      status: "stable",
     },
     {
       name: "FedCm",
@@ -3123,6 +3163,13 @@
       // https://chromestatus.com/feature/5239268180754432
       name: "FetchBodyBytes",
       status: "stable",
+    },
+    {
+      // Makes fetch() fail with a network error when a redirect response has
+      // an empty Location header, in "follow" and "error" redirect modes.
+      // https://crbug.com/810288
+      name: "FetchEmptyLocationRedirectIsNetworkError",
+      status: "experimental",
     },
     {
       // The Blink runtime-enabled feature name for the API's IDL.
@@ -3368,6 +3415,16 @@
       // a Chromium level feature (kFontDataServiceForCSSLocalFonts).
     },
     {
+      // Kill switch for https://crbug.com/579721442.
+      name: "FontFallbackMultiplePriorityFonts",
+      status: "stable",
+    },
+    {
+      // Kill switch for https://crbug.com/582409909.
+      name: "FontFallbackPreferContentLocale",
+      status: "stable",
+    },
+    {
       name: "FontFamilyPostscriptMatchingCTMigration",
     },
     {
@@ -3413,6 +3470,10 @@
     {
       // crbug.com/40398871
       name: "FontVariationSettingsDescriptor",
+      status: "stable",
+    },
+    {
+      name: "ForceDarkRespectsColorSchemeOnly",
       status: "stable",
     },
     {
@@ -3703,12 +3764,6 @@
       status: "stable",
     },
     {
-      // Kill switch for making <area> display:none by default according to the
-      // HTML rendering specification. https://crbug.com/1231263
-      name: "HTMLAreaElementDisplayNone",
-      status: "stable",
-    },
-    {
       name: "HTMLAreaHreflangType",
       status: "test",
     },
@@ -3800,11 +3855,6 @@
       status: "stable",
     },
     {
-      // Parse processing instructions in HTML.
-      name: "HTMLProcessingInstruction",
-      status: "stable",
-    },
-    {
       // Enables the switch attribute on <input type="checkbox">.
       // https://open-ui.org/components/switch.attribute.explainer/
       name: "HTMLSwitchAttribute",
@@ -3819,7 +3869,12 @@
     },
     {
       name: "ICUCapitalization",
-      status: "experimental",
+      status: "stable",
+    },
+    {
+      // crbug.com/580881866
+      name: "IcuSearchLengthLimit",
+      status: "stable",
     },
     {
       name: "IgnoreLetterSpacingInCursiveScripts",
@@ -3954,8 +4009,10 @@
       // Enables InputMultipleFieldsUI on all platforms by tweaking the inner
       // fields to be non-focusable and making the whole input element
       // focusable for coarse input devices. When this flag is removed, the
-      // InputMultipleFieldsUI flag can also be removed.
+      // InputMultipleFieldsUI flag can also be removed. Enabled in M159, safe
+      // to remove in M163.
       name: "InputMultipleFieldsUIWithPointerChecks",
+      status: "stable",
     },
     // Enables the `alpha` and `colorspace` content/IDL attributes on
     // <input type=color>, allowing alpha and Display P3 color values.
@@ -4026,6 +4083,15 @@
     },
     {
       name: "InvisibleSVGAnimationThrottling",
+      status: "stable",
+    },
+    {
+      // When enabled, cross-context access from an isolated world (e.g. an
+      // extension content script) to another context in the same world is
+      // subject to the same frame-origin access check as the main world.
+      // Previously such access was unconditionally allowed. Kill switch.
+      // TODO(crbug.com/577455288): remove by m164 if no regressions are reported.
+      name: "IsolatedWorldCrossContextAccessCheck",
       status: "stable",
     },
     {
@@ -4134,6 +4200,13 @@
       // bugs for touch inputs.
       // https://issues.chromium.org/issues/408010435
       name: "LightDismissFromClick",
+      status: "stable",
+    },
+    {
+      // Kill switch for crbug.com/424995036 and crbug.com/577276073. When
+      // enabled, the top of a PopupWidgetHost is constrained to be at or below
+      // the line of death.
+      name: "LimitPopupWidgetHostPosition",
       status: "stable",
     },
     {
@@ -4502,6 +4575,11 @@
       status: "test",
       base_feature: "none",
       custom_enable_check: "CanEnableMojoJSTest",
+    },
+    // Web Monetization. https://webmonetization.org/specification/
+    {
+      name: "Monetization",
+      status: "test",
     },
     // Optimization for monospace text.
     {
@@ -5210,6 +5288,7 @@
       // https://crbug.com/440387014
       name: "Prerender2CrossOriginIframes",
       origin_trial_feature_name: "Prerender2CrossOriginIframes",
+      status: "stable",
     },
     {
       // Used to allow prerender activation by form submission.
@@ -5372,6 +5451,12 @@
       status: "stable",
     },
     {
+      // Defense-in-depth mitigation that strips read-back disallowed (e.g.,
+      // cross-origin) content when drawing elements with html-in-canvas.
+      name: "ReadBackDisallowedMitigation",
+      status: "stable",
+    },
+    {
       // getType() on a ClipboardItem triggers the
       // clipboard read operation, implementing lazy loading for clipboard data.
       // Chrome status entry - https://chromestatus.com/feature/5203433409871872
@@ -5389,6 +5474,8 @@
       // Enables caret visibility and keyboard selection/navigation for
       // readonly text controls (input and textarea).
       // https://issues.chromium.org/issues/40801366
+      // Behavior changed to exclude disabled text controls, which should not
+      // show a caret: https://issues.chromium.org/issues/581932200
       name: "ReadOnlyTextControlSelection",
       status: "stable",
     },
@@ -5537,6 +5624,11 @@
     },
     {
       name: "RespectOverscrollBehaviorForScrollBubbling",
+      status: "stable",
+    },
+    {
+      // Kill switch for https://crbug.com/579210216.
+      name: "ResponsiveIframesAsyncResize",
       status: "stable",
     },
     {
@@ -5710,6 +5802,12 @@
       status: "stable",
     },
     {
+      // Spec: https://github.com/whatwg/html/pull/12898
+      // Tracking bug: crbug.com/567285527
+      name: "SanitizerJavascriptURLs",
+      status: "stable",
+    },
+    {
       name: "SanitizeWorkerErrorPropagation",
       status: "stable",
     },
@@ -5871,6 +5969,12 @@
       origin_trial_allows_third_party: true,
       status: "stable",
       base_feature: "none",
+    },
+    {
+      // Scopes SelectAll to the active editing host if it has focus but lacks
+      // an active text selection range. Shipped in M158, safe to remove in M162.
+      name: "SelectAllInFocusedEditingHost",
+      status: "stable",
     },
     {
       // Make select popup anchor stay within web contents to prevent
@@ -6100,6 +6204,12 @@
     },
     {
       name: "ServiceWorkerStaticRouterTimingInfo",
+      status: "stable",
+    },
+    {
+      // Killswitch for crbug.com/479637572.
+      name: "ServiceWorkerStaticRouterTimingRouterSourceFields",
+      depends_on: ["ServiceWorkerStaticRouterTimingInfo"],
       status: "stable",
     },
     {
@@ -6357,8 +6467,9 @@
       // Splits a qualified name on its first colon, per the DOM "validate and
       // extract" algorithm, so any later colons are part of the local name.
       // See https://crbug.com/490251709
+      // Enabled in M159, safe to remove in M163.
       name: "SplitQualifiedNameOnFirstColon",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "SplitTextNotCleanupDummySpans",
@@ -6623,6 +6734,13 @@
       status: "stable",
     },
     {
+      // Instance SMIL animation elements (animate, animateTransform,
+      // animateMotion, set) into the 'use' element shadow tree, instead of
+      // dropping them. crbug.com/40853412
+      name: "SvgUseInstanceAnimations",
+      status: "stable",
+    },
+    {
       name: "SvgUseNestedResourceDocuments",
       status: "stable",
     },
@@ -6842,12 +6960,6 @@
       // crbug.com/440947112
       name: "TextSpacingTrimFallbackChws",
       depends_on: ["TextSpacingTrimFallback"],
-      status: "stable",
-    },
-
-    {
-      // crbug.com/514448226
-      name: "TextStreamMethod",
       status: "stable",
     },
     {
@@ -7228,6 +7340,10 @@
       // SVG reference filters.
       name: "ViewTransitionPreventSvgFilterPaint",
       status: "stable",
+    },
+    {
+      name: "ViewTransitionScopedChildRestrictedElements",
+      status: "test",
     },
     {
       // Kill switch. Doesn't generate the ::view-transition pseudo-element
@@ -7614,13 +7730,16 @@
       implied_by: [
         "WebMCPContinuations",
         "WebMCPDeclarativeFileInput",
-        "WebMCPFormAssociatedCustomElements"
+        "WebMCPFormAssociatedCustomElements",
+        "WebMCPWaitForToolsUntil"
       ],
       status: "experimental",
     },
     {
       name: "WebMCPContinuations",
       public: true,
+      base_feature_status: "enabled",
+      copied_from_base_feature_if: "overridden",
       status: "experimental",
     },
     {
@@ -7631,6 +7750,12 @@
       // Support for form-associated custom elements in declarative
       // WebMCP tools.
       name: "WebMCPFormAssociatedCustomElements",
+      status: "experimental",
+    },
+    {
+      // `document.modelContext.waitForToolsUntil()`, which lets a document
+      // signal that it is still registering tools.
+      name: "WebMCPWaitForToolsUntil",
       status: "experimental",
     },
     {
@@ -7732,8 +7857,8 @@
     },
     {
       name: "WebTransportCongestionControl",
-      status: "experimental",
-      base_feature: "none",
+      status: "stable",
+      base_feature: "WebTransportCongestionControlAPI",
     },
     {
       name: "WebTransportCreateStreamsBeforeReady",
@@ -7747,16 +7872,19 @@
     },
     {
       name: "WebTransportDatagramsReadableType",
-      status: "experimental",
+      status: "stable",
     },
     {
       name: "WebTransportDatagramsWritable",
-      status: "experimental",
-      base_feature: "none",
+      status: "stable",
       depends_on: ["WebTransportSendGroup"],
     },
     {
       name: "WebTransportDraining",
+      status: "stable",
+    },
+    {
+      name: "WebTransportErrorSerialization",
       status: "stable",
     },
     {
@@ -7770,8 +7898,7 @@
     },
     {
       name: "WebTransportReceiveStream",
-      status: "experimental",
-      base_feature: "none",
+      status: "stable",
     },
     {
       name: "WebTransportReliability",
@@ -7780,8 +7907,7 @@
     },
     {
       name: "WebTransportSendGroup",
-      status: "experimental",
-      base_feature: "none",
+      status: "stable",
     },
     {
       // Note: enabling this without setting WebTransportCongestionControl to

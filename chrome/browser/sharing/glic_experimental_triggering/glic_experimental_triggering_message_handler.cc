@@ -19,10 +19,13 @@
 #include "chrome/browser/glic/experimental_triggering/glic_experimental_triggering_converters.h"
 #include "chrome/browser/glic/experimental_triggering/glic_experimental_triggering_coordinator.h"
 #include "chrome/browser/glic/experimental_triggering/glic_experimental_triggering_metrics.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_feature.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/public/glic_provider_metrics.h"
+#include "chrome/browser/glic/public/glic_provider_spec.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -227,6 +230,23 @@ void GlicExperimentalTriggeringMessageHandler::OnMessage(
   CheckFeatureFlags();
   CHECK(message.has_glic_experimental_triggering());
 
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(
+          features::kGlicForceFcmExperimentalTriggerFailure) &&
+      message.glic_experimental_triggering().has_request() &&
+      message.glic_experimental_triggering()
+          .request()
+          .has_trigger_actuation_request()) {
+    // Test only: act as if the FCM message never arrived. Do not reply, do not
+    // run `done_callback` (so no ack is sent) and do not record metrics.
+    LOG(WARNING) << "GlicTrigger: Dropping TriggerActuationRequest for "
+                 << message.glic_experimental_triggering().context_id()
+                 << " because kGlicForceFcmExperimentalTriggerFailure is "
+                    "enabled.";
+    return;
+  }
+#endif
+
   glic::ScopedIncomingMessageResultLogger result_logger(
       glic::GlicMetricReporter(profile_),
       glic::ScopedIncomingMessageResultLogger::Channel::kSharingMessage);
@@ -388,7 +408,8 @@ void GlicExperimentalTriggeringMessageHandler::ProcessValidatedMessage(
 }
 
 void GlicExperimentalTriggeringMessageHandler::CheckFeatureFlags() const {
-  CHECK(base::FeatureList::IsEnabled(features::kGlicExperimentalTriggering));
+  CHECK(glic::GetGlicProviderSpec(profile_).SupportsFeature(
+      glic::GlicFeature::kExperimentalTriggering));
 }
 
 glic::GlicExperimentalTriggeringUpdateCallback

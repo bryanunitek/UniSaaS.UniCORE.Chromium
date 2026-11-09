@@ -128,6 +128,14 @@ class InputStateModel {
   // Gets additional query params for the current state.
   std::map<std::string, std::string> GetAdditionalQueryParams();
 
+  // Turns on dynamic AIM fulfillment: `InputState::will_fulfill_in_aim` is
+  // computed instead of always true. One-way, since the model can be shared by
+  // handlers that didn't opt in, and safe to call more than once.
+  void EnableDynamicAimFulfillment();
+  bool dynamic_aim_fulfillment_enabled() const {
+    return dynamic_aim_fulfillment_enabled_;
+  }
+
   // Returns the current state.
   const InputState& GetInputState() const;
 
@@ -171,8 +179,13 @@ class InputStateModel {
   // Update the current value of `state_` based on new tool or model.
   void UpdateSelectedState(ToolMode tool, ModelMode model);
 
-  // Update the currently disabled tools, models, and inputs.
+  // Recomputes routing (`state_.will_fulfill_in_aim` and the shown model), then
+  // the allowed input types and the disabled tools, models, and inputs.
   void UpdateDisabledState();
+
+  // Updates `state_.will_fulfill_in_aim`, `aim_mode_active_` and the shown
+  // model. Called by `UpdateDisabledState()`.
+  void RecomputeRouting();
 
   //  Helper method to update `disabled_tools` based on `rule_set_`.
   void UpdateDisabledTools();
@@ -200,6 +213,11 @@ class InputStateModel {
 
   // Returns the rule for a given `model`.
   const omnibox::ModelRule* GetModelRule(ModelMode model) const;
+
+  // Returns the model whose rule limits tools and inputs. With dynamic AIM
+  // fulfillment and no model shown (headed to SRP), that's the default model,
+  // since routing picks it when the query switches to AI Mode.
+  ModelMode GetModelForRules() const;
 
   // Returns a rule for a given `tool`.
   const omnibox::ToolRule* GetToolRule(ToolMode tool) const;
@@ -247,6 +265,12 @@ class InputStateModel {
 
   // Stores the active region crop preview, if any.
   std::optional<LensCrop> lens_crop_;
+
+  // Set by `EnableDynamicAimFulfillment()`; never cleared.
+  bool dynamic_aim_fulfillment_enabled_ = false;
+  // Whether the query is in AI Mode: set when routing goes to AIM or a model is
+  // set; cleared when the model is cleared.
+  bool aim_mode_active_ = false;
 
   base::WeakPtrFactory<InputStateModel> weak_ptr_factory_{this};
 };

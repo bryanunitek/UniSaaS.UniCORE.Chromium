@@ -42,6 +42,7 @@ source_set("browser_tests") {
     "//chrome/browser/autocomplete:aim_eligibility_service",
     "//chrome/browser/bookmarks",
     "//chrome/browser/browser_actuator/internals",
+    "//chrome/browser/glic/public:features",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/tabs/tab_group_home:constants",
     "//chrome/test:test_support",
@@ -165,7 +166,9 @@ source_set("browser_tests") {
       "//chrome/browser/preloading",
       "//chrome/browser/signin:signin_promo",
       "//chrome/browser/subscription_eligibility",
+      "//chrome/browser/ui/tabs/organizer",
       "//chrome/browser/ui/webui/settings",
+      "//third_party/blink/public:buildflags",
     ]
 
     if (is_chrome_branded) {
@@ -194,12 +197,14 @@ source_set("browser_tests") {
       "history/history_ui_browsertest.cc",
     ]
     deps += [
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui/webui/cr_components/searchbox",
       "//chrome/test/base:chrome_test_utils",
-      "//components/contextual_tasks/public:feature_list",
+      "//chrome/test/base:web_ui_test_support",
       "//components/history/core/test",
       "//components/history_clusters/core",
-      "//components/history_embeddings/core",
-      "//components/lens:features",
+      "//services/network/public/mojom:url_loader_base",
+      "//ui/webui",
     ]
   }
 
@@ -233,6 +238,7 @@ source_set("browser_tests") {
 
   if (is_chromeos) {
     deps += [
+      "//ash/webui/common:trusted_types_util",
       "//ash/webui/connectivity_diagnostics",
       "//chrome/browser/ui/webui/ash/cloud_upload:browser_tests",
     ]
@@ -378,8 +384,6 @@ source_set("browser_tests") {
       "//components/history/core/common",
       "//components/history_clusters/core",
       "//components/history_clusters/history_clusters_internals/webui:constants",
-      "//components/history_embeddings/content",
-      "//components/history_embeddings/core",
       "//components/javascript_dialogs",
       "//components/language/core/browser",
       "//components/lens:enterprise_policy",
@@ -638,14 +642,11 @@ webui_ts_library("build_ts") {
     "trusted_html.ts",
   ]
 
-  if (!is_android || enable_webui_ntp) {
-    in_files += [ "polymer_test_util.ts" ]
-  }
-
   if (!is_android) {
     in_files += [
       "fake_settings_private.ts",
       "mocked_metrics_reporter.ts",
+      "polymer_test_util.ts",
       "test_api.ts",
       "test_store.ts",
     ]
@@ -667,7 +668,7 @@ webui_ts_library("build_ts") {
     "//tools/typescript/definitions/metrics_private.d.ts",
   ]
 
-  if (!is_android || enable_webui_ntp) {
+  if (!is_android) {
     deps += [ "//third_party/polymer/v3_0:library" ]
   }
 
@@ -735,14 +736,8 @@ generate_grd("build_grd") {
   ]
 
   if (enable_webui_ntp) {
-    deps += [
-      "cr_components/searchbox:build_grdp",
-      "new_tab_page:build_grdp",
-    ]
-    grdp_files += [
-      "$target_gen_dir/cr_components/searchbox/resources.grdp",
-      "$target_gen_dir/new_tab_page/resources.grdp",
-    ]
+    deps += [ "new_tab_page:build_grdp" ]
+    grdp_files += [ "$target_gen_dir/new_tab_page/resources.grdp" ]
   }
 
   if (!is_android) {
@@ -763,7 +758,6 @@ generate_grd("build_grd") {
       "cr_components/cr_shortcut_input:build_grdp",
       "cr_components/help_bubble:build_grdp",
       "cr_components/history_clusters:build_grdp",
-      "cr_components/history_embeddings:build_grdp",
       "cr_components/search:build_grdp",
       "cr_components/theme_color_picker:build_grdp",
       "css:build_grdp",
@@ -829,7 +823,6 @@ generate_grd("build_grd") {
       "$target_gen_dir/cr_components/cr_shortcut_input/resources.grdp",
       "$target_gen_dir/cr_components/help_bubble/resources.grdp",
       "$target_gen_dir/cr_components/history_clusters/resources.grdp",
-      "$target_gen_dir/cr_components/history_embeddings/resources.grdp",
       "$target_gen_dir/cr_components/search/resources.grdp",
       "$target_gen_dir/cr_components/theme_color_picker/resources.grdp",
       "$target_gen_dir/css/resources.grdp",
@@ -890,11 +883,13 @@ generate_grd("build_grd") {
     deps += [
       "cr_components:build_grdp",
       "cr_components/composebox:build_grdp",
+      "cr_components/searchbox:build_grdp",
       "history:build_grdp",
     ]
     grdp_files += [
       "$target_gen_dir/cr_components/composebox/resources.grdp",
       "$target_gen_dir/cr_components/resources.grdp",
+      "$target_gen_dir/cr_components/searchbox/resources.grdp",
       "$target_gen_dir/history/resources.grdp",
     ]
   }

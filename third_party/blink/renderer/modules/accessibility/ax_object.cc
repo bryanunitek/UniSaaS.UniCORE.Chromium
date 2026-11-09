@@ -5173,8 +5173,7 @@ bool AXObject::ComputeIsHiddenViaStyle(const ComputedStyle* style) {
     // <area> is display:none by default, in which case it has no box of its
     // own, but it is rendered as part of the <img> that uses its <map>. Its
     // visibility is the image's.
-    if (const auto* area = DynamicTo<HTMLAreaElement>(GetNode());
-        area && RuntimeEnabledFeatures::HTMLAreaElementDisplayNoneEnabled()) {
+    if (const auto* area = DynamicTo<HTMLAreaElement>(GetNode())) {
       HTMLImageElement* image = area->ImageElement();
       const LayoutObject* image_layout_object =
           image ? image->GetLayoutObject() : nullptr;
@@ -8950,6 +8949,17 @@ bool AXObject::SupportsNameFromContents(bool recursive,
     case ax::mojom::blink::Role::kVideo:
       return false;
 
+    case ax::mojom::blink::Role::kDescriptionList:
+      // Description lists are name-from-author, but their contents can
+      // contribute to an ancestor's name.
+      return recursive;
+
+    // Lists are name-from-author. Their contents may contribute when computing
+    // an ancestor's name, but focusing a list must not promote all descendant
+    // text to the list's own name.
+    case ax::mojom::blink::Role::kList:
+      return recursive;
+
     // ----- Conditional: contribute to ancestor only, unless focusable -------
     // Some objects can contribute their contents to ancestor names, but
     // only have their own name if they are focusable
@@ -8984,7 +8994,6 @@ bool AXObject::SupportsNameFromContents(bool recursive,
     case ax::mojom::blink::Role::kContentDeletion:
     case ax::mojom::blink::Role::kContentInsertion:
     case ax::mojom::blink::Role::kDefinition:
-    case ax::mojom::blink::Role::kDescriptionList:
     case ax::mojom::blink::Role::kDetails:
     case ax::mojom::blink::Role::kEmphasis:
     case ax::mojom::blink::Role::kFigcaption:
@@ -8994,7 +9003,6 @@ bool AXObject::SupportsNameFromContents(bool recursive,
     case ax::mojom::blink::Role::kLayoutTable:
     case ax::mojom::blink::Role::kLayoutTableRow:
     case ax::mojom::blink::Role::kLegend:
-    case ax::mojom::blink::Role::kList:
     case ax::mojom::blink::Role::kListItem:
     case ax::mojom::blink::Role::kMark:
     case ax::mojom::blink::Role::kNone:

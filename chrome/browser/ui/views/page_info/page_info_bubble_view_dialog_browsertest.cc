@@ -390,6 +390,9 @@ class PageInfoBubbleViewDialogBrowserTest : public DialogBrowserTest {
 
       auto* main_page = static_cast<PageInfoMainView*>(current_ui);
       main_page->toggle_rows_.clear();
+      main_page->syncable_permission_rows_.clear();
+      main_page->chosen_object_rows_.clear();
+      main_page->reset_button_ = nullptr;
       main_page->permissions_view_->RemoveAllChildViews();
 
       current_ui->SetPermissionInfo(permissions_list,
@@ -923,6 +926,11 @@ class PageInfoBubbleViewWebAppBrowserTest
           apps::AppShimManager::Get()->FindOrCreateHostForTesting(
               browser()->GetProfile(), app_id_);
       ASSERT_TRUE(app_shim_host);
+      // Simulate an explicit OS denial (denial after a prior grant) so
+      // navigating to the app does not also auto-open the location bar
+      // notification recovery bubble alongside Page Info.
+      app_shim_host->SetNotificationPermissionStatusForTesting(
+          mac_notifications::mojom::PermissionStatus::kGranted);
       app_shim_host->SetNotificationPermissionStatusForTesting(
           mac_notifications::mojom::PermissionStatus::kDenied);
 

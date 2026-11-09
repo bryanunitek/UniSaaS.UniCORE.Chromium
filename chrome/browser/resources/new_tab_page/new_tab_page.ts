@@ -9,8 +9,8 @@
  * things tests need.
  */
 
-export {GlifAnimationState} from '//resources/cr_components/composebox/common.js';
 export {COLOR_PROVIDER_CHANGED, ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+export {GlifAnimationState} from 'chrome://resources/cr_components/composebox/common.js';
 export {PlaceholderTextCycler} from 'chrome://resources/cr_components/searchbox/placeholder_text_cycler.js';
 export {SearchboxBrowserProxy} from 'chrome://resources/cr_components/searchbox/searchbox_browser_proxy.js';
 export {SearchboxIconElement} from 'chrome://resources/cr_components/searchbox/searchbox_icon.js';
@@ -32,7 +32,7 @@ export {C2PA_MARKER, hasC2paMetadata, MAX_C2PA_PIXELS, MAX_C2PA_SEARCH_BYTES, pr
 export type {ProcessedFile} from './image_processor.js';
 export {LeftHandSideElement, NtpLhsMessageType} from './left_hand_side.js';
 export {LogoElement} from './logo.js';
-export {recordBoolean, recordDuration, recordEnumeration, recordLinearValue, recordLoadDuration, recordLogValue, recordOccurrence, recordPerdecage, recordSmallCount, recordSparseValueWithPersistentHash, recordVoiceAction, VoiceAction, VoiceError} from './metrics_utils.js';
+export {recordBoolean, recordDuration, recordEnumeration, recordLinearValue, recordLogValue, recordOccurrence, recordPerdecage, recordSmallCount, recordSparseValueWithPersistentHash, recordVoiceAction, VoiceAction, VoiceError} from './metrics_utils.js';
 export {NtpSearchboxElement} from './ntp_searchbox.js';
 export {checkTransparency, isBMP, isPNG, isWebP} from './transparency.js';
 export {$$} from './utils.js';
@@ -41,7 +41,7 @@ export {WindowProxy} from './window_proxy.js';
 export * from './new_tab_page.mojom-webui.js';
 export {browserProxyFactory as newTabPageProxyFactory} from './new_tab_page.mojom-webui.js';
 export type {ActionChip, PageRemote as ActionChipsPageRemote, TabInfo} from './action_chips.mojom-webui.js';
-export {ActionChipsHandlerRemote, PageCallbackRouter as ActionChipsPageCallbackRouter} from './action_chips.mojom-webui.js';
+export {ActionChipsHandlerRemote, browserProxyFactory as actionChipsProxyFactory} from './action_chips.mojom-webui.js';
 export type {CalendarEvent, Attachment} from './calendar_data.mojom-webui.js';
 export type {Promo as NtpPromo, NtpPromoHandlerInterface} from './ntp_promo.mojom-webui.js';
 export {browserProxyFactory as ntpPromoProxyFactory} from './ntp_promo.mojom-webui.js';

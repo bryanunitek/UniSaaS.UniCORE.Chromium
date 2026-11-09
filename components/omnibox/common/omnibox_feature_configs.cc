@@ -690,7 +690,7 @@ ComposeboxSuggestionLimit::~ComposeboxSuggestionLimit() = default;
 // Feature to enable the short suggest path.
 BASE_FEATURE(SuggestPathClientConfig::kUseShortSuggestPathV1,
              "OmniboxUseShortSuggestPathV1",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(std::string,
                    kSuggestPathClient,
                    &SuggestPathClientConfig::kUseShortSuggestPathV1,

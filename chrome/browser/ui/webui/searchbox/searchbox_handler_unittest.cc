@@ -52,10 +52,12 @@
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
 #include "components/omnibox/browser/omnibox_pref_names.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
+#include "components/omnibox/browser/omnibox_text_util.h"
 #include "components/omnibox/browser/suggest_template_info.mojom.h"
 #include "components/omnibox/browser/test_omnibox_client.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/composebox_features.h"
+#include "components/omnibox/common/input_state.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search/ntp_features.h"
 #include "components/search_engines/template_url_service.h"
@@ -246,6 +248,29 @@ TEST_F(SearchboxHandlerTest, GetWebUIDataSourceDictSetsUnselectMatchOnTabExit) {
   }
 }
 
+TEST_F(SearchboxHandlerTest,
+       GetWebUIDataSourceDictVoiceSearchCoherenceKeepLegacyUi) {
+  {
+    base::test::ScopedFeatureList scoped_feature_list(
+        omnibox::kVoiceSearchCoherenceSearchbox);
+    base::DictValue strings =
+        SearchboxHandler::GetWebUIDataSourceDict(profile());
+    EXPECT_TRUE(
+        *strings.FindBool("voiceSearchCoherenceAnySearchboxExperimentEnabled"));
+  }
+
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeatureWithParameters(
+        omnibox::kVoiceSearchCoherenceSearchbox,
+        {{"VoiceSearchCoherenceRealboxKeepLegacyUi", "true"}});
+    base::DictValue strings =
+        SearchboxHandler::GetWebUIDataSourceDict(profile());
+    EXPECT_FALSE(
+        *strings.FindBool("voiceSearchCoherenceAnySearchboxExperimentEnabled"));
+  }
+}
+
 TEST_F(SearchboxHandlerTest, GetWebUIDataSourceDictKeywordSpaceTriggering) {
   profile()->GetPrefs()->SetBoolean(omnibox::kKeywordSpaceTriggeringEnabled,
                                     false);
@@ -265,6 +290,12 @@ TEST_F(SearchboxHandlerTest,
   base::DictValue dependent_strings =
       SearchboxHandler::GetProfileDependentWebUIDataSourceDict(profile(), {});
   EXPECT_TRUE(independent_strings.contains("searchBoxHint"));
+  const std::string* srp_placeholder =
+      independent_strings.FindString("searchboxSrpComposePlaceholder");
+  ASSERT_NE(srp_placeholder, nullptr);
+  EXPECT_EQ(*srp_placeholder,
+            l10n_util::GetStringUTF8(
+                IDS_NTP_SEARCH_BOX_DYNAMIC_PLACEHOLDER_ASK_GOOGLE));
   EXPECT_TRUE(dependent_strings.contains("keywordSpaceTriggeringEnabled"));
 
   // Each value is in exactly one of them.
@@ -276,6 +307,52 @@ TEST_F(SearchboxHandlerTest,
               dependent_strings.contains(item.first))
         << item.first;
   }
+}
+
+TEST_F(SearchboxHandlerTest, GetWebUIDataSourceDictComposeboxFileMaxCount) {
+  AimEligibilityServiceFactory::GetInstance()->SetTestingFactory(
+      profile(),
+      base::BindLambdaForTesting([](content::BrowserContext* context)
+                                     -> std::unique_ptr<KeyedService> {
+        auto* prof = Profile::FromBrowserContext(context);
+        return std::make_unique<testing::NiceMock<MockAimEligibilityService>>(
+            *prof->GetPrefs(), nullptr, nullptr, nullptr);
+      }));
+
+  auto* service = static_cast<MockAimEligibilityService*>(
+      AimEligibilityServiceFactory::GetForProfile(profile()));
+  ASSERT_TRUE(service);
+
+  auto* rule_set = service->config().mutable_rule_set();
+  auto* image_rule = rule_set->add_input_type_rules();
+  image_rule->set_input_type(omnibox::INPUT_TYPE_LENS_IMAGE);
+  auto* file_rule = rule_set->add_input_type_rules();
+  file_rule->set_input_type(omnibox::INPUT_TYPE_LENS_FILE);
+
+  base::DictValue strings = SearchboxHandler::GetWebUIDataSourceDict(profile());
+  EXPECT_EQ(omnibox::kDefaultMaxTotalInputs,
+            strings.FindInt("composeboxFileMaxCount"));
+  EXPECT_EQ(
+      l10n_util::GetPluralStringFUTF8(IDS_NTP_COMPOSE_MAX_IMAGES_REACHED_ERROR,
+                                      omnibox::kDefaultMaxTotalInputs),
+      *strings.FindString("maxImagesReachedError"));
+  EXPECT_EQ(
+      l10n_util::GetPluralStringFUTF8(IDS_NTP_COMPOSE_MAX_PDFS_REACHED_ERROR,
+                                      omnibox::kDefaultMaxTotalInputs),
+      *strings.FindString("maxPdfsReachedError"));
+
+  rule_set->set_max_total_inputs(5);
+  image_rule->set_max_instance(3);
+  strings = SearchboxHandler::GetWebUIDataSourceDict(profile());
+  EXPECT_EQ(5, strings.FindInt("composeboxFileMaxCount"));
+  EXPECT_EQ(l10n_util::GetPluralStringFUTF8(
+                IDS_NTP_COMPOSE_MAX_IMAGES_REACHED_ERROR, 3),
+            *strings.FindString("maxImagesReachedError"));
+  EXPECT_EQ(l10n_util::GetPluralStringFUTF8(
+                IDS_NTP_COMPOSE_MAX_PDFS_REACHED_ERROR, 5),
+            *strings.FindString("maxPdfsReachedError"));
+
+  AimEligibilityServiceFactory::GetInstance()->SetTestingFactory(profile(), {});
 }
 
 TEST_F(SearchboxHandlerTest, KeywordSpaceTriggeringDynamicPrefChange) {
@@ -1639,6 +1716,27 @@ TEST_F(
             searchbox_internal::kReplyRotated180IconResourceName);
 }
 
+TEST_F(WebuiOmniboxHandlerTest, CreateAutocompleteMatch_PromptSuggestionIcon) {
+  AutocompleteMatch match;
+  match.destination_url = GURL("https://example.com");
+  omnibox::SuggestTemplateInfo suggest_template;
+  suggest_template.set_type_icon(
+      omnibox::SuggestTemplateInfo::PROMPT_SUGGESTION);
+  match.suggest_template = suggest_template;
+
+  bookmarks::BookmarkModel* bookmark_model =
+      BookmarkModelFactory::GetForBrowserContext(profile());
+  bookmark_model->LoadEmptyForTest();
+
+  auto mojom_match = handler_->CreateAutocompleteMatch(
+      match, bookmark_model, omnibox::GroupConfigMap(),
+      omnibox_controller_->client()->GetTemplateURLService());
+
+  ASSERT_TRUE(mojom_match.has_value());
+  EXPECT_EQ(mojom_match.value()->icon_path,
+            "//resources/cr_components/searchbox/icons/prompt_suggestion.svg");
+}
+
 TEST_F(WebuiOmniboxHandlerTest,
        CreateAutocompleteMatch_SidePanelDescriptionIcon) {
   base::test::ScopedFeatureList feature_list;
@@ -1841,6 +1939,49 @@ TEST_F(WebuiOmniboxHandlerTest, CreateAutocompleteMatch_SecondaryTextIsUrl) {
     auto mojom_match = create_mojom_match(match);
     ASSERT_TRUE(mojom_match.has_value());
     EXPECT_FALSE(mojom_match.value()->secondary_text_is_url);
+  }
+}
+
+// The WebUI omnibox shows the additional text after the input text and inline
+// autocompletion, like the native omnibox's additional text label, so it must
+// be formatted the same way.
+TEST_F(WebuiOmniboxHandlerTest, CreateAutocompleteMatch_AdditionalText) {
+  bookmarks::BookmarkModel* bookmark_model =
+      BookmarkModelFactory::GetForBrowserContext(profile());
+  bookmark_model->LoadEmptyForTest();
+  auto create_mojom_match = [&](const AutocompleteMatch& match) {
+    return handler_->CreateAutocompleteMatch(
+        match, bookmark_model, omnibox::GroupConfigMap(),
+        omnibox_controller_->client()->GetTemplateURLService());
+  };
+
+  // A match rich autocompleting its title, e.g. "king" -> "King Arthur -
+  // Wikipedia", has its URL as additional text.
+  {
+    AutocompleteMatch match;
+    match.destination_url = GURL("https://en.wikipedia.org/wiki/King_Arthur");
+    match.fill_into_edit = u"en.wikipedia.org/wiki/King_Arthur";
+    match.allowed_to_be_default_match = true;
+    match.inline_autocompletion = u" Arthur - Wikipedia";
+    match.additional_text = u"en.wikipedia.org/wiki/King_Arthur";
+    auto mojom_match = create_mojom_match(match);
+    ASSERT_TRUE(mojom_match.has_value());
+    EXPECT_EQ(u" Arthur - Wikipedia",
+              mojom_match.value()->inline_autocompletion);
+    EXPECT_EQ(u" - en.wikipedia.org/wiki/King_Arthur",
+              mojom_match.value()->additional_text);
+    EXPECT_EQ(omnibox::FormatAdditionalText(match.additional_text),
+              mojom_match.value()->additional_text);
+  }
+
+  // Matches without additional text have none.
+  {
+    AutocompleteMatch match;
+    match.destination_url = GURL("https://example.com");
+    match.fill_into_edit = u"example.com";
+    auto mojom_match = create_mojom_match(match);
+    ASSERT_TRUE(mojom_match.has_value());
+    EXPECT_TRUE(mojom_match.value()->additional_text.empty());
   }
 }
 

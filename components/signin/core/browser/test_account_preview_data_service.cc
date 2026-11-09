@@ -6,6 +6,9 @@
 
 #include <utility>
 
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+
 namespace signin {
 
 TestAccountPreviewDataService::TestAccountPreviewDataService() = default;
@@ -35,13 +38,16 @@ void TestAccountPreviewDataService::GetPreviewPreferenceForAccount(
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 void TestAccountPreviewDataService::GetPreferredAccountForSigninAsync(
-    base::OnceCallback<void(std::optional<AccountPreviewPreference>)>
-        callback) {
+    base::OnceCallback<void(std::optional<AccountPreviewPreference>)> callback,
+    base::TimeDelta timeout) {
+  last_preferred_account_request_timeout_ = timeout;
   if (defer_preferred_account_requests_) {
     pending_preferred_account_requests_.push_back(std::move(callback));
     return;
   }
-  std::move(callback).Run(preferred_account_for_signin_);
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback), preferred_account_for_signin_));
 }
 #endif
 

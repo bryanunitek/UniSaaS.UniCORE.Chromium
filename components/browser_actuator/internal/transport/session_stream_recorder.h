@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include "base/containers/circular_deque.h"
 #include "base/containers/span.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -71,6 +72,11 @@ struct SessionEventSnapshot {
   std::string message;
   // True when `message` was cut to the byte limit.
   bool message_truncated = false;
+  // The HTTP response status code for upstream messages.
+  int http_response_code = 0;
+  // The delivery or connection status for downstream messages.
+  DownstreamDeliveryStatus downstream_status =
+      DownstreamDeliveryStatus::kUnknown;
 };
 // LINT.ThenChange(//chrome/browser/browser_actuator/internals/browser_actuator_internals_mojom_traits.cc)
 
@@ -98,14 +104,20 @@ struct SessionSnapshot {
 // LINT.ThenChange(//chrome/browser/browser_actuator/internals/browser_actuator_internals_mojom_traits.cc)
 
 // Records canonical protobuf messages (ActuatorDownstreamMessage and
-// ActuatorUpstreamMessage) for a single TransportSession using an unbounded
-// std::vector. Observers can subscribe to receive live messages as they occur.
+// ActuatorUpstreamMessage) for a single TransportSession using a bounded
+// buffer (`kMaxEntriesPerSession`). Observers can subscribe to receive live
+// messages as they occur.
 class SessionStreamRecorder {
  public:
+  static constexpr size_t kMaxEntriesPerSession = 256;
+
   // Stored entry pairing timestamp with canonical protobuf message.
   struct Entry {
     base::TimeTicks timestamp;
     std::variant<ActuatorDownstreamMessage, ActuatorUpstreamMessage> message;
+    int http_response_code = 0;
+    DownstreamDeliveryStatus downstream_status =
+        DownstreamDeliveryStatus::kUnknown;
 
     // Serializes this entry for diagnostic dumps. The message body is
     // serialized by the generated `ToValue()` from //components/proto_extras,
@@ -117,10 +129,11 @@ class SessionStreamRecorder {
   class Observer : public base::CheckedObserver {
    public:
     virtual void OnDownstreamMessage(base::TimeTicks timestamp,
-                                     const ActuatorDownstreamMessage& message) {
-    }
+                                     const ActuatorDownstreamMessage& message,
+                                     DownstreamDeliveryStatus status);
     virtual void OnUpstreamMessage(base::TimeTicks timestamp,
-                                   const ActuatorUpstreamMessage& message) {}
+                                   const ActuatorUpstreamMessage& message,
+                                   int http_response_code);
   };
 
   explicit SessionStreamRecorder(std::string_view session_id);
@@ -130,8 +143,21 @@ class SessionStreamRecorder {
   SessionStreamRecorder& operator=(const SessionStreamRecorder&) = delete;
 
   // Direct recording methods:
-  void RecordDownstreamMessage(ActuatorDownstreamMessage message);
-  void RecordUpstreamMessage(ActuatorUpstreamMessage message);
+  void RecordDownstreamMessage(ActuatorDownstreamMessage message,
+                               DownstreamDeliveryStatus status);
+
+  // Records an upstream message. Operates in two phases: initially called with
+  // `http_response_code = 0` when the message is dispatched to the transport
+  // client, followed by an in-place update with the response status code upon
+  // completion.
+  void RecordUpstreamMessage(ActuatorUpstreamMessage message,
+                             int http_response_code);
+
+  // Updates the HTTP response code of a previously recorded pending upstream
+  // entry matching `client_sequence_number`. Returns true if a matching
+  // pending entry was found and updated.
+  bool UpdateUpstreamResponseCode(int64_t client_sequence_number,
+                                  int http_response_code);
 
   // Observer management:
   void AddObserver(Observer* observer);
@@ -139,7 +165,7 @@ class SessionStreamRecorder {
 
   std::string_view session_id() const;
   const SessionMetadata& metadata() const;
-  const std::vector<Entry>& entries() const;
+  const base::circular_deque<Entry>& entries() const;
 
   // Marks the session as closed.
   void MarkSessionClosed();
@@ -149,7 +175,7 @@ class SessionStreamRecorder {
 
   const std::string session_id_;
   SessionMetadata metadata_ GUARDED_BY_CONTEXT(sequence_checker_);
-  std::vector<Entry> entries_ GUARDED_BY_CONTEXT(sequence_checker_);
+  base::circular_deque<Entry> entries_ GUARDED_BY_CONTEXT(sequence_checker_);
   base::ObserverList<Observer> observers_ GUARDED_BY_CONTEXT(sequence_checker_);
 };
 
@@ -180,9 +206,11 @@ class SessionStreamRecorderFactory : public TransportSessionRegistry::Observer,
 
   // TransportMessageObserver implementation:
   void OnDownstreamMessage(std::string_view session_id,
-                           const ActuatorDownstreamMessage& message) override;
+                           const ActuatorDownstreamMessage& message,
+                           DownstreamDeliveryStatus status) override;
   void OnUpstreamMessage(std::string_view session_id,
-                         const ActuatorUpstreamMessage& message) override;
+                         const ActuatorUpstreamMessage& message,
+                         int http_response_code) override;
 
   // Exports all tracked sessions' metadata and history as a structured
   // dictionary.
@@ -213,6 +241,10 @@ class SessionStreamRecorderFactory : public TransportSessionRegistry::Observer,
   // Exports the tracked sessions matching `session_ids` as JSON.
   std::string ExportSessionsAsJson(
       base::span<const std::string> session_ids) const;
+
+  // Clears all active and retained session recordings (e.g. on sign-out,
+  // primary account switch, or service shutdown).
+  void Clear();
 
   // For testing: returns the number of tracked active session recorders.
   size_t GetActiveRecordersCountForTesting() const;

@@ -18,10 +18,11 @@
 #include "base/containers/flat_set.h"
 #include "base/containers/lru_cache.h"
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/memory_coordinator/async_memory_consumer_registration.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/default_clock.h"
@@ -207,10 +208,18 @@ class NET_EXPORT_PRIVATE QuicSessionRequest {
   // `callback` will be run with ERR_IO_PENDING.
   bool WaitForQuicSessionCreation(CompletionOnceCallback callback);
 
+  // May be called after Request() returns ERR_IO_PENDING.
+  // `callback` runs at most once, with the error of a connection attempt that
+  // failed after the job delivered every host resolution and session creation
+  // notification it promised to this request, while the job keeps trying other
+  // endpoints. Only `QuicSessionPool::AsyncDnsJob` reports such failures.
+  void WaitForAttemptFailure(CompletionOnceCallback callback);
+
   // QuicSessionPool::Jobs may notify associated requests at two points in the
   // connection process before completion: host resolution and session creation.
   // The `Expect` methods below inform the request whether it should expect
-  // these notifications.
+  // these notifications. After both, a job may also report attempt failures
+  // through `OnAttemptFailure()`.
 
   // Tells QuicSessionRequest that `QuicSessionPool::Job` will call
   // `OnHostResolutionComplete()` in the future. Must be called before
@@ -235,6 +244,11 @@ class NET_EXPORT_PRIVATE QuicSessionRequest {
   // creation completes asynchronously after Request(), if
   // `ExpectQuicSessionCreation` was called.
   void OnQuicSessionCreationComplete(int rv);
+
+  // Called by the associated `QuicSessionPool::Job` when a connection attempt
+  // fails after all notifications above were delivered, and the job keeps
+  // trying other endpoints. See `WaitForAttemptFailure()`.
+  void OnAttemptFailure(int rv);
 
   void OnRequestComplete(int rv);
 
@@ -321,6 +335,9 @@ class NET_EXPORT_PRIVATE QuicSessionRequest {
   CompletionOnceCallback host_resolution_callback_;
 
   CompletionOnceCallback create_session_callback_;
+
+  // Callback passed to WaitForAttemptFailure().
+  CompletionOnceCallback attempt_failure_callback_;
 
   base::WeakPtrFactory<QuicSessionRequest> weak_factory_{this};
 };
@@ -1064,13 +1081,12 @@ class NET_EXPORT_PRIVATE QuicSessionPool
 // QuicCryptoClientConfigHandle informs the owning QuicSessionPool, moves it
 // into an MRU cache.
 class QuicSessionPool::QuicCryptoClientConfigOwner
-    : public base::MemoryPressureListener {
+    : public base::MemoryConsumer {
  public:
   QuicCryptoClientConfigOwner(
       NetworkAnonymizationKey network_anonymization_key,
       std::unique_ptr<quic::ProofVerifier> proof_verifier,
       std::unique_ptr<quic::QuicClientSessionCache> session_cache,
-      size_t max_cache_entries,
       QuicSessionPool* quic_session_pool);
 
   QuicCryptoClientConfigOwner(const QuicCryptoClientConfigOwner&) = delete;
@@ -1085,8 +1101,8 @@ class QuicSessionPool::QuicCryptoClientConfigOwner
 
   QuicSessionPool* quic_session_pool() { return quic_session_pool_; }
 
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
+  void OnUpdateMemoryLimit() override;
+  void OnReleaseMemory() override;
 
  private:
   friend class CryptoClientConfigHandle;
@@ -1107,10 +1123,8 @@ class QuicSessionPool::QuicCryptoClientConfigOwner
   int num_refs_ = 0;
   quic::QuicCryptoClientConfig config_;
   raw_ptr<base::Clock> clock_;
-  const size_t max_cache_entries_;
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
   const raw_ptr<QuicSessionPool> quic_session_pool_;
+  base::AsyncMemoryConsumerRegistration memory_consumer_registration_;
 };
 
 // Key for QuicCryptoClientConfigOwners within a session pool.

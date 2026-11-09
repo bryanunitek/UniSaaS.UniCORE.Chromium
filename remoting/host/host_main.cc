@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/at_exit.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
@@ -38,13 +39,15 @@
 #include "remoting/proto/terminal.pb.h"
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(IS_POSIX)
+#include <signal.h>
+#endif  // BUILDFLAG(IS_POSIX)
+
 #if BUILDFLAG(IS_LINUX)
 #include <sys/prctl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/files/file_util.h"
-#include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "remoting/base/file_path_util_linux.h"
 #endif  // BUILDFLAG(IS_LINUX)
@@ -92,29 +95,28 @@ int XSessionChooserMain();
 namespace {
 
 #if BUILDFLAG(IS_LINUX)
-void EnsureVarLibDirectory() {
+// Creates `dir`, replacing any non-directory at that path, and sets its mode
+// to `mode`, deleting `dir` if that fails. Only does this in the daemon
+// process, which is always run as root, so a new `dir` is owned by root.
+void EnsureRootOwnedDirectory(const base::FilePath& dir, int mode) {
   if (getuid() != 0) {
-    // Only do this in the daemon process, which is always run as root.
     return;
   }
 
-  base::FilePath var_lib_dir = GetVarLibDir();
-  if (base::PathExists(var_lib_dir) && !base::DirectoryExists(var_lib_dir)) {
-    if (!base::DeletePathRecursively(var_lib_dir)) {
-      PLOG(FATAL) << "Failed to delete non-directory " << var_lib_dir;
+  if (base::PathExists(dir) && !base::DirectoryExists(dir)) {
+    if (!base::DeletePathRecursively(dir)) {
+      PLOG(FATAL) << "Failed to delete non-directory " << dir;
     }
   }
   base::File::Error error;
-  if (!base::CreateDirectoryAndGetError(var_lib_dir, &error)) {
-    LOG(FATAL) << "Failed to create " << var_lib_dir << ": "
+  if (!base::CreateDirectoryAndGetError(dir, &error)) {
+    LOG(FATAL) << "Failed to create " << dir << ": "
                << base::File::ErrorToString(error);
   }
-  // Allow other users to list and read files and directories, but not write to
-  // it.
-  if (HANDLE_EINTR(chmod(var_lib_dir.value().c_str(), 0755)) != 0) {
-    PLOG(ERROR) << "Failed to chmod " << var_lib_dir;
-    if (!base::DeletePathRecursively(var_lib_dir)) {
-      PLOG(FATAL) << "Failed to delete " << var_lib_dir;
+  if (!base::SetPosixFilePermissions(dir, mode)) {
+    PLOG(ERROR) << "Failed to set permissions of " << dir;
+    if (!base::DeletePathRecursively(dir)) {
+      PLOG(FATAL) << "Failed to delete " << dir;
     }
   }
 }
@@ -133,7 +135,6 @@ void Usage(const base::FilePath& program_name) {
       "UID.\n"
 #endif  // BUILDFLAG(IS_APPLE)
 
-      "  --console                - Runs the daemon interactively.\n"
       "  --elevate=<binary>       - Runs <binary> elevated.\n"
       "  --host-config=<config>   - Specifies the host configuration.\n"
       "  --help, -?               - Prints this message.\n"
@@ -281,6 +282,12 @@ int SendAgentStatusMain(const base::CommandLine* command_line) {
 }  // namespace
 
 int HostMain(int argc, char** argv) {
+#if BUILDFLAG(IS_POSIX)
+  // Always ignore SIGPIPE. Networking, IPC, and logging code check write()
+  // return values and expect EPIPE rather than process termination.
+  PCHECK(signal(SIGPIPE, SIG_IGN) != SIG_ERR);
+#endif  // BUILDFLAG(IS_POSIX)
+
   base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
       memory_consumer_registry;
 
@@ -356,7 +363,11 @@ int HostMain(int argc, char** argv) {
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_LINUX)
-  EnsureVarLibDirectory();
+  // Allow other users to list and read files and directories, but not write to
+  // it.
+  EnsureRootOwnedDirectory(GetVarLibDir(), 0755);
+  // Only allow root to access the runtime state.
+  EnsureRootOwnedDirectory(GetRunDir(), 0700);
 #endif  // BUILDFLAG(IS_LINUX)
 
 #if defined(REMOTING_ENABLE_CRASH_REPORTING)

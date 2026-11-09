@@ -23,6 +23,7 @@
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_ui_util.h"
@@ -77,7 +78,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -349,7 +350,7 @@ tabs::TabInterface* TabSearchPageHandler::GetTabInterface(int32_t tab_id) {
 void TabSearchPageHandler::GetIsSplit(GetIsSplitCallback callback) {
   bool is_split = false;
   GURL url = web_ui_->GetWebContents()->GetURL();
-  if (url.spec() == chrome::kChromeUISplitViewNewTabPageURL) {
+  if (search::IsSplitViewNewTabPage(url)) {
     is_split = tabs::TabInterface::GetFromContents(web_ui_->GetWebContents())
                    ->IsSplit();
   }
@@ -403,7 +404,7 @@ void TabSearchPageHandler::OpenRecentlyClosedEntry(int32_t session_id) {
       BrowserLiveTabContext::FindContextForWebContents(
           browser_->GetActiveTabInterface()->GetContents()),
       SessionID::FromSerializedValue(session_id),
-      WindowOpenDisposition::kNewForegroundTab);
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab);
 }
 
 void TabSearchPageHandler::ReplaceActiveSplitTab(int32_t replacement_tab_id) {
@@ -507,21 +508,17 @@ void TabSearchPageHandler::WalkContainer(
     std::set<DedupKey>& tab_dedup_keys,
     std::set<tab_groups::TabGroupId>& tab_group_ids) {
   if (container->data->is_tab()) {
-    const std::optional<tabs::TabHandle> handle =
-        container->data->get_tab()->id.ToTabHandle();
-    if (handle) {
-      tabs::TabInterface* const tab_interface = handle->Get();
-      // A Tab can potentially be in a state where it has no committed
-      // entries during loading and thus has no title/URL. Skip any such
-      // pending tabs. These tabs will be added to the list later on once
-      // loading has finished.
-      if (tab_interface && tab_interface->GetContents()
-                               ->GetController()
-                               .GetLastCommittedEntry()) {
-        tab_search::mojom::TabPtr tab = GetTab(tab_interface);
-        tab_dedup_keys.insert(DedupKey(tab->url, tab->group_id));
-        window->tabs.push_back(std::move(tab));
-      }
+    tabs::TabInterface* const tab_interface =
+        container->data->get_tab().ToTabHandle().Get();
+    // A Tab can potentially be in a state where it has no committed
+    // entries during loading and thus has no title/URL. Skip any such
+    // pending tabs. These tabs will be added to the list later on once
+    // loading has finished.
+    if (tab_interface &&
+        tab_interface->GetContents()->GetController().GetLastCommittedEntry()) {
+      tab_search::mojom::TabPtr tab = GetTab(tab_interface);
+      tab_dedup_keys.insert(DedupKey(tab->url, tab->group_id));
+      window->tabs.push_back(std::move(tab));
     }
   } else if (container->data->is_tab_group()) {
     const auto& group_data = container->data->get_tab_group();
@@ -683,8 +680,7 @@ void TabSearchPageHandler::AddRecentlyClosedEntries(
           }
 
           // Handle Group ID.
-          if (!recently_closed_split_view->group_id && tab->group.has_value() &&
-              !tab->is_group_ephemeral) {
+          if (!recently_closed_split_view->group_id && tab->group.has_value()) {
             recently_closed_split_view->group_id = tab->group.value().token();
           }
 
@@ -730,7 +726,7 @@ bool TabSearchPageHandler::AddRecentlyClosedTab(
   }
   tab_dedup_keys.insert(dedup_id);
 
-  if (tab->group.has_value() && !tab->is_group_ephemeral) {
+  if (tab->group.has_value()) {
     recently_closed_tab->group_id = tab->group.value().token();
     CreateTabGroupIfNotPresent(tab, tab_group_ids, tab_groups);
   }
@@ -874,7 +870,7 @@ TabSearchPageHandler::GetRecentlyClosedTab(sessions::tab_restore::Tab* tab,
   recently_closed_tab->last_active_elapsed_text =
       GetLastActiveElapsedText(last_active_time);
 
-  if (tab->group.has_value() && !tab->is_group_ephemeral) {
+  if (tab->group.has_value()) {
     recently_closed_tab->group_id = tab->group.value().token();
   }
 
@@ -972,13 +968,11 @@ void TabSearchPageHandler::OnTabDataChanged(
     const tabs_api::mojom::TabChange& event) {
   // Ignore if the UI is hidden or the event doesn't contain
   // relevant tab data changes.
-  const std::optional<tabs::TabHandle> handle = event.data->id.ToTabHandle();
-  if (!IsWebContentsVisible() || !HasTabSiteDataChanged(event.mask) ||
-      !handle) {
+  if (!IsWebContentsVisible() || !HasTabSiteDataChanged(event.mask)) {
     return;
   }
 
-  tabs::TabInterface* const tab = handle->Get();
+  tabs::TabInterface* const tab = event.data.ToTabHandle().Get();
   if (!tab) {
     return;
   }
@@ -1000,7 +994,7 @@ void TabSearchPageHandler::OnTabDataChanged(
 
 void TabSearchPageHandler::OnSplitTabRemoved() {
   GURL url = web_ui_->GetWebContents()->GetURL();
-  if (url.spec() != chrome::kChromeUISplitViewNewTabPageURL) {
+  if (!search::IsSplitViewNewTabPage(url)) {
     return;
   }
   if (!tabs::TabInterface::GetFromContents(web_ui_->GetWebContents())

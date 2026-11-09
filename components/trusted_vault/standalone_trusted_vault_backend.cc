@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include "base/strings/strcat.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
+#include "components/trusted_vault/chrome_sync_enrollment_handler.h"
 #include "components/trusted_vault/features.h"
 #include "components/trusted_vault/local_recovery_factor.h"
 #include "components/trusted_vault/physical_device_recovery_factor.h"
@@ -29,6 +31,7 @@
 #include "components/trusted_vault/securebox.h"
 #include "components/trusted_vault/standalone_trusted_vault_server_constants.h"
 #include "components/trusted_vault/standalone_trusted_vault_storage.h"
+#include "components/trusted_vault/trusted_vault_client.h"
 #include "components/trusted_vault/trusted_vault_connection.h"
 #include "components/trusted_vault/trusted_vault_histograms.h"
 #include "components/trusted_vault/trusted_vault_server_constants.h"
@@ -339,7 +342,8 @@ void StandaloneTrustedVaultBackend::StoreKeys(
     const GaiaId& gaia_id,
     SecurityDomainId security_domain,
     const std::vector<std::vector<uint8_t>>& keys,
-    int last_key_version) {
+    int last_key_version,
+    std::optional<TrustedVaultUserActionTriggerForUMA> trigger) {
   CHECK(GetSupportedSecurityDomainIdValues().contains(security_domain));
   // Setters will create a user vault if it doesn't exist yet.
 
@@ -349,8 +353,14 @@ void StandaloneTrustedVaultBackend::StoreKeys(
   storage_->SetLastRegistrationReturnedLocalDataObsolete(
       gaia_id, security_domain, false);
 
+  const bool keys_changed =
+      keys != storage_->GetVaultKeys(gaia_id, security_domain);
+
   // Replace all keys (this also clears the "marked as stale" flag).
   storage_->SetVaultKeys(gaia_id, security_domain, keys, last_key_version);
+  if (keys_changed) {
+    delegate_->NotifyVaultKeysChanged(security_domain, trigger);
+  }
 
   MaybeRegisterLocalRecoveryFactors(security_domain);
 }
@@ -389,6 +399,7 @@ void StandaloneTrustedVaultBackend::SetPrimaryAccount(
   // This aborts all ongoing recoveries / registrations.
   local_recovery_factors_.clear();
   ongoing_registration_attempts_.clear();
+  chrome_sync_enrollment_handler_.reset();
   RemoveNonPrimaryAccountKeysIfMarkedForDeletion();
   // Make sure to call pending callbacks, now that ongoing recoveries were
   // aborted.
@@ -411,6 +422,9 @@ void StandaloneTrustedVaultBackend::SetPrimaryAccount(
               connection_.get(), /*observer=*/this, storage_.get(),
               primary_account_.value(), domain);
     }
+    chrome_sync_enrollment_handler_ =
+        std::make_unique<ChromeSyncEnrollmentHandler>(
+            *primary_account_, storage_.get(), connection_.get());
   }
 
   // Process pending get recoverability degraded requests if they belong to
@@ -567,6 +581,23 @@ void StandaloneTrustedVaultBackend::AddTrustedRecoveryMethod(
           base::BindOnce(
               &StandaloneTrustedVaultBackend::OnTrustedRecoveryMethodAdded,
               weak_ptr_factory_.GetWeakPtr(), security_domain, std::move(cb)));
+}
+
+void StandaloneTrustedVaultBackend::CanEnroll(
+    const CoreAccountInfo& account_info,
+    SecurityDomainId security_domain,
+    base::OnceCallback<void(bool)> cb) {
+  CHECK(GetSupportedSecurityDomainIdValues().contains(security_domain));
+  if (security_domain == SecurityDomainId::kChromeSync &&
+      primary_account_.has_value() &&
+      primary_account_->gaia == account_info.gaia &&
+      refresh_token_error_state_ !=
+          RefreshTokenErrorState::kPersistentAuthError &&
+      chrome_sync_enrollment_handler_) {
+    chrome_sync_enrollment_handler_->CanEnroll(std::move(cb));
+    return;
+  }
+  std::move(cb).Run(false);
 }
 
 void StandaloneTrustedVaultBackend::ClearLocalDataForAccount(

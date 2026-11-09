@@ -959,8 +959,10 @@ if (is_win || is_mac || is_linux) {
       "test/integration_tests_impl.h",
       "test/request_matcher.cc",
       "test/request_matcher.h",
+      "test/request_matcher_unittest.cc",
       "test/server.cc",
       "test/server.h",
+      "test/server_unittest.cc",
       "test/unit_test_util_unittest.cc",
       "update_service_impl_impl_unittest.cc",
       "update_service_impl_inactive_unittest.cc",
@@ -1106,6 +1108,7 @@ if (is_win || is_mac || is_linux) {
         "win/ui/resources",
         "//components/named_mojo_ipc_server",
         "//mojo/public/cpp/system",
+        "//ui/gfx/geometry",
       ]
 
       data_deps += [

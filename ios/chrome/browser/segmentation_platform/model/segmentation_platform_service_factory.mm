@@ -221,13 +221,24 @@ SegmentationPlatformServiceFactory::SegmentationPlatformServiceFactory(
   DependsOn(ios::HistoryServiceFactory::GetInstance());
   DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
   DependsOn(SessionSyncServiceFactory::GetInstance());
+  DependsOn(commerce::ShoppingServiceFactory::GetInstance());
 }
 
 // static
 DeviceSwitcherResultDispatcher*
 SegmentationPlatformServiceFactory::GetDispatcherForProfile(
     ProfileIOS* profile) {
-  CHECK(!profile->IsOffTheRecord());
+  if (!profile) {
+    return nullptr;
+  }
+  return GetDispatcherForProfile(*profile);
+}
+
+// static
+DeviceSwitcherResultDispatcher*
+SegmentationPlatformServiceFactory::GetDispatcherForProfile(
+    ProfileIOS& profile) {
+  CHECK(!profile.IsOffTheRecord());
   SegmentationPlatformService* service = GetForProfile(profile);
   if (!service) {
     return nullptr;
@@ -240,7 +251,17 @@ SegmentationPlatformServiceFactory::GetDispatcherForProfile(
 home_modules::HomeModulesCardRegistry*
 SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
     ProfileIOS* profile) {
-  CHECK(!profile->IsOffTheRecord());
+  if (!profile) {
+    return nullptr;
+  }
+  return GetHomeCardRegistryForProfile(*profile);
+}
+
+// static
+home_modules::HomeModulesCardRegistry*
+SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
+    ProfileIOS& profile) {
+  CHECK(!profile.IsOffTheRecord());
   SegmentationPlatformService* service = GetForProfile(profile);
   if (!service) {
     return nullptr;

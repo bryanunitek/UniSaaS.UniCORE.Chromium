@@ -124,10 +124,36 @@ const base::FeatureParam<bool>
         "ContextualTasksEphemeralButtonContextMenuCloseSidePanel",
         false);
 
-bool ShouldUseCloseSidePanelForEphemeralButtonContextMenu() {
-  return base::FeatureList::IsEnabled(
-             kContextualTasksEphemeralButtonContextMenu) &&
-         kContextualTasksEphemeralButtonContextMenuCloseSidePanel.Get();
+constexpr base::FeatureParam<EphemeralButtonContextMenuOption>::Option
+    kContextualTasksEphemeralButtonContextMenuOptions[] = {
+        {EphemeralButtonContextMenuOption::kHideSidePanel, "hide-side-panel"},
+        {EphemeralButtonContextMenuOption::kCloseSidePanel, "close-side-panel"},
+        {EphemeralButtonContextMenuOption::kDismissActiveSearch,
+         "dismiss-active-search"},
+        {EphemeralButtonContextMenuOption::kDismissActiveSearchInTab,
+         "dismiss-active-search-in-tab"},
+};
+
+const base::FeatureParam<EphemeralButtonContextMenuOption>
+    kContextualTasksEphemeralButtonContextMenuOption(
+        &kContextualTasksEphemeralButtonContextMenu,
+        "ContextualTasksEphemeralButtonContextMenuOption",
+        EphemeralButtonContextMenuOption::kHideSidePanel,
+        &kContextualTasksEphemeralButtonContextMenuOptions);
+
+EphemeralButtonContextMenuOption GetEphemeralButtonContextMenuOption() {
+  if (!base::FeatureList::IsEnabled(
+          kContextualTasksEphemeralButtonContextMenu)) {
+    return EphemeralButtonContextMenuOption::kHideSidePanel;
+  }
+  const EphemeralButtonContextMenuOption option =
+      kContextualTasksEphemeralButtonContextMenuOption.Get();
+  if (option != EphemeralButtonContextMenuOption::kHideSidePanel) {
+    return option;
+  }
+  return kContextualTasksEphemeralButtonContextMenuCloseSidePanel.Get()
+             ? EphemeralButtonContextMenuOption::kCloseSidePanel
+             : EphemeralButtonContextMenuOption::kHideSidePanel;
 }
 
 // Automatically dismisses the ephemeral contextual tasks toolbar button and
@@ -191,6 +217,40 @@ bool ShouldUseGraySuperGIconForPinButtons() {
              UnifyPinButtonLogoOption::kGraySuperG;
 }
 
+// Replaces "Google Search AI Mode" across Contextual Tasks pinning, tooltips,
+// IPH, and tutorial strings with the selected string variant.
+BASE_FEATURE(kContextualTasksPinningStringVariants,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// LINT.IfChange(PinningStringVariant)
+constexpr base::FeatureParam<PinningStringVariant>::Option
+    kContextualTasksPinningStringVariantOptions[] = {
+        {PinningStringVariant::kAiMode, "ai-mode"},
+        {PinningStringVariant::kSidePanel, "side-panel"},
+        {PinningStringVariant::kInSidePanel, "in-side-panel"},
+        {PinningStringVariant::kInChrome, "in-chrome"},
+        {PinningStringVariant::kPanel, "panel"},
+};
+// LINT.ThenChange(
+//   //chrome/browser/about_flags.cc:PinningStringVariant,
+//   //components/contextual_tasks/public/features.cc:PinningStringVariantDescription,
+//   //components/contextual_tasks/public/features.h:PinningStringVariant
+// )
+
+constexpr base::FeatureParam<PinningStringVariant>
+    kContextualTasksPinningStringVariant(
+        &kContextualTasksPinningStringVariants,
+        "ContextualTasksPinningStringVariant",
+        PinningStringVariant::kAiMode,
+        &kContextualTasksPinningStringVariantOptions);
+
+PinningStringVariant GetContextualTasksPinningStringVariant() {
+  if (!base::FeatureList::IsEnabled(kContextualTasksPinningStringVariants)) {
+    return PinningStringVariant::kAiMode;
+  }
+  return kContextualTasksPinningStringVariant.Get();
+}
+
 // Enables relevant context determination for contextual tasks.
 BASE_FEATURE(kContextualTasksContext, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -242,9 +302,6 @@ BASE_FEATURE(kEnableNotifyZeroStateRenderedCapability,
 BASE_FEATURE(kContextualTasksSendFullVersionListEnabled,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kContextualTasksSendContextualInputUploadType,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kContextualTasksUrlRedirectToAimUrl,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -268,6 +325,12 @@ BASE_FEATURE(kContextualTasksHideMenuOnAiPage,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kContextualTasksUnboundedMenu, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kContextualTasksAccountMenuGoogleComSignOutLabel,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kContextualTasksSingleTabMenuItem,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kContextualTasksHideCloseButtonInVerticalTabs,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -334,6 +397,11 @@ const base::FeatureParam<bool> kABASearchJourneysAllowIntermediateTabs(
     "aba_search_journeys_allow_intermediate_tabs",
     false);
 
+const base::FeatureParam<size_t> kABASearchJourneysMinWordsWithoutHint(
+    &kABASearchJourneys,
+    "aba_search_journeys_min_words_without_hint",
+    0);
+
 bool IsABASearchJourneysEnabled() {
   return base::FeatureList::IsEnabled(kABASearchJourneys);
 }
@@ -362,6 +430,13 @@ size_t GetABASearchJourneysMinQueryMatchLength() {
 bool ShouldAllowABASearchJourneysIntermediateTabs() {
   return IsABASearchJourneysEnabled() &&
          kABASearchJourneysAllowIntermediateTabs.Get();
+}
+
+size_t GetABASearchJourneysMinWordsWithoutHint() {
+  if (!IsABASearchJourneysEnabled()) {
+    return 0;
+  }
+  return kABASearchJourneysMinWordsWithoutHint.Get();
 }
 
 BASE_FEATURE(kContextualTasksEnableSpatialModelToolbarLayout,
@@ -654,13 +729,6 @@ const base::FeatureParam<double> kContextualTasksContextLoggingSampleRate{
 const base::FeatureParam<int> kMinQueryWords{
     &kContextualTasksContext, "ContextualTasksContextMinQueryWords", 3};
 
-const base::FeatureParam<bool> kSendContextualInputUploadTypeInSearchUrl{
-    &kContextualTasksSendContextualInputUploadType, "send_in_search_url", true};
-
-const base::FeatureParam<bool> kSendContextualInputUploadTypeInAimRequest{
-    &kContextualTasksSendContextualInputUploadType, "send_in_aim_request",
-    true};
-
 // Enables tab auto-chip for contextual tasks.
 const base::FeatureParam<bool> kContextualTasksTabAutoSuggestionChipEnabled(
     &kContextualTasks,
@@ -925,6 +993,11 @@ bool IsContextualTasksEphemeralPinButtonRefactorEnabled() {
              kContextualTasksEphemeralPinButtonRefactor);
 }
 
+bool IsContextualTasksEphemeralEntryPointEnabled() {
+  return kShowEntryPoint.Get() == EntryPointOption::kToolbarEphemeralBranded ||
+         IsContextualTasksEphemeralPinButtonRefactorEnabled();
+}
+
 bool IsContextualTasksPinnedButtonActiveIndicatorEnabled() {
   return base::FeatureList::IsEnabled(
       kContextualTasksPinnedButtonActiveIndicator);
@@ -1028,7 +1101,10 @@ bool GetIsContextualTasksNextboxContextMenuEnabled() {
 
 const base::FeatureParam<std::string> kContextualTasksNextboxImageFileTypes{
     &kContextualTasksContextMenu, "ContextualTasksNextboxImageFileTypes",
-    "image/jpeg,image/png"};
+    // The `.heic` and `.heif` extensions are listed explicitly because the
+    // file picker cannot map the HEIC/HEIF MIME types to extensions on all
+    // platforms (e.g. Windows without the HEIF extension installed).
+    "image/jpeg,image/png,image/heic,image/heif,.heic,.heif"};
 
 const base::FeatureParam<std::string>
     kContextualTasksNextboxAttachmentFileTypes{
@@ -1188,6 +1264,10 @@ bool IsContextualTasksUnboundedMenuEnabled() {
          IsContextualTasksSidePanelRearchitectureEnabled();
 }
 
+bool IsContextualTasksSingleTabMenuItemEnabled() {
+  return base::FeatureList::IsEnabled(kContextualTasksSingleTabMenuItem);
+}
+
 bool IsContextualTasksUIEnabled() {
   return base::FeatureList::IsEnabled(kContextualTasksSidePanel) ||
          base::FeatureList::IsEnabled(kContextualTasks) ||
@@ -1333,6 +1413,12 @@ const char kContextualTasksTabBasedSuggestionsDescription[] =
     "Enables sending attached tab context tokens to Search for tab-based "
     "query suggestions.";
 
+const char kContextualTasksSingleTabMenuItemName[] =
+    "Contextual Tasks Single Tab Menu Item";
+const char kContextualTasksSingleTabMenuItemDescription[] =
+    "Shows the most recent tab as a single menu item above \"Add tabs\" in "
+    "the Contextual Tasks tab picker.";
+
 const char kContextualTasksSidePanelTabStateName[] =
     "Contextual Tasks Side Panel Tab State";
 const char kContextualTasksSidePanelTabStateDescription[] =
@@ -1371,6 +1457,20 @@ const char kContextualTasksUnifyPinButtonLogosDescription[] =
     "Unifies the logo (Spark, Super G, or Gray Super G) used across the "
     "Contextual Tasks (Search in Chrome) permanent toolbar and ephemeral pin "
     "buttons.";
+
+// LINT.IfChange(PinningStringVariantDescription)
+const char kContextualTasksPinningStringVariantsName[] =
+    "Contextual Tasks Pinning String Variants";
+const char kContextualTasksPinningStringVariantsDescription[] =
+    "Selects the user-facing string variant ('Google Search AI Mode', "
+    "'Google Search side panel', 'Google Search in side panel', "
+    "'Google Search in Chrome', or 'Google Search panel') used across "
+    "Contextual Tasks pinning, tooltips, IPH, and tutorial strings.";
+// LINT.ThenChange(
+//   //chrome/browser/about_flags.cc:PinningStringVariant,
+//   //components/contextual_tasks/public/features.cc:PinningStringVariant,
+//   //components/contextual_tasks/public/features.h:PinningStringVariant
+// )
 
 const char kABASearchJourneysName[] = "ABA Search Journeys";
 const char kABASearchJourneysDescription[] =

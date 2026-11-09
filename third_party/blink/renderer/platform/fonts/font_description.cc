@@ -90,7 +90,7 @@ FontDescription::FontDescription(HashTableDeletedValueType)
 
 FontDescription::FontDescription() {
   fields_.orientation_ = static_cast<uint32_t>(FontOrientation::kHorizontal);
-  fields_.width_variant_ = kRegularWidth;
+  fields_.width_variant_ = std::to_underlying(FontWidthVariant::kRegular);
   fields_.variant_caps_ = kCapsNormal;
   fields_.is_absolute_size_ = false;
   fields_.generic_family_ = kNoFamily;
@@ -100,7 +100,7 @@ FontDescription::FontDescription() {
   fields_.historical_ligatures_state_ = kNormalLigaturesState;
   fields_.contextual_ligatures_state_ = kNormalLigaturesState;
   fields_.keyword_size_ = 0;
-  fields_.font_smoothing_ = kAutoSmoothing;
+  fields_.font_smoothing_ = static_cast<uint32_t>(FontSmoothingMode::kAuto);
   fields_.text_rendering_ = kAutoTextRendering;
   fields_.synthetic_bold_ = false;
   fields_.synthetic_italic_ = false;
@@ -110,14 +110,14 @@ FontDescription::FontDescription() {
   fields_.variant_numeric_ = FontVariantNumeric().fields_as_unsigned_;
   fields_.variant_east_asian_ = 0;
   fields_.subpixel_ascent_descent_ = false;
-  fields_.font_optical_sizing_ = OpticalSizing::kAutoOpticalSizing;
+  fields_.font_optical_sizing_ = static_cast<uint32_t>(OpticalSizing::kAuto);
   fields_.has_size_adjust_descriptor_ = false;
   fields_.hash_category_ = kHashRegularValue;
   fields_.font_synthesis_weight_ = kAutoFontSynthesisWeight;
   fields_.font_synthesis_style_ = kAutoFontSynthesisStyle;
   fields_.font_synthesis_small_caps_ = kAutoFontSynthesisSmallCaps;
   fields_.variant_position_ = kNormalVariantPosition;
-  fields_.variant_emoji_ = kNormalVariantEmoji;
+  fields_.variant_emoji_ = static_cast<uint32_t>(FontVariantEmoji::kNormal);
   fields_.text_spacing_trim_ = static_cast<uint32_t>(TextSpacingTrim::kInitial);
 }
 
@@ -691,26 +691,6 @@ String FontDescription::ToString(FontVariantCaps variant) {
       return "Unicase";
     case FontVariantCaps::kTitlingCaps:
       return "TitlingCaps";
-  }
-  return "Unknown";
-}
-
-String FontDescription::ToStringForIdl(FontVariantCaps variant) {
-  switch (variant) {
-    case FontVariantCaps::kCapsNormal:
-      return "normal";
-    case FontVariantCaps::kSmallCaps:
-      return "small-caps";
-    case FontVariantCaps::kAllSmallCaps:
-      return "all-small-caps";
-    case FontVariantCaps::kPetiteCaps:
-      return "petite-caps";
-    case FontVariantCaps::kAllPetiteCaps:
-      return "all-petite-caps";
-    case FontVariantCaps::kUnicase:
-      return "unicase";
-    case FontVariantCaps::kTitlingCaps:
-      return "titling-caps";
   }
   return "Unknown";
 }

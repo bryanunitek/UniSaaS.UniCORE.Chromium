@@ -14,6 +14,7 @@
 #include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
 #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
@@ -51,6 +52,7 @@
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -234,6 +236,10 @@ ContextualTasksButton::ContextualTasksButton(
   SetVisible(false);
   SetProperty(views::kElementIdentifierKey,
               kContextualTasksEphemeralToolbarButtonElementId);
+  // The "side panel open" highlight is the ink drop's ACTIVATED state. Keep it
+  // when the context menu opens; otherwise Button::ShowContextMenu() hides the
+  // ink drop and the highlight is lost for as long as the panel stays open.
+  SetHideInkDropWhenShowingContextMenu(false);
   status_indicator_ =
       PinnedToolbarButtonStatusIndicator::Install(image_container_view());
   status_indicator_->SetColorId(kColorToolbarActionItemEngaged,
@@ -395,6 +401,18 @@ bool ContextualTasksButton::ShouldShowMenu() {
   UpdateContextMenu();
   return menu_model() && menu_model()->GetItemCount() > 0 &&
          ToolbarButton::ShouldShowMenu();
+}
+
+void ContextualTasksButton::ShowContextMenu(
+    const gfx::Point& p,
+    ui::mojom::MenuSourceType source_type) {
+  // With nothing to show (e.g. the side panel is open and the user is not
+  // pinning eligible), a right-click must be a no-op. Bail out before
+  // Button::ShowContextMenu() resets the button state and ink drop.
+  if (!ShouldShowMenu()) {
+    return;
+  }
+  ToolbarButton::ShowContextMenu(p, source_type);
 }
 
 void ContextualTasksButton::UpdateColorsAndInsets() {
@@ -680,12 +698,16 @@ void ContextualTasksButton::UpdateTooltipText() {
 
   int tooltip_id = IDS_CONTEXTUAL_TASKS_ENTRY_POINT_TOOLTIP;
   if (contextual_tasks::kShowEntryPoint.Get() ==
-      contextual_tasks::EntryPointOption::kToolbarEphemeralBranded) {
+          contextual_tasks::EntryPointOption::kToolbarEphemeralBranded ||
+      contextual_tasks::IsContextualTasksPinningV2Enabled() ||
+      base::FeatureList::IsEnabled(
+          contextual_tasks::kContextualTasksPinningStringVariants)) {
     tooltip_id = is_panel_open
                      ? IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP
                      : IDS_CONTEXTUAL_TASKS_SIDE_PANEL_REOPEN_TOOL_TIP;
   }
-  const std::u16string button_tooltip = l10n_util::GetStringUTF16(tooltip_id);
+  const std::u16string button_tooltip = l10n_util::GetStringUTF16(
+      contextual_tasks::GetContextualTasksPinningStringId(tooltip_id));
   GetViewAccessibility().SetName(button_tooltip);
   SetTooltipText(button_tooltip);
 }
@@ -887,6 +909,19 @@ ui::ImageModel ContextualTasksButton::GetButtonImage() {
         GetShape() == EphemeralButtonShape::kCircle ? GetIconSize()
                                                     : kGLogoPillShapeIconSize);
   }
+  if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
+    const gfx::VectorIcon& gray_super_g_icon =
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+        vector_icons::kGoogleGLogoMonochromeIcon;
+#else
+        features::IsRoundedIconsEnabled() ? kChromeProductIcon
+                                          : kBrowserLogoOldIcon;
+#endif
+    return ui::ImageModel::FromVectorIcon(
+        gray_super_g_icon, icon_color_id,
+        GetShape() == EphemeralButtonShape::kCircle ? GetIconSize()
+                                                    : kGLogoPillShapeIconSize);
+  }
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   if (contextual_tasks::ShouldUseSuperGIconForPinButtons() ||
       contextual_tasks::kShowEntryPoint.Get() ==
@@ -902,19 +937,6 @@ ui::ImageModel ContextualTasksButton::GetButtonImage() {
             gfx::Size(icon_size, icon_size)));
   }
 #endif
-  if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
-    const gfx::VectorIcon& gray_super_g_icon =
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-        vector_icons::kGoogleGLogoMonochromeIcon;
-#else
-        features::IsRoundedIconsEnabled() ? kChromeProductIcon
-                                          : kBrowserLogoOldIcon;
-#endif
-    return ui::ImageModel::FromVectorIcon(
-        gray_super_g_icon, icon_color_id,
-        GetShape() == EphemeralButtonShape::kCircle ? GetIconSize()
-                                                    : kGLogoPillShapeIconSize);
-  }
   const gfx::VectorIcon& contextual_tasks_icon =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       vector_icons::kGoogleGLogoIcon;

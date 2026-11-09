@@ -6,6 +6,7 @@
 
 #include "base/base64.h"
 #include "base/check_deref.h"
+#include "base/check_is_test.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -97,7 +98,6 @@
 #include "ui/base/device_form_factor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/color/color_provider_key.h"
 #include "ui/webui/buildflags.h"
 #include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
@@ -132,16 +132,8 @@
 
 namespace {
 
-void UpdateDarkModePreferenceFromUrl(content::WebContents* wc,
-                                     const GURL& url,
-                                     Profile* profile) {
-#if !BUILDFLAG(IS_ANDROID)
-  bool use_dark = contextual_tasks::ShouldUseDarkMode(profile, url);
-#else
-  std::optional<bool> is_dark_mode = contextual_tasks::GetDarkModeFromUrl(url);
-  bool use_dark = is_dark_mode.value_or(wc->GetColorMode() ==
-                                        ui::ColorProviderKey::ColorMode::kDark);
-#endif
+void UpdateDarkModePreferenceForWebContents(content::WebContents* wc,
+                                            bool use_dark) {
   blink::web_pref::WebPreferences prefs = wc->GetOrCreateWebPreferences();
   prefs.preferred_color_scheme =
       use_dark ? blink::mojom::PreferredColorScheme::kDark
@@ -371,15 +363,11 @@ ContextualTasksUI::ContextualTasksUI(content::WebUI* web_ui)
   }
 
   const GURL& url = web_ui->GetWebContents()->GetVisibleURL();
-#if !BUILDFLAG(IS_ANDROID)
-  bool is_dark_mode = contextual_tasks::ShouldUseDarkMode(profile, url);
+  const bool is_dark_mode =
+      contextual_tasks::ShouldUseDarkMode(web_ui->GetWebContents(), url);
   source->AddBoolean("darkMode", is_dark_mode);
-#else
-  bool is_dark_mode = web_ui->GetWebContents()->GetColorMode() ==
-                      ui::ColorProviderKey::ColorMode::kDark;
-  source->AddBoolean("darkMode", is_dark_mode);
-#endif
-  UpdateDarkModePreferenceFromUrl(web_ui->GetWebContents(), url, profile);
+  UpdateDarkModePreferenceForWebContents(web_ui->GetWebContents(),
+                                         is_dark_mode);
 
   // Overwrite searchbox strings with actual session state if composebox is
   // enabled.
@@ -592,10 +580,9 @@ base::DictValue ContextualTasksUI::GetContextualTasksLoadTimeData(
   dict.Set(
       "composeboxSkillsEnabled",
       base::FeatureList::IsEnabled(omnibox::kComposeboxSkillsContextualTasks));
-  const bool is_pinning_eligible =
-      contextual_tasks::EntryPointEligibilityManager::IsPinningEligible(
-          profile);
-  dict.Set("enablePinButton", is_pinning_eligible);
+  const bool can_pin_or_unpin =
+      contextual_tasks::EntryPointEligibilityManager::CanPinOrUnpin(profile);
+  dict.Set("enablePinButton", can_pin_or_unpin);
   // Intentionally not gated on pinning eligibility: eligibility can change
   // while the page is open and is pushed separately via
   // `OnPinButtonEligibilityChanged()`, which the WebUI already combines with
@@ -603,8 +590,7 @@ base::DictValue ContextualTasksUI::GetContextualTasksLoadTimeData(
   dict.Set("enablePinButtonOnSrp",
            contextual_tasks::IsContextualTasksPinButtonOnSrpEnabled());
   dict.Set("isSidePanelPinned",
-           is_pinning_eligible &&
-               contextual_tasks::GetEffectivePinState(profile));
+           contextual_tasks::GetEffectivePinState(profile));
   dict.Set("showOnboardingTooltip",
            base::FeatureList::IsEnabled(
                contextual_tasks::kContextualTasksShowOnboardingTooltip));
@@ -656,6 +642,8 @@ base::DictValue ContextualTasksUI::GetContextualTasksLoadTimeData(
            omnibox::IsTabDeselectionInComposeboxEnabled());
   dict.Set("composeboxContextMenuTooltipsEnabled",
            omnibox::IsContextMenuTooltipsInComposeboxEnabled());
+  dict.Set("contextualTasksSingleTabMenuItemEnabled",
+           contextual_tasks::IsContextualTasksSingleTabMenuItemEnabled());
   dict.Set("enableGhostLoader", contextual_tasks::GetIsGhostLoaderEnabled());
   dict.Set("forceBasicModeIfOpeningThreadHistory",
            contextual_tasks::ShouldForceBasicModeIfOpeningThreadHistory());
@@ -707,12 +695,7 @@ base::DictValue ContextualTasksUI::GetContextualTasksLoadTimeData(
       contextual_search::ContextualSearchMetricsRecorder::
           ContextualSearchSourceToString(
               contextual_search::ContextualSearchSource::kContextualTasks));
-#if !BUILDFLAG(IS_ANDROID)
-  bool is_dark_mode = contextual_tasks::ShouldUseDarkMode(profile);
-#else
-  bool is_dark_mode = false;
-#endif
-  dict.Set("darkMode", is_dark_mode);
+  dict.Set("darkMode", contextual_tasks::ShouldUseDarkModeForProfile(profile));
   dict.Set("protectedErrorPageTopLine",
            l10n_util::GetStringUTF16(
                IDS_SIDE_PANEL_LENS_OVERLAY_PROTECTED_PAGE_ERROR_FIRST_LINE));
@@ -1089,11 +1072,17 @@ void ContextualTasksUI::CreatePageHandler(
                           base::Unretained(this)),
       base::BindRepeating(&ContextualTasksUI::TakeInputStateModel,
                           base::Unretained(this)));
+  SetComposeboxHandler(nullptr);
   owned_composebox_handler_ = std::move(handler);
-  SetComposeboxHandler(owned_composebox_handler_.get());
+  if (composebox_handler_for_testing_) {
+    CHECK_IS_TEST();
+    SetComposeboxHandler(composebox_handler_for_testing_.get());
+  } else {
+    SetComposeboxHandler(owned_composebox_handler_.get());
+  }
 
   // Sync the initial auto-suggestion state.
-  if (auto_suggestion_manager_->GetCurrentSuggestion()) {
+  if (composebox_handler_ && auto_suggestion_manager_->GetCurrentSuggestion()) {
     composebox_handler_->UpdateSuggestedTabContext(
         auto_suggestion_manager_->GetCurrentSuggestion());
   }
@@ -1198,8 +1187,12 @@ void ContextualTasksUI::SetComposeboxHandler(
 void ContextualTasksUI::SetComposeboxHandlerForTesting(  // IN-TEST
     std::unique_ptr<contextual_tasks::ContextualTasksComposeboxHandlerInterface>
         handler) {
-  owned_composebox_handler_ = std::move(handler);
-  SetComposeboxHandler(owned_composebox_handler_.get());
+  CHECK_IS_TEST();
+  SetComposeboxHandler(nullptr);
+  composebox_handler_for_testing_ = std::move(handler);
+  SetComposeboxHandler(composebox_handler_for_testing_
+                           ? composebox_handler_for_testing_.get()
+                           : owned_composebox_handler_.get());
 }
 
 void ContextualTasksUI::MoveTaskUiToNewTab() {
@@ -1240,8 +1233,7 @@ void ContextualTasksUI::MaybeTriggerPinningPromo() {
   }
 
   if (!contextual_tasks::IsContextualTasksPinningV2Enabled() ||
-      !contextual_tasks::EntryPointEligibilityManager::IsPinningEligible(
-          profile)) {
+      !contextual_tasks::EntryPointEligibilityManager::CanPinOrUnpin(profile)) {
     return;
   }
 
@@ -1853,9 +1845,9 @@ void ContextualTasksUI::FrameNavObserver::DidFinishNavigation(
   // settings.
   if (navigation_handle->IsInPrimaryMainFrame() &&
       navigation_handle->IsSameDocument()) {
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-    UpdateDarkModePreferenceFromUrl(web_contents(), url, profile);
+    UpdateDarkModePreferenceForWebContents(
+        web_contents(),
+        contextual_tasks::ShouldUseDarkMode(web_contents(), url));
   }
   bool is_url_changed = false;
   bool last_committed_url_was_empty = last_committed_url_.is_empty();

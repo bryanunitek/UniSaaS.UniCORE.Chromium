@@ -110,6 +110,10 @@ class OmniboxPopupView {
   // Called when the omnibox loses focus.
   virtual void OnBlur() {}
 
+  // Blurs the omnibox, collapsing the dropdown and keeping the popup open only
+  // for a draft, like clicking into the page, but leaves nothing focused.
+  virtual void Blur() {}
+
   // Called when the WebUI omnibox reports a manual blur.
   virtual void OnManualBlur() {}
 
@@ -130,6 +134,9 @@ class OmniboxPopupView {
   // Returns true if the popup is currently processing a revert/Escape action.
   virtual bool IsReverting() const;
   virtual void SetIsReverting(bool reverting);
+
+  // Called when a browser fullscreen transition starts, in either direction.
+  virtual void OnFullscreenTransitionStarting() {}
 
   // Safe downcasting to the BrowserView-embedded implementation.
   virtual OmniboxPopupViewBrowserView* AsOmniboxPopupViewBrowserView();

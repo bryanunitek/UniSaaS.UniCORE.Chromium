@@ -86,6 +86,7 @@ class ImmersiveModeController;
 class IncognitoClearBrowsingDataDialogCoordinator;
 class InitialWebUIManager;
 class InitialWebUIWindowMetricsManager;
+class InstantController;
 class IOSPromoController;
 class LocationBarModel;
 class MemorySaverOptInIPHController;
@@ -257,6 +258,9 @@ class EntrypointController;
 
 namespace web_app {
 class AppBrowserController;
+#if BUILDFLAG(IS_MAC)
+class WebAppNotificationRecoveryController;
+#endif
 }  // namespace web_app
 
 // This class owns the core controllers for features that are scoped to a given
@@ -328,6 +332,7 @@ class BrowserWindowFeatures {
   std::unique_ptr<chrome::BrowserCommandController> browser_command_controller_;
   std::unique_ptr<BrowserElements> browser_elements_;
   std::unique_ptr<BrowserFocusController> browser_focus_controller_;
+  std::unique_ptr<BrowserInstantController> browser_instant_controller_;
   std::unique_ptr<BrowserSelectFileDialogController>
       browser_select_file_dialog_controller_;
   std::unique_ptr<BrowserUiController> browser_ui_controller_;
@@ -398,7 +403,7 @@ class BrowserWindowFeatures {
   std::unique_ptr<InitialWebUIManager> initial_web_ui_manager_;
   std::unique_ptr<InitialWebUIWindowMetricsManager>
       initial_webui_window_metrics_manager_;
-  std::unique_ptr<BrowserInstantController> instant_controller_;
+  std::unique_ptr<InstantController> instant_controller_;
   std::unique_ptr<IOSPromoController> ios_promo_controller_;
   std::unique_ptr<lens::LensOverlayEntryPointController>
       lens_overlay_entry_point_controller_;
@@ -508,6 +513,11 @@ class BrowserWindowFeatures {
   std::unique_ptr<WebUIBrowserSidePanelUI> webui_browser_side_panel_ui_;
 
   // Platform-specific members.
+#if BUILDFLAG(IS_MAC)
+  std::unique_ptr<web_app::WebAppNotificationRecoveryController>
+      web_app_notification_recovery_controller_;
+#endif
+
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<WindowsTaskbarIconUpdater> windows_taskbar_icon_updater_;
 #endif

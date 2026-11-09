@@ -21,6 +21,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notimplemented.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -56,6 +57,13 @@
 
 namespace gpu {
 namespace gles2 {
+
+BASE_FEATURE(kEnforceSharedImageAccessForGLReads,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kRestrictSharedImageAttachmentsToColorAttachments,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kRejectUnclearedSharedImageOnClearFailure,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace {
 
@@ -671,6 +679,47 @@ void PassthroughResources::Destroy(gl::GLApi* api,
   }
   texture_object_map.Clear();
   texture_shared_image_map.clear();
+  shared_image_client_ids_by_service_id.clear();
+}
+
+void PassthroughResources::AddSharedImage(GLuint client_id,
+                                          SharedImageData shared_image_data) {
+  if (texture_shared_image_map.contains(client_id)) {
+    RemoveSharedImage(client_id);
+  }
+  shared_image_client_ids_by_service_id[shared_image_data.service_id()].insert(
+      client_id);
+  texture_shared_image_map.emplace(client_id, std::move(shared_image_data));
+}
+
+void PassthroughResources::RemoveSharedImage(GLuint client_id) {
+  auto it = texture_shared_image_map.find(client_id);
+  if (it == texture_shared_image_map.end()) {
+    return;
+  }
+  auto client_ids_it =
+      shared_image_client_ids_by_service_id.find(it->second.service_id());
+  CHECK(client_ids_it != shared_image_client_ids_by_service_id.end());
+  client_ids_it->second.erase(client_id);
+  if (client_ids_it->second.empty()) {
+    shared_image_client_ids_by_service_id.erase(client_ids_it);
+  }
+  texture_shared_image_map.erase(it);
+}
+
+bool PassthroughResources::IsSharedImageWithoutAccess(GLuint service_id) const {
+  auto client_ids_it = shared_image_client_ids_by_service_id.find(service_id);
+  if (client_ids_it == shared_image_client_ids_by_service_id.end()) {
+    return false;
+  }
+  for (GLuint client_id : client_ids_it->second) {
+    auto it = texture_shared_image_map.find(client_id);
+    CHECK(it != texture_shared_image_map.end());
+    if (it->second.is_being_accessed()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 PassthroughResources::SharedImageData::SharedImageData() = default;
@@ -687,6 +736,12 @@ PassthroughResources::SharedImageData::SharedImageData(
 PassthroughResources::SharedImageData::SharedImageData(
     SharedImageData&& other) = default;
 PassthroughResources::SharedImageData::~SharedImageData() = default;
+
+GLuint PassthroughResources::SharedImageData::service_id() const {
+  // GetTexturePassthrough() CHECKs that there is exactly one expected plane,
+  // which is also verified when the shared image is imported.
+  return representation_->GetTexturePassthrough()->service_id();
+}
 
 PassthroughResources::SharedImageData&
 PassthroughResources::SharedImageData::operator=(SharedImageData&& other) {
@@ -710,79 +765,87 @@ void PassthroughResources::SharedImageData::EnsureClear(
       return;
     }
 
-    // Allow uncleared access as we're going to clear the image.
-    auto scoped_access = representation_->BeginScopedAccess(
-        GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM,
-        SharedImageRepresentation::AllowUnclearedAccess::kYes);
-
-    if (!scoped_access) {
-      impl->FlushErrors();
-      return;
-    }
-
-    auto texture = representation_->GetTexturePassthrough();
-    const bool use_oes_draw_buffers_indexed =
-        impl->features().oes_draw_buffers_indexed;
-    bool has_rasterizer_discard =
-        impl->GetFeatureInfo()->gl_version_info().IsAtLeastGLES(3, 0);
-
-    // Back up all state we are about to change.
-    gl::GLApi* api = impl->api();
-    GLES2DecoderPassthroughImpl::ScopedPixelLocalStorageInterrupt
-        scoped_pls_interrupt(impl);
-    ScopedFramebufferBindingReset fbo_reset(
-        api, false /* supports_seperate_fbo_bindings */);
-    ScopedTextureBindingReset texture_reset(api, texture->target());
-    ScopedClearColorReset clear_color_reset(api);
-    ScopedColorMaskZeroReset color_mask_reset(api,
-                                              use_oes_draw_buffers_indexed);
-    ScopedScissorTestReset scissor_test_reset(api);
-    ScopedRasterizerDiscardReset rasterizer_discard_reset(
-        api, has_rasterizer_discard);
-
-    // Generate a new framebuffer and bind the shared image's uncleared texture
-    // to it.
-    GLuint fbo = 0;
-    api->glGenFramebuffersEXTFn(1, &fbo);
-    api->glBindFramebufferEXTFn(GL_FRAMEBUFFER, fbo);
-    api->glBindTextureFn(texture->target(), texture->service_id());
-
-    // Clear the bound framebuffer.
-    api->glClearColorFn(0, 0, 0, 0);
-    if (use_oes_draw_buffers_indexed)
-      api->glColorMaskiOESFn(0, true, true, true, true);
-    else
-      api->glColorMaskFn(true, true, true, true);
-    api->glDisableFn(GL_SCISSOR_TEST);
-    if (has_rasterizer_discard) {
-      api->glDisableFn(GL_RASTERIZER_DISCARD);
-    }
-
     bool all_layers_cleared = true;
-    if (texture->target() == GL_TEXTURE_2D_ARRAY) {
-      const uint32_t layers = representation_->array_layers();
-      for (uint32_t layer = 0; layer < layers; ++layer) {
+    {
+      // Allow uncleared access as we're going to clear the image.
+      auto scoped_access = representation_->BeginScopedAccess(
+          GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM,
+          SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+      if (!scoped_access) {
+        impl->FlushErrors();
+        return;
+      }
+
+      auto texture = representation_->GetTexturePassthrough();
+      const bool use_oes_draw_buffers_indexed =
+          impl->features().oes_draw_buffers_indexed;
+      bool has_rasterizer_discard =
+          impl->GetFeatureInfo()->gl_version_info().IsAtLeastGLES(3, 0);
+
+      // Back up all state we are about to change.
+      gl::GLApi* api = impl->api();
+      GLES2DecoderPassthroughImpl::ScopedPixelLocalStorageInterrupt
+          scoped_pls_interrupt(impl);
+      ScopedFramebufferBindingReset fbo_reset(
+          api, false /* supports_seperate_fbo_bindings */);
+      ScopedTextureBindingReset texture_reset(api, texture->target());
+      ScopedClearColorReset clear_color_reset(api);
+      ScopedColorMaskZeroReset color_mask_reset(api,
+                                                use_oes_draw_buffers_indexed);
+      ScopedScissorTestReset scissor_test_reset(api);
+      ScopedRasterizerDiscardReset rasterizer_discard_reset(
+          api, has_rasterizer_discard);
+
+      // Generate a new framebuffer and bind the shared image's uncleared
+      // texture to it.
+      GLuint fbo = 0;
+      api->glGenFramebuffersEXTFn(1, &fbo);
+      api->glBindFramebufferEXTFn(GL_FRAMEBUFFER, fbo);
+      api->glBindTextureFn(texture->target(), texture->service_id());
+
+      // Clear the bound framebuffer.
+      api->glClearColorFn(0, 0, 0, 0);
+      if (use_oes_draw_buffers_indexed) {
+        api->glColorMaskiOESFn(0, true, true, true, true);
+      } else {
+        api->glColorMaskFn(true, true, true, true);
+      }
+      api->glDisableFn(GL_SCISSOR_TEST);
+      if (has_rasterizer_discard) {
+        api->glDisableFn(GL_RASTERIZER_DISCARD);
+      }
+
+      if (texture->target() == GL_TEXTURE_2D_ARRAY) {
+        const uint32_t layers = representation_->array_layers();
+        for (uint32_t layer = 0; layer < layers; ++layer) {
+          api->glFramebufferTextureLayerFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                           texture->service_id(), 0, layer);
+          if (api->glCheckFramebufferStatusEXTFn(GL_FRAMEBUFFER) !=
+              GL_FRAMEBUFFER_COMPLETE) {
+            all_layers_cleared = false;
+            break;
+          }
+          api->glClearFn(GL_COLOR_BUFFER_BIT);
+        }
         api->glFramebufferTextureLayerFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                         texture->service_id(), 0, layer);
-        api->glClearFn(GL_COLOR_BUFFER_BIT);
+                                         0, 0, 0);
+      } else {
+        api->glFramebufferTexture2DEXTFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                         texture->target(),
+                                         texture->service_id(), 0);
         if (api->glCheckFramebufferStatusEXTFn(GL_FRAMEBUFFER) !=
             GL_FRAMEBUFFER_COMPLETE) {
           all_layers_cleared = false;
+        } else {
+          api->glClearFn(GL_COLOR_BUFFER_BIT);
         }
+        api->glFramebufferTexture2DEXTFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                         texture->target(), 0, 0);
       }
-      api->glFramebufferTextureLayerFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0,
-                                       0, 0);
-    } else {
-      api->glFramebufferTexture2DEXTFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                       texture->target(), texture->service_id(),
-                                       0);
-      api->glClearFn(GL_COLOR_BUFFER_BIT);
-      if (api->glCheckFramebufferStatusEXTFn(GL_FRAMEBUFFER) !=
-          GL_FRAMEBUFFER_COMPLETE) {
-        all_layers_cleared = false;
-      }
-      api->glFramebufferTexture2DEXTFn(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                       texture->target(), 0, 0);
+
+      // Delete the generated framebuffer before restoring bindings.
+      api->glDeleteFramebuffersEXTFn(1, &fbo);
     }
 
     // Don't mark the image cleared if the driver reported an error. Errors
@@ -795,9 +858,6 @@ void PassthroughResources::SharedImageData::EnsureClear(
       // Mark the shared image as cleared.
       representation_->SetCleared();
     }
-
-    // Delete the generated framebuffer.
-    api->glDeleteFramebuffersEXTFn(1, &fbo);
   }
 }
 
@@ -3033,6 +3093,131 @@ void GLES2DecoderPassthroughImpl::PerformIdleMemoryTrim() {
     return;
   }
   api()->glTrimMemoryANGLEFn(GL_MEMORY_TRIM_HIGH_ANGLE);
+}
+
+bool GLES2DecoderPassthroughImpl::CheckSharedImageTextureReadAccess(
+    GLuint texture_client_id,
+    const char* function_name) {
+  if (!base::FeatureList::IsEnabled(kEnforceSharedImageAccessForGLReads)) {
+    return true;
+  }
+
+  auto it = resources_->texture_shared_image_map.find(texture_client_id);
+  if (it == resources_->texture_shared_image_map.end() ||
+      it->second.is_being_accessed()) {
+    return true;
+  }
+
+  // The shared image may also be imported as other client ids, any of which
+  // may have an active access.
+  if (resources_->IsSharedImageWithoutAccess(it->second.service_id())) {
+    InsertError(GL_INVALID_OPERATION,
+                base::StrCat({function_name,
+                              ": source texture is a shared image without an "
+                              "active access"}));
+    return false;
+  }
+  return true;
+}
+
+bool GLES2DecoderPassthroughImpl::CheckReadFramebufferSharedImageAccess(
+    GLbitfield mask,
+    const char* function_name) {
+  if (!base::FeatureList::IsEnabled(kEnforceSharedImageAccessForGLReads)) {
+    return true;
+  }
+
+  // Shared images can only be attached to client-created framebuffers.
+  if (resources_->texture_shared_image_map.empty() ||
+      bound_read_framebuffer_ == 0) {
+    return true;
+  }
+
+  const bool is_es3 = feature_info_->gl_version_info().is_es3;
+  // GL_READ_FRAMEBUFFER is a valid target in ES3 contexts, or in ES2 contexts
+  // with framebuffer blit support. Otherwise the read and draw framebuffers
+  // are always the same.
+  const GLenum target = (is_es3 || features().chromium_framebuffer_multisample)
+                            ? GL_READ_FRAMEBUFFER
+                            : GL_FRAMEBUFFER;
+
+  // Returns false if `attachment` of the read framebuffer is a shared image
+  // texture without an active access.
+  auto is_attachment_readable = [this, target](GLenum attachment) {
+    GLint object_type = GL_NONE;
+    api()->glGetFramebufferAttachmentParameterivEXTFn(
+        target, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+        &object_type);
+    if (object_type != GL_TEXTURE) {
+      return true;
+    }
+    GLint object_name = 0;
+    api()->glGetFramebufferAttachmentParameterivEXTFn(
+        target, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+        &object_name);
+    return !resources_->IsSharedImageWithoutAccess(
+        static_cast<GLuint>(object_name));
+  };
+
+  bool readable = true;
+  if (mask & GL_COLOR_BUFFER_BIT) {
+    // GL_READ_BUFFER can only be queried and changed in ES3 contexts. In ES2
+    // contexts the read buffer is always GL_COLOR_ATTACHMENT0.
+    GLint read_buffer = GL_COLOR_ATTACHMENT0;
+    if (is_es3) {
+      api()->glGetIntegervFn(GL_READ_BUFFER, &read_buffer);
+    }
+    if (read_buffer != GL_NONE) {
+      // The read buffer of a client framebuffer is always a color attachment.
+      // Fall back to checking GL_COLOR_ATTACHMENT0 for anything unexpected.
+      GLenum attachment = GL_COLOR_ATTACHMENT0;
+      if (read_buffer >= GL_COLOR_ATTACHMENT0 &&
+          read_buffer <= GL_COLOR_ATTACHMENT31) {
+        attachment = static_cast<GLenum>(read_buffer);
+      }
+      readable = is_attachment_readable(attachment);
+    }
+  }
+  if (readable && (mask & GL_DEPTH_BUFFER_BIT)) {
+    readable = is_attachment_readable(GL_DEPTH_ATTACHMENT);
+  }
+  if (readable && (mask & GL_STENCIL_BUFFER_BIT)) {
+    readable = is_attachment_readable(GL_STENCIL_ATTACHMENT);
+  }
+
+  if (!readable) {
+    InsertError(GL_INVALID_OPERATION,
+                base::StrCat({function_name,
+                              ": read framebuffer attachment is a shared "
+                              "image without an active access"}));
+    return false;
+  }
+  return true;
+}
+
+bool GLES2DecoderPassthroughImpl::CheckSharedImageAttachment(
+    GLenum attachment,
+    GLuint texture_client_id,
+    const char* function_name) {
+  // Invalid attachment points are left for GL to reject.
+  const bool is_depth_or_stencil = attachment == GL_DEPTH_ATTACHMENT ||
+                                   attachment == GL_STENCIL_ATTACHMENT ||
+                                   attachment == GL_DEPTH_STENCIL_ATTACHMENT;
+  if (!is_depth_or_stencil || texture_client_id == 0 ||
+      !base::FeatureList::IsEnabled(
+          kRestrictSharedImageAttachmentsToColorAttachments)) {
+    return true;
+  }
+  // Every import of a shared image has its own entry, so checking the client
+  // id also covers aliased imports.
+  if (resources_->texture_shared_image_map.contains(texture_client_id)) {
+    InsertError(GL_INVALID_OPERATION,
+                base::StrCat({function_name,
+                              ": shared image textures can only be attached to "
+                              "color attachments"}));
+    return false;
+  }
+  return true;
 }
 
 bool GLES2DecoderPassthroughImpl::CanRedefineBoundTexture(GLenum target) {

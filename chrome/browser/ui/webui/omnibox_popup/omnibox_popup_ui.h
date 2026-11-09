@@ -10,8 +10,10 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h"
 #include "chrome/browser/ui/webui/omnibox_popup/mojom/omnibox_popup.mojom.h"
 #include "chrome/browser/ui/webui/omnibox_popup/mojom/omnibox_popup_aim.mojom.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
@@ -19,6 +21,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -43,7 +46,6 @@ class ContextualSearchboxHandler;
 class OmniboxController;
 class OmniboxPopupAimHandler;
 class OmniboxPopupHandler;
-class OmniboxPopupPresenterBase;
 class OmniboxPopupUI;
 
 namespace contextual_search {
@@ -68,7 +70,8 @@ class OmniboxPopupUI : public TopChromeWebUIController,
                        public omnibox_popup_aim::mojom::PageHandlerFactory,
                        public composebox::mojom::PageHandlerFactory,
                        public searchbox::mojom::PageHandlerFactory,
-                       public help_bubble::mojom::HelpBubbleHandlerFactory {
+                       public help_bubble::mojom::HelpBubbleHandlerFactory,
+                       public content::WebContentsObserver {
  public:
   explicit OmniboxPopupUI(content::WebUI* web_ui);
   OmniboxPopupUI(const OmniboxPopupUI&) = delete;
@@ -81,6 +84,9 @@ class OmniboxPopupUI : public TopChromeWebUIController,
   void PopulateLocalResourceLoaderConfig(
       blink::mojom::LocalResourceLoaderConfig* config,
       const url::Origin& requesting_origin) override;
+
+  // content::WebContentsObserver:
+  void OnColorProviderChanged() override;
 
   // Returns the loadTimeData values that depend on `profile`, the profile of
   // the window that shows the popup. They are in the WebUIDataSource, or passed
@@ -173,7 +179,7 @@ class OmniboxPopupUI : public TopChromeWebUIController,
     return !!shared_session_handle_;
   }
 
-  void SetPresenterDelegate(OmniboxPopupPresenterBase* delegate);
+  void SetSearchboxHandlerDelegate(SearchboxHandler::Delegate* delegate);
 
   // Moving the popup's WebContents to another browser window of the same
   // profile is done in two steps. `DetachFromWindow()` runs while the old
@@ -188,6 +194,16 @@ class OmniboxPopupUI : public TopChromeWebUIController,
   // omnibox popup.
   void DetachFromWindow();
   void AttachToWindow(OmniboxController* omnibox_controller);
+
+  // Returns whether the handlers hold no work for the current window that a
+  // move would lose: AI Mode context kept for this window's next show, or a
+  // Drive picker waiting for the user.
+  bool CanMoveToAnotherWindow() const;
+
+  // When the popup was last hidden, in any window, or null if it was never
+  // shown. Moves with the page.
+  base::TimeTicks last_hidden_time() const { return last_hidden_time_; }
+  void set_last_hidden_time(base::TimeTicks time) { last_hidden_time_ = time; }
 
  private:
   // Called when the Lens icon anchor is shown in any WebUI; triggers the AskG
@@ -216,12 +232,14 @@ class OmniboxPopupUI : public TopChromeWebUIController,
   mojo::Receiver<searchbox::mojom::PageHandlerFactory>
       searchbox_page_factory_receiver_{this};
 
-  raw_ptr<OmniboxPopupPresenterBase> presenter_delegate_ = nullptr;
+  raw_ptr<SearchboxHandler::Delegate> searchbox_handler_delegate_ = nullptr;
 
   std::unique_ptr<user_education::HelpBubbleHandler> help_bubble_handler_;
   mojo::Receiver<help_bubble::mojom::HelpBubbleHandlerFactory>
       help_bubble_handler_factory_receiver_{this};
   base::CallbackListSubscription lens_icon_shown_subscription_;
+
+  base::TimeTicks last_hidden_time_;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

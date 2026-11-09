@@ -1889,6 +1889,10 @@ targets.bundle(
         # TODO(crbug.com/40287410): Remove this once the BackgroundResourceFetch
         # feature launches.
         "chromium_web_tests_brfetch_isolated_scripts",
+        "devtools_api_tests",
+        "devtools_e2e_tests",
+        "devtools_node_unit_tests",
+        "devtools_unit_tests",
         "webdriver_bidi_e2e_tests",
         "webdriver_bidi_unittests",
     ],
@@ -2847,8 +2851,6 @@ targets.bundle(
             args = [
                 "--platform=fuchsia",
             ],
-            # TODO(crbug.com/40821367): Remove once it's stable.
-            ci_only = True,
         ),
         "views_perftests_fuchsia": targets.mixin(
             ci_only = True,
@@ -3314,7 +3316,6 @@ targets.bundle(
     targets = [
         "gpu_webgl2_conformance_d3d11_passthrough_telemetry_tests",
         "gpu_webgl_conformance_d3d11_passthrough_telemetry_tests",
-        "gpu_webgl_conformance_vulkan_passthrough_telemetry_tests",
 
         # Migrated individual tests below.
         # TODO(crbug.com/541312843): Remove this comment once all tests are
@@ -4333,6 +4334,8 @@ targets.bundle(
         "vulkan_pixel_skia_gold_test",
         "webcodecs_tests",
         "webgl2_conformance_gl_passthrough_tests",
+        "webgl2_conformance_webgl_on_webgpu_tests",
+        "webgl_conformance_webgl_on_webgpu_tests",
         "webrtc_tests",
     ],
 )
@@ -4369,6 +4372,12 @@ targets.bundle(
         ),
         "webgl2_conformance_gl_passthrough_tests": targets.remove(
             reason = "Wayland requires running tests with GLES, not GL",
+        ),
+        "webgl2_conformance_webgl_on_webgpu_tests": targets.remove(
+            reason = "WebGLOnWebGPU is only tested on X11 for now",
+        ),
+        "webgl_conformance_webgl_on_webgpu_tests": targets.remove(
+            reason = "WebGLOnWebGPU is only tested on X11 for now",
         ),
     },
 )
@@ -4461,7 +4470,7 @@ targets.bundle(
 targets.bundle(
     name = "gpu_fyi_win_debug_telemetry_tests",
     targets = [
-        "gpu_webgl_conformance_vulkan_passthrough_telemetry_tests",
+        # No FYI-only Windows/Debug Telemetry tests at this time.
     ],
 )
 
@@ -4485,7 +4494,6 @@ targets.bundle(
     name = "gpu_fyi_win_release_telemetry_tests",
     targets = [
         "gpu_webgl2_conformance_d3d11_passthrough_telemetry_tests",
-        "gpu_webgl_conformance_vulkan_passthrough_telemetry_tests",
 
         # Migrated individual tests below.
         # TODO(crbug.com/541312843): Remove this comment once all tests are
@@ -4731,8 +4739,8 @@ targets.bundle(
         targets.bundle(
             targets = "ios_common_tests",
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
@@ -4741,8 +4749,8 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
@@ -4752,8 +4760,8 @@ targets.bundle(
                 "record_failed_tests",
             ],
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
@@ -4763,16 +4771,16 @@ targets.bundle(
                 "record_failed_tests",
             ],
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
             targets = "ios_screen_size_dependent_tests",
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
-                "SIM_IPHONE_SE_3RD_GEN_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
+                "SIM_IPHONE_SE_3RD_GEN_27_3",
             ],
         ),
     ],
@@ -4784,7 +4792,7 @@ targets.bundle(
         targets.bundle(
             targets = "ios_common_tests",
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
@@ -4793,7 +4801,7 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
@@ -4803,7 +4811,7 @@ targets.bundle(
                 "record_failed_tests",
             ],
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
@@ -4813,13 +4821,13 @@ targets.bundle(
                 "record_failed_tests",
             ],
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
             targets = "ios_screen_size_dependent_tests",
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
     ],
@@ -4831,7 +4839,7 @@ targets.bundle(
         targets.bundle(
             targets = "ios_common_tests",
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
@@ -4840,7 +4848,7 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
@@ -4849,13 +4857,13 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
         targets.bundle(
             targets = "ios_screen_size_dependent_tests",
             variants = [
-                "SIM_IPHONE_DUO_27_2",
+                "SIM_IPHONE_DUO_27_3",
             ],
         ),
     ],
@@ -4867,8 +4875,8 @@ targets.bundle(
         targets.bundle(
             targets = "ios_common_tests",
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
@@ -4877,8 +4885,8 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
@@ -4887,16 +4895,16 @@ targets.bundle(
                 "xcodebuild_sim_runner",
             ],
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
             ],
         ),
         targets.bundle(
             targets = "ios_screen_size_dependent_tests",
             variants = [
-                "SIM_IPAD_A16_27_2",
-                "SIM_IPHONE_16_27_2",
-                "SIM_IPHONE_SE_3RD_GEN_27_2",
+                "SIM_IPAD_A16_27_3",
+                "SIM_IPHONE_16_27_3",
+                "SIM_IPHONE_SE_3RD_GEN_27_3",
             ],
         ),
     ],
@@ -5155,23 +5163,13 @@ targets.bundle(
             ],
         ),
         targets.bundle(
-            targets = "ios_eg2_cq_tests",
+            targets = [
+                "ios_eg2_tests_all",
+                "ios_web_shell_eg2tests_module",
+            ],
             mixins = [
                 "xcodebuild_sim_runner",
-            ],
-            variants = [
-                "SIM_IPAD_PRO_7TH_GEN_18_5",
-                "SIM_IPAD_PRO_7TH_GEN_26_5",
-                "SIM_IPAD_A16_27_0",
-                "SIM_IPHONE_15_18_5",
-                "SIM_IPHONE_16_26_5",
-                "SIM_IPHONE_16_27_0",
-            ],
-        ),
-        targets.bundle(
-            targets = "ios_eg2_tests",
-            mixins = [
-                "xcodebuild_sim_runner",
+                "mac_26_vm_optional",
             ],
             variants = [
                 "SIM_IPAD_PRO_7TH_GEN_18_5",
@@ -5326,8 +5324,9 @@ targets.bundle(
 )
 
 # Please also change ios_code_coverage_tests for any change in this suite.
-# TODO(crbug.com/441038354): combine simulators for the same test target once
-# iOS26 performance issue is resolved on the VMs
+# CQ intentionally runs a diagonal slice across form factors and OS versions
+# (iPhone iOS 27 + iPad iOS 26); iOS 18.5, iPhone iOS 26, and iPad iOS 27
+# variants are ci_only.
 targets.bundle(
     name = "ios_simulator_full_configs_tests",
     targets = [
@@ -5339,6 +5338,7 @@ targets.bundle(
             ],
             variants = [
                 "SIM_IPHONE_14_PLUS_18_5",
+                "SIM_IPHONE_16_PLUS_26_5",
             ],
         ),
         targets.bundle(
@@ -5347,12 +5347,14 @@ targets.bundle(
                 "mac_26_vm_optional",
             ],
             variants = [
-                "SIM_IPHONE_16_PLUS_26_5",
                 "SIM_IPHONE_16_PLUS_27_0",
             ],
         ),
         targets.bundle(
-            targets = "ios_eg2_cq_tests",
+            targets = [
+                "ios_eg2_tests_all",
+                "ios_web_shell_eg2tests_module",
+            ],
             mixins = [
                 "ci_only",
                 "xcodebuild_sim_runner",
@@ -5360,41 +5362,22 @@ targets.bundle(
             ],
             variants = [
                 "SIM_IPAD_PRO_7TH_GEN_18_5",
-                "SIM_IPHONE_15_18_5",
-            ],
-        ),
-        targets.bundle(
-            targets = "ios_eg2_cq_tests",
-            mixins = [
-                "xcodebuild_sim_runner",
-            ],
-            variants = [
-                "SIM_IPAD_PRO_7TH_GEN_26_5",
                 "SIM_IPAD_A16_27_0",
+                "SIM_IPHONE_15_18_5",
                 "SIM_IPHONE_16_26_5",
-                "SIM_IPHONE_16_27_0",
             ],
         ),
         targets.bundle(
-            targets = "ios_eg2_tests",
+            targets = [
+                "ios_eg2_tests_all",
+                "ios_web_shell_eg2tests_module",
+            ],
             mixins = [
-                "ci_only",
                 "xcodebuild_sim_runner",
                 "mac_26_vm_optional",
             ],
             variants = [
-                "SIM_IPHONE_15_18_5",
-            ],
-        ),
-        targets.bundle(
-            targets = "ios_eg2_tests",
-            mixins = [
-                "xcodebuild_sim_runner",
-            ],
-            variants = [
                 "SIM_IPAD_PRO_7TH_GEN_26_5",
-                "SIM_IPAD_A16_27_0",
-                "SIM_IPHONE_16_26_5",
                 "SIM_IPHONE_16_27_0",
             ],
         ),
@@ -5406,7 +5389,9 @@ targets.bundle(
             ],
             variants = [
                 "SIM_IPAD_PRO_7TH_GEN_18_5",
+                "SIM_IPAD_A16_27_0",
                 "SIM_IPHONE_15_18_5",
+                "SIM_IPHONE_16_26_5",
             ],
         ),
         targets.bundle(
@@ -5416,8 +5401,6 @@ targets.bundle(
             ],
             variants = [
                 "SIM_IPAD_PRO_7TH_GEN_26_5",
-                "SIM_IPAD_A16_27_0",
-                "SIM_IPHONE_16_26_5",
                 "SIM_IPHONE_16_27_0",
             ],
         ),
@@ -5507,15 +5490,6 @@ targets.bundle(
             variants = [
                 "SIM_IPHONE_15_18_5",
                 "SIM_IPHONE_16_26_5",
-            ],
-        ),
-        targets.bundle(
-            targets = "ios_vm_eg2_cq_tests",
-            mixins = [
-                "xcodebuild_sim_runner",
-                "mac_26_vm_optional",
-            ],
-            variants = [
                 "SIM_IPHONE_16_27_0",
             ],
         ),
@@ -5542,31 +5516,6 @@ targets.bundle(
             ],
         ),
     ],
-)
-
-# This is essentially ios_eg2_cq_tests but runs on more shards without
-# parallel simulator clones, because VMs have fewer cores / worse performance
-# than bare metal under --clones 2 contention.
-# TODO(crbug.com/427497507): remove once we have launced more VMs.
-targets.bundle(
-    name = "ios_vm_eg2_cq_tests",
-    targets = [
-        "ios_chrome_integration_eg2tests_module",
-        "ios_web_shell_eg2tests_module",
-    ],
-    per_test_modifications = {
-        "ios_chrome_integration_eg2tests_module": [
-            targets.mixin(
-                args = [
-                    "--clones",
-                    "1",
-                ],
-                swarming = targets.swarming(
-                    shards = 18,
-                ),
-            ),
-        ],
-    },
 )
 
 targets.bundle(

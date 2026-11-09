@@ -37,11 +37,9 @@ source_set("tabs_public") {
     "//content/public/common:buildflags",
     "//extensions/buildflags",
     "//rlz/buildflags",
-  ]
-  deps = [
-    "//content/public/browser",
     "//ui/base/unowned_user_data",
   ]
+  deps = [ "//content/public/browser" ]
 }
 
 # These enums should not need to depend on chrome/browser/ui. They have been
@@ -277,7 +275,6 @@ if (!is_android) {
       "split_tab_menu_model.h",
       "split_tab_mute_menu_model.h",
       "split_tab_swap_menu_model.h",
-      "split_view_layout_menu_model.h",
       "tab_model.h",
     ]
 
@@ -313,7 +310,6 @@ if (!is_android) {
       "split_tab_menu_model.cc",
       "split_tab_mute_menu_model.cc",
       "split_tab_swap_menu_model.cc",
-      "split_view_layout_menu_model.cc",
       "tab_model.cc",
     ]
 
@@ -403,6 +399,7 @@ if (!is_android) {
       "//chrome/browser/profiles:profile",
       "//chrome/browser/reading_list",
       "//chrome/browser/resource_coordinator",
+      "//chrome/browser/search",
       "//chrome/browser/ui:browser_command_controller",
       "//chrome/browser/ui:browser_commands",
       "//chrome/browser/ui:browser_tab_strip",
@@ -422,7 +419,6 @@ if (!is_android) {
       "//chrome/browser/ui/views/tabs/vertical",
       "//chrome/browser/ui/web_applications",
       "//chrome/browser/ui/web_applications:launch_utils",
-      "//chrome/browser/web_applications",
       "//components/commerce/core:utils",
       "//components/content_settings/core/browser",
       "//components/feature_engagement/public",
@@ -431,7 +427,6 @@ if (!is_android) {
       "//components/reading_list/core",
       "//components/tab_groups",
       "//components/web_modal",
-      "//components/webapps/common",
     ]
   }
 
@@ -565,6 +560,7 @@ if (!is_android) {
       "//chrome/browser/content_settings:content_settings_factory",
       "//chrome/browser/contextual_search:contextual_cueing",
       "//chrome/browser/contextual_tasks",
+      "//chrome/browser/contextual_tasks:search_journey_cue",
       "//chrome/browser/dictation:features",
       "//chrome/browser/enterprise",
       "//chrome/browser/external_protocol",
@@ -573,10 +569,10 @@ if (!is_android) {
       "//chrome/browser/file_system_access",
       "//chrome/browser/glic",
       "//chrome/browser/glic/browser_ui",
+      "//chrome/browser/glic/navigation_capture",
       "//chrome/browser/glic/suggestions",
       "//chrome/browser/history",
       "//chrome/browser/history_clusters",
-      "//chrome/browser/history_embeddings",
       "//chrome/browser/image_fetcher",
       "//chrome/browser/indigo",
       "//chrome/browser/lifetime",
@@ -629,6 +625,7 @@ if (!is_android) {
       "//chrome/browser/ui:accelerator_table",
       "//chrome/browser/ui:browser_actions",
       "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_init_state",
       "//chrome/browser/ui:browser_live_tab_context",
       "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:focus_tab_after_navigation_helper",
@@ -744,7 +741,6 @@ if (!is_android) {
       "//components/sessions",
       "//components/sessions:session_id",
       "//components/site_engagement/content",
-      "//components/skills:features",
       "//components/sync_sessions",
       "//components/tab_groups",
       "//components/tabs:impl",
@@ -911,6 +907,7 @@ if (!is_android) {
     public_deps = [
       "//chrome/browser/ui/startup:startup_tab",
       "//components/sessions:session_id",
+      "//components/sync_device_info",
       "//components/ukm:test_support",
       "//ui/base",
     ]
@@ -971,6 +968,7 @@ if (!is_android) {
       "//chrome/browser/glic",
       "//chrome/browser/glic:impl",
       "//chrome/browser/glic/test_support",
+      "//chrome/browser/history",
       "//chrome/browser/policy:test_support",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/profiles/keep_alive",
@@ -980,6 +978,7 @@ if (!is_android) {
       "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:tab_ui_helper",
       "//chrome/browser/ui:ui_features",
+      "//chrome/browser/ui:unload_controller",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/performance_controls",
       "//chrome/browser/ui/tabs/saved_tab_groups",
@@ -992,13 +991,16 @@ if (!is_android) {
       "//chrome/browser/web_applications:prevent_close_test_support",
       "//chrome/browser/web_applications:web_applications_test_support",
       "//chrome/common:chrome_features",
-      "//chrome/test:test_support_ui",
       "//chrome/test/base:menu_model_test",
       "//components/commerce/core:account_checker_test_support",
       "//components/commerce/core:feature_list",
       "//components/commerce/core:shopping_service",
       "//components/commerce/core:shopping_service_test_support",
+      "//components/favicon/core",
+      "//components/favicon_base",
+      "//components/history/core/browser",
       "//components/javascript_dialogs",
+      "//components/keyed_service/core",
       "//components/policy:generated",
       "//components/policy:policy_code_generate",
       "//components/policy/core/browser",
@@ -1012,8 +1014,11 @@ if (!is_android) {
       "//components/webapps/common",
       "//content/public/browser",
       "//content/test:test_support",
+      "//skia",
       "//ui/base:features",
       "//ui/base:types",
+      "//ui/gfx",
+      "//ui/gfx:test_support",
       "//url",
     ]
   }
@@ -1038,7 +1043,6 @@ if (!is_android) {
       "//chrome/browser/ui/views/frame:contents_web_view",
       "//chrome/browser/ui/views/frame:system_menu_model_builder",
       "//chrome/test:test_support",
-      "//chrome/test:test_support_ui",
       "//chrome/test/user_education:impl",
       "//content/public/browser",
       "//content/test:test_support",
@@ -1100,6 +1104,7 @@ if (!is_android) {
       "//chrome/browser/prefs",
       "//chrome/browser/sync",
       "//chrome/browser/ui:browser_actions",
+      "//chrome/browser/ui:browser_init_state",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/browser_window/test:test_support",

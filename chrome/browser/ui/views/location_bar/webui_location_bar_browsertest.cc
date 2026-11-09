@@ -36,7 +36,6 @@
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/page_action/action_ids.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.h"
@@ -320,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest, PageActionNavigation) {
   content::WebContents* web_contents =
       browser()->GetTabStripModel()->GetActiveWebContents();
   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-  auto* controller = tab->GetTabFeatures()->page_action_controller();
+  auto* controller = page_actions::PageActionController::From(tab);
 
   controller->Show(kActionAiMode);
   EXPECT_FALSE(control.GetPageActionStates().empty());
@@ -330,7 +329,7 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest, PageActionNavigation) {
 
   web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   tab = tabs::TabInterface::GetFromContents(web_contents);
-  controller = tab->GetTabFeatures()->page_action_controller();
+  controller = page_actions::PageActionController::From(tab);
 
   controller->Show(kActionAiMode);
   EXPECT_FALSE(control.GetPageActionStates().empty());
@@ -342,7 +341,7 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
   content::WebContents* web_contents =
       browser()->GetTabStripModel()->GetActiveWebContents();
   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-  auto* controller = tab->GetTabFeatures()->page_action_controller();
+  auto* controller = page_actions::PageActionController::From(tab);
 
   actions::ActionId action_id = kActionAiMode;
   page_actions::PageActionTestAccessor accessor(browser(), action_id);
@@ -386,7 +385,7 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest, AllPageActionsPresent) {
   content::WebContents* web_contents =
       browser()->GetTabStripModel()->GetActiveWebContents();
   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-  auto* controller = tab->GetTabFeatures()->page_action_controller();
+  auto* controller = page_actions::PageActionController::From(tab);
 
   constexpr char kGetPageActionIconsScript[] = R"(
     Array.from(document.querySelector('toolbar-app')?.
@@ -539,7 +538,8 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
 
   // Set unstarred:
   bookmark_controller->URLStarredChanged(
-      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/false);
+      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/false,
+      /*is_bookmark_added_or_removed=*/false);
   auto states_unstarred = control.GetPageActionStates();
   auto it_unstarred = std::find_if(
       states_unstarred.begin(), states_unstarred.end(), [](const auto& state) {
@@ -559,7 +559,8 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
 
   // Set starred:
   bookmark_controller->URLStarredChanged(
-      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/true);
+      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/true,
+      /*is_bookmark_added_or_removed=*/false);
   auto states_starred = control.GetPageActionStates();
   auto it_starred = std::find_if(
       states_starred.begin(), states_starred.end(), [](const auto& state) {
@@ -602,7 +603,8 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
   auto* tab = browser()->GetTabStripModel()->GetActiveTab();
   ASSERT_TRUE(tab);
   BookmarkPageActionController::From(tab)->URLStarredChanged(
-      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/true);
+      browser()->GetTabStripModel()->GetActiveWebContents(), /*starred=*/true,
+      /*is_bookmark_added_or_removed=*/false);
 
   page_actions::WebUIPageActionControl control(
       BrowserActions::From(browser())->root_action_item());
@@ -661,7 +663,6 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   WaitForInitialWebUIToolbar(browser());
-  ASSERT_TRUE(FlushWebUIToolbarPipes(browser()));
 
   constexpr int kBookmarkMojomId = std::to_underlying(
       toolbar_ui_api::mojom::PageActionId::kActionBookmarkThisTab);
@@ -714,7 +715,6 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
   BrowserView::GetBrowserViewForBrowser(browser())
       ->browser_widget()
       ->SetUserColorOverride(SK_ColorMAGENTA);
-  ASSERT_TRUE(FlushWebUIToolbarPipes(browser()));
 
   EXPECT_TRUE(base::test::RunUntil([&]() {
     return content::EvalJs(GetWebUIToolbarWebContents(),
@@ -730,7 +730,7 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
       browser()->GetTabStripModel()->GetActiveWebContents();
 
   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-  auto* controller = tab->GetTabFeatures()->page_action_controller();
+  auto* controller = page_actions::PageActionController::From(tab);
   actions::ActionItem* action_item = actions::ActionManager::Get().FindAction(
       kActionBookmarkThisTab,
       BrowserActions::From(browser())->root_action_item());
@@ -1168,7 +1168,8 @@ IN_PROC_BROWSER_TEST_F(WebUILocationBarBrowserTest,
   ASSERT_TRUE(tab);
   auto* bookmark_controller = BookmarkPageActionController::From(tab);
   ASSERT_TRUE(bookmark_controller);
-  bookmark_controller->URLStarredChanged(web_contents, /*starred=*/true);
+  bookmark_controller->URLStarredChanged(
+      web_contents, /*starred=*/true, /*is_bookmark_added_or_removed=*/false);
   GetLocationBar()->Update(web_contents);
 
   constexpr int kBookmarkMojomId = std::to_underlying(

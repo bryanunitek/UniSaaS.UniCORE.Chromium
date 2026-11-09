@@ -194,9 +194,6 @@ GCMClient::GCMStatistics FakeGCMClient::GetStatistics() const {
   return statistics;
 }
 
-void FakeGCMClient::UpdateHeartbeatTimer(
-    std::unique_ptr<base::RetainingOneShotTimer> timer) {}
-
 void FakeGCMClient::AddInstanceIDData(const std::string& app_id,
                                       const std::string& instance_id,
                                       const std::string& extra_data) {
@@ -220,11 +217,6 @@ void FakeGCMClient::GetInstanceIDData(const std::string& app_id,
   *instance_id = iter->second.first;
   *extra_data = iter->second.second;
 }
-
-void FakeGCMClient::AddHeartbeatInterval(const std::string& scope,
-                                         int interval_ms) {}
-
-void FakeGCMClient::RemoveHeartbeatInterval(const std::string& scope) {}
 
 void FakeGCMClient::PerformDelayedStart() {
   DCHECK(ui_thread_->RunsTasksInCurrentSequence());
@@ -286,12 +278,6 @@ void FakeGCMClient::SendFinished(const std::string& app_id,
                        weak_ptr_factory_.GetWeakPtr(), app_id,
                        send_error_details),
         base::Milliseconds(200));
-  } else if (message.id.find("ack") != std::string::npos) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&FakeGCMClient::SendAcknowledgement,
-                       weak_ptr_factory_.GetWeakPtr(), app_id, message.id),
-        base::Milliseconds(200));
   }
 }
 
@@ -313,13 +299,6 @@ void FakeGCMClient::MessageSendError(
     const GCMClient::SendErrorDetails& send_error_details) {
   if (delegate_) {
     delegate_->OnMessageSendError(app_id, send_error_details);
-  }
-}
-
-void FakeGCMClient::SendAcknowledgement(const std::string& app_id,
-                                        const std::string& message_id) {
-  if (delegate_) {
-    delegate_->OnSendAcknowledged(app_id, message_id);
   }
 }
 

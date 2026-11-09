@@ -6,6 +6,7 @@
 
 #include <tuple>
 
+#include "base/base64.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+#include "chrome/browser/contextual_tasks/list_accounts_response.pb.h"
 #include "chrome/browser/contextual_tasks/mock_contextual_tasks_page.h"
 #include "chrome/browser/contextual_tasks/mock_contextual_tasks_panel_controller.h"
 #include "chrome/browser/contextual_tasks/mock_contextual_tasks_ui_service.h"
@@ -66,17 +68,25 @@
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/signin/public/base/list_accounts_test_utils.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/variations/scoped_variations_ids_provider.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_web_ui.h"
 #include "content/public/test/web_contents_tester.h"
+#include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "net/base/url_util.h"
+#include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_options.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -307,6 +317,7 @@ class MockToolbarPage : public contextual_tasks_toolbar::mojom::Page {
               SetAccountInfo,
               (const std::string& full_name, const std::string& email),
               (override));
+  MOCK_METHOD(void, SetSignedInAccountCount, (uint32_t count), (override));
 
   mojo::PendingRemote<contextual_tasks_toolbar::mojom::Page>
   BindAndGetRemote() {
@@ -3468,6 +3479,92 @@ TEST_F(ContextualTasksUiTest,
   actions::ActionIdMap::ResetMapsForTesting();
 }
 
+TEST_F(ContextualTasksUiTest, PinSidePanel_IncognitoCannotPinOrUnpin) {
+  InitializeActionIdStringMapping();
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {kContextualTasksRearchitecture, kContextualTasksSidePanelRearchitecture,
+       contextual_tasks::kEnableContextualTasksPinButtonInToolbar,
+       contextual_tasks::kContextualTasksForceEntryPointEligibility},
+      /*disabled_features=*/{});
+
+  Profile* otr_profile =
+      profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  ASSERT_TRUE(otr_profile);
+
+  base::DictValue otr_load_time_data =
+      ContextualTasksUIBase::GetContextualTasksLoadTimeData(otr_profile);
+  EXPECT_EQ(otr_load_time_data.FindBool("enablePinButton"), false);
+
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+  content::TestWebUI otr_web_ui;
+  otr_web_ui.set_web_contents(otr_web_contents.get());
+  ContextualTasksUIConfig config;
+  std::unique_ptr<content::WebUIController> controller =
+      config.CreateWebUIController(&otr_web_ui,
+                                   GURL("chrome://contextual-tasks"));
+  ASSERT_TRUE(controller);
+  auto* ui = controller->GetAs<ContextualTasksUIPostRearchitecture>();
+  ASSERT_NE(ui, nullptr);
+
+  auto* model = PinnedToolbarActionsModel::Get(profile_);
+  ASSERT_TRUE(model);
+  EXPECT_FALSE(model->Contains(kActionSidePanelShowContextualTasks));
+
+  // Calling PinSidePanel from an Incognito controller must not mutate the
+  // parent regular profile's pinned toolbar actions model.
+  ui->PinSidePanel();
+  EXPECT_FALSE(model->Contains(kActionSidePanelShowContextualTasks));
+
+  actions::ActionIdMap::ResetMapsForTesting();
+}
+
+TEST_F(ContextualTasksUiTest, UnpinSidePanel_IncognitoCannotPinOrUnpin) {
+  InitializeActionIdStringMapping();
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {kContextualTasksRearchitecture, kContextualTasksSidePanelRearchitecture,
+       contextual_tasks::kEnableContextualTasksPinButtonInToolbar,
+       contextual_tasks::kContextualTasksForceEntryPointEligibility},
+      /*disabled_features=*/{});
+
+  Profile* otr_profile =
+      profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  ASSERT_TRUE(otr_profile);
+
+  base::DictValue otr_load_time_data =
+      ContextualTasksUIBase::GetContextualTasksLoadTimeData(otr_profile);
+  EXPECT_EQ(otr_load_time_data.FindBool("enablePinButton"), false);
+
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+  content::TestWebUI otr_web_ui;
+  otr_web_ui.set_web_contents(otr_web_contents.get());
+  ContextualTasksUIConfig config;
+  std::unique_ptr<content::WebUIController> controller =
+      config.CreateWebUIController(&otr_web_ui,
+                                   GURL("chrome://contextual-tasks"));
+  ASSERT_TRUE(controller);
+  auto* ui = controller->GetAs<ContextualTasksUIPostRearchitecture>();
+  ASSERT_NE(ui, nullptr);
+
+  // Start with the button pinned in the parent regular profile.
+  auto* model = PinnedToolbarActionsModel::Get(profile_);
+  ASSERT_TRUE(model);
+  model->UpdatePinnedState(kActionSidePanelShowContextualTasks, true);
+  ASSERT_TRUE(model->Contains(kActionSidePanelShowContextualTasks));
+
+  // Calling UnpinSidePanel from an Incognito controller must not unpin the
+  // button from the parent regular profile's pinned toolbar actions model.
+  ui->UnpinSidePanel();
+  EXPECT_TRUE(model->Contains(kActionSidePanelShowContextualTasks));
+
+  actions::ActionIdMap::ResetMapsForTesting();
+}
+
 TEST_F(ContextualTasksUiTest, OnSidePanelPinStateChanged_FeatureDisabled) {
   InitializeActionIdStringMapping();
   base::test::ScopedFeatureList scoped_feature_list;
@@ -3491,6 +3588,8 @@ TEST_F(ContextualTasksUiTest, OnSidePanelPinStateChanged_FeatureDisabled) {
   testing::StrictMock<MockToolbarPage> mock_page;
   EXPECT_CALL(mock_page, SetProfileAvatarUrl(_)).Times(testing::AnyNumber());
   EXPECT_CALL(mock_page, SetAccountInfo(_, _)).Times(testing::AnyNumber());
+  EXPECT_CALL(mock_page, SetSignedInAccountCount(_))
+      .Times(testing::AnyNumber());
   // The initial (ineligible) pin button eligibility is pushed on bind.
   EXPECT_CALL(mock_page, OnPinButtonEligibilityChanged(false))
       .Times(testing::AnyNumber());
@@ -3511,6 +3610,8 @@ TEST_F(ContextualTasksUiTest, OnSidePanelPinStateChanged_FeatureDisabled) {
   EXPECT_CALL(legacy_mock_page, SetProfileAvatarUrl(_))
       .Times(testing::AnyNumber());
   EXPECT_CALL(legacy_mock_page, SetAccountInfo(_, _))
+      .Times(testing::AnyNumber());
+  EXPECT_CALL(legacy_mock_page, SetSignedInAccountCount(_))
       .Times(testing::AnyNumber());
   EXPECT_CALL(legacy_mock_page, OnPinButtonEligibilityChanged(false))
       .Times(testing::AnyNumber());
@@ -4461,7 +4562,7 @@ TEST_F(ContextualTasksUiTest, MaybeTriggerPinningPromo_NotPinningEligible) {
   EXPECT_CALL(mock_panel_controller, IsPanelOpenForContextualTask())
       .WillOnce(Return(true));
 
-  // The pinning promo is NOT expected to be tried when IsPinningEligible is
+  // The pinning promo is NOT expected to be tried when CanPinOrUnpin is
   // false.
   EXPECT_CALL(
       mock_user_education,
@@ -4969,6 +5070,75 @@ TEST_F(ContextualTasksUiTest, AccountInfo_WebSignedInWithFullName) {
   EXPECT_EQ(email, "user@example.com");
 }
 
+TEST_F(ContextualTasksUiTest, SignedInAccountCount_MultipleWebAccounts) {
+  AccountInfo account_info1 =
+      identity_test_env()->MakeAccountAvailable("user1@example.com");
+  AccountInfo account_info2 =
+      identity_test_env()->MakeAccountAvailable("user2@example.com");
+  identity_test_env()->SetCookieAccounts(
+      {{std::string(account_info1.GetEmail()), account_info1.GetGaiaId()},
+       {std::string(account_info2.GetEmail()), account_info2.GetGaiaId()}});
+
+  content::TestWebUI web_ui;
+  web_ui.set_web_contents(embedded_web_contents_.get());
+  TestContextualTasksUIBase controller(&web_ui);
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandlerFactory>
+      factory_remote;
+  controller.BindInterface(factory_remote.BindNewPipeAndPassReceiver());
+
+  testing::NiceMock<MockContextualTasksToolbarPage> mock_page;
+  base::test::TestFuture<uint32_t> future;
+  EXPECT_CALL(mock_page, SetSignedInAccountCount(_))
+      .WillOnce([&future](uint32_t count) { future.SetValue(count); });
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandler> page_handler;
+  factory_remote->CreatePageHandler(mock_page.BindAndGetRemote(),
+                                    page_handler.BindNewPipeAndPassReceiver());
+
+  EXPECT_EQ(future.Take(), 2u);
+}
+
+TEST_F(ContextualTasksUiTest, SignedInAccountCount_ZeroWhenSignedOut) {
+  content::TestWebUI web_ui;
+  web_ui.set_web_contents(embedded_web_contents_.get());
+  TestContextualTasksUIBase controller(&web_ui);
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandlerFactory>
+      factory_remote;
+  controller.BindInterface(factory_remote.BindNewPipeAndPassReceiver());
+
+  testing::NiceMock<MockContextualTasksToolbarPage> mock_page;
+  base::test::TestFuture<uint32_t> future;
+  EXPECT_CALL(mock_page, SetSignedInAccountCount(_))
+      .WillOnce([&future](uint32_t count) { future.SetValue(count); });
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandler> page_handler;
+  factory_remote->CreatePageHandler(mock_page.BindAndGetRemote(),
+                                    page_handler.BindNewPipeAndPassReceiver());
+
+  EXPECT_EQ(future.Take(), 0u);
+}
+
+TEST_F(ContextualTasksUiTest, GetContextualTasksLoadTimeData_SignOutLabels) {
+  base::DictValue dict =
+      ContextualTasksUIBase::GetContextualTasksLoadTimeData(profile_);
+  EXPECT_EQ(*dict.FindString("accountMenuSignOut"), "Sign out");
+  EXPECT_EQ(*dict.FindString("accountMenuSignOutOfAllAccounts"),
+            "Sign out of all accounts");
+}
+
+TEST_F(ContextualTasksUiTest,
+       GetContextualTasksLoadTimeData_GoogleComSignOutLabels) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      contextual_tasks::kContextualTasksAccountMenuGoogleComSignOutLabel);
+  base::DictValue dict =
+      ContextualTasksUIBase::GetContextualTasksLoadTimeData(profile_);
+  EXPECT_EQ(*dict.FindString("accountMenuSignOut"), "Sign out of google.com");
+  EXPECT_EQ(*dict.FindString("accountMenuSignOutOfAllAccounts"),
+            "Sign out of all google.com accounts");
+}
+
 TEST_F(ContextualTasksUiTest, AccountInfo_EmptyWhenSignedOut) {
   content::TestWebUI web_ui;
   web_ui.set_web_contents(embedded_web_contents_.get());
@@ -5184,6 +5354,175 @@ TEST_F(ContextualTasksUiTest, ProfileIndicator_LoadTimeDataPopulated) {
       chrome_signed_in_dict.FindString("profileAvatarUrl");
   ASSERT_TRUE(chrome_signed_in_avatar_url);
   EXPECT_EQ(*chrome_signed_in_avatar_url, "");
+}
+
+TEST_F(ContextualTasksUiTest, ProfileIndicator_IncognitoSignedOutInitially) {
+  // Even if the parent regular profile is signed in to Chrome and the web,
+  // an Incognito profile with no Gaia cookies should not show the indicator.
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      "user@example.com", signin::ConsentLevel::kSignin);
+  identity_test_env()->SetCookieAccounts(
+      {{std::string(account_info.GetEmail()), account_info.GetGaiaId()}});
+
+  TestingProfile* otr_profile =
+      TestingProfile::Builder()
+          .SetSharedURLLoaderFactory(
+              test_url_loader_factory_.GetSafeWeakWrapper())
+          .BuildIncognito(profile_);
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+
+  content::TestWebUI web_ui;
+  web_ui.set_web_contents(otr_web_contents.get());
+  TestContextualTasksUIBase controller(&web_ui);
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandlerFactory>
+      factory_remote;
+  controller.BindInterface(factory_remote.BindNewPipeAndPassReceiver());
+
+  testing::NiceMock<MockContextualTasksToolbarPage> mock_page;
+  base::test::TestFuture<GURL> avatar_future;
+  EXPECT_CALL(mock_page, SetProfileAvatarUrl(_))
+      .WillRepeatedly([&avatar_future](const GURL& avatar_url) {
+        avatar_future.SetValue(avatar_url);
+      });
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandler> page_handler;
+  factory_remote->CreatePageHandler(mock_page.BindAndGetRemote(),
+                                    page_handler.BindNewPipeAndPassReceiver());
+
+  EXPECT_EQ(avatar_future.Take(), GURL());
+  EXPECT_EQ(test_url_loader_factory_.NumPending(), 0);
+}
+
+TEST_F(ContextualTasksUiTest,
+       ProfileIndicator_IncognitoWebSignedInAndCookieChange) {
+  const std::string list_accounts_url =
+      GaiaUrls::GetInstance()
+          ->ListAccountsURLWithSource(
+              base::StrCat({GaiaConstants::kChromeSource, "&mo=1"}))
+          .spec();
+
+  TestingProfile* otr_profile =
+      TestingProfile::Builder()
+          .SetSharedURLLoaderFactory(
+              test_url_loader_factory_.GetSafeWeakWrapper())
+          .BuildIncognito(profile_);
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+
+  content::TestWebUI web_ui;
+  web_ui.set_web_contents(otr_web_contents.get());
+  TestContextualTasksUIBase controller(&web_ui);
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandlerFactory>
+      factory_remote;
+  controller.BindInterface(factory_remote.BindNewPipeAndPassReceiver());
+
+  testing::NiceMock<MockContextualTasksToolbarPage> mock_page;
+  base::test::TestFuture<GURL> avatar_future(
+      base::test::TestFutureMode::kQueue);
+  base::test::TestFuture<std::string, std::string> account_info_future(
+      base::test::TestFutureMode::kQueue);
+  base::test::TestFuture<uint32_t> account_count_future(
+      base::test::TestFutureMode::kQueue);
+  EXPECT_CALL(mock_page, SetProfileAvatarUrl(_))
+      .WillRepeatedly([&avatar_future](const GURL& avatar_url) {
+        avatar_future.SetValue(avatar_url);
+      });
+  EXPECT_CALL(mock_page, SetAccountInfo(_, _))
+      .WillRepeatedly([&account_info_future](const std::string& full_name,
+                                             const std::string& email) {
+        account_info_future.SetValue(full_name, email);
+      });
+  EXPECT_CALL(mock_page, SetSignedInAccountCount(_))
+      .WillRepeatedly([&account_count_future](uint32_t count) {
+        account_count_future.SetValue(count);
+      });
+
+  mojo::Remote<contextual_tasks_toolbar::mojom::PageHandler> page_handler;
+  factory_remote->CreatePageHandler(mock_page.BindAndGetRemote(),
+                                    page_handler.BindNewPipeAndPassReceiver());
+
+  // Initially signed out in Incognito: both CreatePageHandler and the initial
+  // cookie-list check report empty values without issuing a /ListAccounts
+  // network request.
+  EXPECT_EQ(avatar_future.Take(), GURL());
+  EXPECT_EQ(account_info_future.Take(), std::make_tuple("", ""));
+  EXPECT_EQ(account_count_future.Take(), 0u);
+  EXPECT_EQ(avatar_future.Take(), GURL());
+  EXPECT_EQ(account_info_future.Take(), std::make_tuple("", ""));
+  EXPECT_EQ(account_count_future.Take(), 0u);
+  EXPECT_EQ(test_url_loader_factory_.NumPending(), 0);
+
+  // Simulate signing in to google.com in Incognito: build a binary
+  // ListAccountsResponse where account 1 includes `display_name` and
+  // `photo_url`, and account 2 omits them to test the placeholder fallback.
+  contextual_tasks::ListAccountsResponse list_accounts_response;
+  contextual_tasks::Account* account1 = list_accounts_response.add_account();
+  account1->set_display_name("Incognito User 1");
+  account1->set_display_email("incognito1@example.com");
+  account1->set_photo_url("https://lh3.googleusercontent.com/a/photo1.jpg");
+  account1->set_obfuscated_id("gaia_incog_1");
+  contextual_tasks::Account* account2 = list_accounts_response.add_account();
+  account2->set_display_email("incognito2@example.com");
+  account2->set_obfuscated_id("gaia_incog_2");
+  test_url_loader_factory_.AddResponse(
+      list_accounts_url,
+      base::Base64Encode(list_accounts_response.SerializeAsString()));
+
+  network::mojom::CookieManager* cookie_manager =
+      otr_profile->GetDefaultStoragePartition()
+          ->GetCookieManagerForBrowserProcess();
+  std::unique_ptr<net::CanonicalCookie> cookie =
+      net::CanonicalCookie::CreateSanitizedCookie(
+          GaiaUrls::GetInstance()->secure_google_url(),
+          GaiaConstants::kGaiaSigninCookieName, "cookie_value", ".google.com",
+          "/", base::Time::Now(), base::Time::Now() + base::Days(1),
+          base::Time::Now(), /*secure=*/true, /*http_only=*/false,
+          net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT,
+          /*partition_key=*/std::nullopt, /*status=*/nullptr);
+  ASSERT_TRUE(cookie);
+
+  base::test::TestFuture<net::CookieAccessResult> set_cookie_future;
+  cookie_manager->SetCanonicalCookie(
+      *cookie, GaiaUrls::GetInstance()->secure_google_url(),
+      net::CookieOptions::MakeAllInclusive(), set_cookie_future.GetCallback());
+  ASSERT_TRUE(set_cookie_future.Take().status.IsInclude());
+
+  // The CookieChangeListener triggers a /ListAccounts fetch and updates the
+  // toolbar with the sanitized photo_url, display_name, and email of the first
+  // Incognito web account.
+  EXPECT_EQ(
+      avatar_future.Take(),
+      GURL("chrome://image/?https://lh3.googleusercontent.com/a/photo1.jpg"));
+  EXPECT_EQ(account_info_future.Take(),
+            std::make_tuple("Incognito User 1", "incognito1@example.com"));
+  EXPECT_EQ(account_count_future.Take(), 2u);
+
+  // Switching to authuser=1 updates to the second Incognito account (which has
+  // no photo_url and falls back to the placeholder avatar).
+  controller.UpdateProfileIndicator(
+      GURL("https://www.google.com/search?authuser=1"));
+  EXPECT_EQ(avatar_future.Take(),
+            GURL(profiles::GetPlaceholderAvatarIconUrl()));
+  EXPECT_EQ(account_info_future.Take(),
+            std::make_tuple("", "incognito2@example.com"));
+  EXPECT_EQ(account_count_future.Take(), 2u);
+
+  // Deleting cookies in Incognito clears the profile indicator without making
+  // a /ListAccounts network request.
+  test_url_loader_factory_.ClearResponses();
+  network::mojom::CookieDeletionFilterPtr filter =
+      network::mojom::CookieDeletionFilter::New();
+  base::test::TestFuture<uint32_t> delete_future;
+  cookie_manager->DeleteCookies(std::move(filter), delete_future.GetCallback());
+  EXPECT_GT(delete_future.Take(), 0u);
+
+  EXPECT_EQ(avatar_future.Take(), GURL());
+  EXPECT_EQ(account_info_future.Take(), std::make_tuple("", ""));
+  EXPECT_EQ(account_count_future.Take(), 0u);
+  EXPECT_EQ(test_url_loader_factory_.NumPending(), 0);
 }
 
 #if !BUILDFLAG(IS_ANDROID)

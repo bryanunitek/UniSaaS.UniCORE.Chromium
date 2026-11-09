@@ -28,6 +28,7 @@ source_set("eg2_tests") {
     ":switches",
     "//ios/testing/earl_grey:eg_test_support+eg2",
     "//ios/testing/earl_grey:launch_configuration",
+    "//net:test_support",
   ]
   frameworks = [ "UIKit.framework" ]
 }
@@ -193,6 +194,7 @@ source_set("eg_app_support+eg2") {
     "//ios/chrome/browser/drive_file_picker/test:eg_app_support+eg2",
     "//ios/chrome/browser/enterprise/connectors/analysis/test:eg_app_support+eg2",
     "//ios/chrome/browser/enterprise/data_controls/test:eg_app_support+eg2",
+    "//ios/chrome/browser/enterprise/data_protection/test:eg_app_support+eg2",
     "//ios/chrome/browser/feature_engagement/model",
     "//ios/chrome/browser/find_in_page/model",
     "//ios/chrome/browser/find_in_page/model:eg_app_support+eg2",
@@ -262,6 +264,7 @@ source_set("eg_app_support+eg2") {
     "//ios/chrome/browser/send_tab_to_self/model",
     "//ios/chrome/browser/sessions/model:session_restoration_service",
     "//ios/chrome/browser/sessions/model:session_restoration_service_factory",
+    "//ios/chrome/browser/settings/autofill/autofill_and_passwords/ui:autofill_and_passwords",
     "//ios/chrome/browser/settings/autofill/payments/ui",
     "//ios/chrome/browser/settings/clear_browsing_data/coordinator",
     "//ios/chrome/browser/settings/clear_browsing_data/public:constants",

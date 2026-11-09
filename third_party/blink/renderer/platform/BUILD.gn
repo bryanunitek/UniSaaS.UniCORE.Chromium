@@ -1918,6 +1918,7 @@ component("platform") {
     "//ui/gfx/mojom",
     "//ui/gl:buildflags",
     "//ui/native_theme",
+    "//v8/src/inspector:inspector_headers",
   ]
 
   if (has_zstd_compression) {
@@ -2098,6 +2099,8 @@ static_library("test_support") {
     "testing/picture_matchers.h",
     "testing/renderer_fuzzing_support.cc",
     "testing/renderer_fuzzing_support.h",
+    "testing/scoped_default_locale.cc",
+    "testing/scoped_default_locale.h",
     "testing/scoped_fake_ukm_recorder.cc",
     "testing/scoped_fake_ukm_recorder.h",
     "testing/scoped_main_thread_overrider.cc",
@@ -2711,6 +2714,7 @@ group("blink_platform_unittests_data") {
     # Required by some image decoder tests.
     "image-decoders/testing/",
     "//third_party/blink/web_tests/external/wpt/webcodecs/four-colors-limited-range-420-8bpc.jpg",
+    "//third_party/blink/web_tests/fast/replaced/resources/compass.jpg",
     "//third_party/blink/web_tests/images/resources/",
     "//third_party/blink/web_tests/images/bmp-suite/",
     "//third_party/blink/web_tests/images/jpeg-suite/",

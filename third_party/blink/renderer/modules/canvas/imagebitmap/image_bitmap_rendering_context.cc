@@ -75,7 +75,7 @@ scoped_refptr<StaticBitmapImage> ImageBitmapRenderingContext::MakeAccelerated(
   constexpr gpu::SharedImageUsageSet kSharedImageUsageFlags =
       gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_SCANOUT;
 #endif  // BUILDFLAG(IS_LINUX)
-  return AcceleratedStaticBitmapImage::CreateFromRaster(
+  auto image = AcceleratedStaticBitmapImage::CreateFromRaster(
       source->Size(), source->GetSharedImageFormat(), source->GetAlphaType(),
       source->GetColorSpace(), source->GetHdrMetadata(),
       context_provider_wrapper, kSharedImageUsageFlags,
@@ -85,6 +85,10 @@ scoped_refptr<StaticBitmapImage> ImageBitmapRenderingContext::MakeAccelerated(
         canvas.drawImage(source->PaintImageForCurrentFrame(), 0, 0,
                          SkSamplingOptions(), &paint);
       });
+  if (image) {
+    image->SetOriginClean(source->OriginClean());
+  }
+  return image;
 }
 
 ImageBitmapRenderingContext::ImageBitmapRenderingContext(
@@ -182,7 +186,9 @@ void ImageBitmapRenderingContext::ResetInternalBitmapToBlackTransparent(
     black_bitmap.eraseARGB(0, 0, 0, 0);
     auto image = SkImages::RasterFromBitmap(black_bitmap);
     if (image) {
-      SetImageInternal(UnacceleratedStaticBitmapImage::Create(image));
+      auto bitmap = UnacceleratedStaticBitmapImage::Create(image);
+      bitmap->SetOriginClean(!Host() || Host()->OriginClean());
+      SetImageInternal(std::move(bitmap));
     }
   }
 }
@@ -258,7 +264,7 @@ bool ImageBitmapRenderingContext::PrepareTransferableResource(
     scoped_refptr<StaticBitmapImage> image_for_compositor =
         ImageBitmapRenderingContext::MakeAccelerated(
             image_, SharedGpuContext::ContextProviderWrapper());
-    if (!image_for_compositor || !image_for_compositor->ContextProvider()) {
+    if (!image_for_compositor) {
       return false;
     }
 
@@ -326,11 +332,10 @@ void ImageBitmapRenderingContext::ResourceReleasedGpu(
     scoped_refptr<StaticBitmapImage> image,
     const gpu::SyncToken& token,
     bool lost_resource) {
-  if (image && image->IsValid()) {
-    DCHECK(image->IsTextureBacked());
-    if (token.HasData()) {
-      image->UpdateSyncToken(token);
-    }
+  CHECK(image);
+  DCHECK(image->IsTextureBacked());
+  if (token.HasData()) {
+    image->UpdateSyncToken(token);
   }
 }
 
@@ -530,6 +535,7 @@ ImageBitmap* ImageBitmapRenderingContext::TransferToImageBitmap(
   if (!image)
     return nullptr;
 
+  image->SetOriginClean(Host()->OriginClean());
   image->Transfer();
   return MakeGarbageCollected<ImageBitmap>(std::move(image));
 }

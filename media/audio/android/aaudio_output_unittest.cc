@@ -13,6 +13,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/synchronization/lock.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "media/audio/android/audio_device.h"
 #include "media/audio/audio_features.h"
@@ -74,6 +75,7 @@ class AAudioOutputStreamTest : public testing::Test {
     stream_->callback_ = callback;
   }
 
+  base::test::SingleThreadTaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<AAudioOutputStream> stream_;
 };

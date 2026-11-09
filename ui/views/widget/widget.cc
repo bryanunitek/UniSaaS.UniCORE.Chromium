@@ -83,22 +83,27 @@
 
 namespace views {
 
-namespace {
-
-class ParentThemeObserver : public ui::ColorProviderSourceObserver {
+class Widget::ParentThemeObserver : public ui::ColorProviderSourceObserver {
  public:
   ParentThemeObserver(Widget* widget, ui::ColorProviderSource* parent)
       : ColorProviderSourceObserver(parent), widget_(widget) {}
   ~ParentThemeObserver() override = default;
 
   void OnColorProviderChanged() override {
-    widget_->ResetLastColorProviderKey();
+    // Ignore `Observe(nullptr)` notifications during parent destruction and
+    // transition back to observing `NativeTheme` directly.
+    if (!GetColorProviderSource()) {
+      widget_->UpdateThemeObservation();
+      return;
+    }
     widget_->ScheduleThemeChanged();
   }
 
  private:
   raw_ptr<Widget> widget_;
 };
+
+namespace {
 
 // Create a native widget implementation.
 // First, use the supplied one if non-NULL.
@@ -292,14 +297,15 @@ Widget::~Widget() {
   }
   if (ownership_ == InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
     owned_native_widget_.reset();
-    DCHECK(!native_widget_);
+    CHECK(!native_widget_, base::NotFatalUntil::M163);
   } else if (ownership_ == InitParams::NATIVE_WIDGET_OWNS_WIDGET) {
     // TODO(crbug.com/41444457): Revert to DCHECK once we figure out the reason.
     CHECK(!native_widget_)
         << "Destroying a widget with a live native widget. "
         << "Widget probably should use WIDGET_OWNS_NATIVE_WIDGET ownership.";
   } else {
-    DCHECK_EQ(ownership_, InitParams::CLIENT_OWNS_WIDGET);
+    CHECK_EQ(ownership_, InitParams::CLIENT_OWNS_WIDGET,
+             base::NotFatalUntil::M163);
     // Specifically in the case of CLIENT_OWNS_WIDGET the native widget is
     // notified to allow clearing of any widget-associated state. Do so before
     // the call to `HandleWidgetDestroyed()` below which will invalidate
@@ -433,7 +439,7 @@ void Widget::ForEachOwnedWidget(gfx::NativeView native_view,
 // static
 void Widget::ReparentNativeView(gfx::NativeView native_view,
                                 gfx::NativeView new_parent) {
-  DCHECK(native_view);
+  CHECK(native_view, base::NotFatalUntil::M163);
   internal::NativeWidgetPrivate::ReparentNativeView(native_view, new_parent);
   Widget* child_widget = GetWidgetForNativeView(native_view);
   Widget* parent_widget =
@@ -533,7 +539,7 @@ void Widget::Init(InitParams params) {
         default_delegate.release()->AttachWidgetAndGetHandle(this);
   }
 
-  DCHECK(widget_delegate_);
+  CHECK(widget_delegate_, base::NotFatalUntil::M163);
 
   if (params.opacity == views::Widget::InitParams::WindowOpacity::kInferred) {
     params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
@@ -640,8 +646,8 @@ void Widget::Init(InitParams params) {
       GetColorProvider()->GetColor(GetBackgroundColorId()));
 
   UpdateAccessibleNameForRootView();
-  native_theme_observation_.Observe(GetNativeTheme());
   native_widget_initialized_ = true;
+  UpdateThemeObservation();
   native_widget_->OnWidgetInitDone();
 
   if (delegate) {
@@ -830,7 +836,7 @@ void Widget::SetContentsView(View* view) {
   // Windows, where the native widget thinks there is still a
   // |non_client_view_|. If you get this error, either use a different type when
   // initializing the widget, or don't call SetContentsView().
-  DCHECK(!non_client_view_);
+  CHECK(!non_client_view_, base::NotFatalUntil::M163);
 
   root_view_->SetContentsView(view);
 
@@ -1282,7 +1288,8 @@ void Widget::SetFullscreen(bool fullscreen, int64_t target_display_id) {
   }
   // It isn't valid to specify `target_display_id` when exiting fullscreen.
   if (!fullscreen) {
-    DCHECK(target_display_id == display::kInvalidDisplayId);
+    CHECK(target_display_id == display::kInvalidDisplayId,
+          base::NotFatalUntil::M163);
   }
   if (IsFullscreen() == fullscreen &&
       target_display_id == display::kInvalidDisplayId) {
@@ -1321,8 +1328,8 @@ void Widget::SetCanAppearInExistingFullscreenSpaces(
 }
 
 void Widget::SetOpacity(float opacity) {
-  DCHECK(opacity >= 0.0f);
-  DCHECK(opacity <= 1.0f);
+  CHECK(opacity >= 0.0f, base::NotFatalUntil::M163);
+  CHECK(opacity <= 1.0f, base::NotFatalUntil::M163);
   if (native_widget_) {
     native_widget_->SetOpacity(opacity);
   }
@@ -1603,7 +1610,7 @@ void Widget::ScheduleThemeChanged() {
     ThemeChanged();
     return;
   }
-  if (theme_update_scheduled_) {
+  if (is_destroying_ || widget_destroying_handled_ || theme_update_scheduled_) {
     return;
   }
   theme_update_scheduled_ = true;
@@ -1624,6 +1631,9 @@ void Widget::ThemeChanged() {
   theme_update_scheduled_ = false;
 
   if (base::FeatureList::IsEnabled(::features::kThemeChangeOptimization)) {
+    if (is_destroying_ || widget_destroying_handled_) {
+      return;
+    }
     const ui::ColorProviderKey current_key = GetColorProviderKey();
     if (last_color_provider_key_ && *last_color_provider_key_ == current_key) {
       return;
@@ -1899,15 +1909,26 @@ void Widget::NotifyPaintAsActiveChanged() {
 }
 
 void Widget::SetNativeTheme(ui::NativeTheme* native_theme) {
+  if (!native_widget_initialized_) {
+    native_theme_ = native_theme;
+    return;
+  }
+
+  const bool skip_redundant = base::FeatureList::IsEnabled(
+      features::kSkipRedundantSetNativeThemeUpdate);
   const bool is_update = native_theme_ && (native_theme_ != native_theme);
+  const ui::NativeTheme* const old_effective_theme =
+      skip_redundant ? GetNativeTheme() : nullptr;
   native_theme_ = native_theme;
-  native_theme_observation_.Reset();
-  if (native_theme) {
-    native_theme_observation_.Observe(native_theme);
+  UpdateThemeObservation();
+
+  ui::NativeTheme* const new_effective_theme = GetNativeTheme();
+  if (skip_redundant && new_effective_theme == old_effective_theme) {
+    return;
   }
 
   if (is_update) {
-    OnNativeThemeUpdated(native_theme);
+    OnNativeThemeUpdated(new_effective_theme);
   } else {
     ThemeChanged();
   }
@@ -2135,8 +2156,8 @@ void Widget::OnNativeWidgetCreated() {
     focus_manager_ = FocusManagerFactory::Create(this);
   }
 
-  DCHECK(native_widget_);
-  DCHECK(widget_delegate_);
+  CHECK(native_widget_, base::NotFatalUntil::M163);
+  CHECK(widget_delegate_, base::NotFatalUntil::M163);
   native_widget_->InitModalType(widget_delegate_->GetModalType());
 
   observers_.Notify(&WidgetObserver::OnWidgetCreated, this);
@@ -2145,7 +2166,7 @@ void Widget::OnNativeWidgetCreated() {
 void Widget::OnNativeWidgetDestroying() {
   // Tell the focus manager (if any) that root_view is being removed
   // in case that the focused view is under this root view.
-  DCHECK(native_widget_);
+  CHECK(native_widget_, base::NotFatalUntil::M163);
   HandleWidgetDestroying();
 }
 
@@ -2463,7 +2484,7 @@ void Widget::GetHitTestMask(SkPath* mask) const {
     return;
   }
 
-  DCHECK(mask);
+  CHECK(mask, base::NotFatalUntil::M163);
   widget_delegate_->GetWidgetHitTestMask(mask);
 }
 
@@ -2703,6 +2724,30 @@ void Widget::ResetLastColorProviderKey() {
   last_color_provider_key_.reset();
 }
 
+void Widget::UpdateThemeObservation() {
+  if (!native_widget_initialized_ || is_destroying_ ||
+      widget_destroying_handled_) {
+    native_theme_observation_.Reset();
+    return;
+  }
+
+  // When kThemeChangeOptimization is enabled, child widgets without an
+  // explicit `native_theme_` inherit theme updates via
+  // `parent_theme_observer_` instead of observing `NativeTheme` directly.
+  ui::NativeTheme* const theme_to_observe =
+      (!base::FeatureList::IsEnabled(::features::kThemeChangeOptimization) ||
+       !parent_ || native_theme_)
+          ? GetNativeTheme()
+          : nullptr;
+  if (!theme_to_observe ||
+      !native_theme_observation_.IsObservingSource(theme_to_observe)) {
+    native_theme_observation_.Reset();
+    if (theme_to_observe) {
+      native_theme_observation_.Observe(theme_to_observe);
+    }
+  }
+}
+
 void Widget::SetCheckParentForFullscreen() {
   check_parent_for_fullscreen_ = true;
 }
@@ -2845,7 +2890,7 @@ void Widget::SetInitialBounds(const gfx::Rect& bounds) {
 void Widget::SetInitialBoundsForFramelessWindow(const gfx::Rect& bounds) {
   if (bounds.IsEmpty()) {
     View* contents_view = GetContentsView();
-    DCHECK(contents_view);
+    CHECK(contents_view, base::NotFatalUntil::M163);
     // No initial bounds supplied, so size the window to its content and
     // center over its parent if preferred size is provided.
     gfx::Size size = contents_view->GetPreferredSize({});
@@ -2892,12 +2937,11 @@ void Widget::HandleNativeWidgetReparented(Widget* parent) {
         parent->RegisterPaintAsActiveChangedCallback(
             base::BindRepeating(&Widget::OnParentShouldPaintAsActiveChanged,
                                 base::Unretained(this)));
-    if (base::FeatureList::IsEnabled(::features::kThemeChangeOptimization)) {
-      parent_theme_observer_ =
-          std::make_unique<ParentThemeObserver>(this, parent);
-    } else {
-      parent_theme_observer_.reset();
-    }
+  }
+  if (base::FeatureList::IsEnabled(::features::kThemeChangeOptimization)) {
+    parent_theme_observer_ =
+        parent_ ? std::make_unique<ParentThemeObserver>(this, parent) : nullptr;
+    UpdateThemeObservation();
   } else {
     parent_theme_observer_.reset();
   }
@@ -2943,7 +2987,7 @@ bool Widget::GetSavedWindowPlacement(gfx::Rect* bounds,
 
 void Widget::UnlockPaintAsActive() {
   const bool was_paint_as_active = ShouldPaintAsActive();
-  DCHECK_GT(paint_as_active_refcount_, 0U);
+  CHECK_GT(paint_as_active_refcount_, 0U, base::NotFatalUntil::M163);
   --paint_as_active_refcount_;
 
   if (!paint_as_active_refcount_ && !native_widget_active_) {
@@ -3003,6 +3047,10 @@ void Widget::HandleWidgetDestroying() {
     parent_->OnChildRemoved(this);
   }
   parent_theme_observer_.reset();
+  if (base::FeatureList::IsEnabled(::features::kThemeChangeOptimization)) {
+    theme_update_scheduled_ = false;
+    native_theme_observation_.Reset();
+  }
   ClearFocusManagerFromWidget();
   observers_.Notify(&WidgetObserver::OnWidgetDestroying, this);
   if (non_client_view_) {

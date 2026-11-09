@@ -19,8 +19,7 @@ BASE_FEATURE(kSyncContextualTask, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncGeminiThread, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSyncEncryptedTabContextContainer,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kSyncEncryptedTabContext, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncThemesIos, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -56,20 +55,8 @@ bool IsContactInfoDataTypeForCustomPassphraseUsersEnabled() {
 BASE_FEATURE(kSyncEnableContactInfoDataTypeForDasherUsers,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kReplaceSyncPromosWithSignInPromos,
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
-
 bool IsReplaceSyncPromosWithSignInPromosEnabled() {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   return true;
-#else
-  return base::FeatureList::IsEnabled(kReplaceSyncPromosWithSignInPromos);
-#endif
 }
 
 // Like DECLARE_SYNC_AUTOFILL_AI_FEATURE but for the definition.
@@ -106,9 +93,6 @@ DEFINE_SYNC_AUTOFILL_AI_FEATURE(kSyncWalletVehicleRegistrations);
 
 BASE_FEATURE(kSpellcheckSeparateLocalAndAccountDictionaries,
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-
-BASE_FEATURE(kSeparateLocalAndAccountThemes, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncIncreaseNudgeDelayForSingleClient,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -147,7 +131,7 @@ BASE_FEATURE(kSyncDoNotSyncAppsAndAppSettings,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncWipeAppsAndAppSettingsData,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)

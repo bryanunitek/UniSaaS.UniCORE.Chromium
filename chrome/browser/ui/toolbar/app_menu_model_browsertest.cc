@@ -370,7 +370,15 @@ IN_PROC_BROWSER_TEST_F(AppMenuModelGlicTest, GlicItem) {
 
 class AppMenuModelTtcTest : public AppMenuModelTest {
  protected:
-  AppMenuModelTtcTest() { feature_list_.InitAndEnableFeature(ttc::kTtc); }
+  AppMenuModelTtcTest() {
+    feature_list_.InitAndEnableFeature(ttc::kTtc);
+    // ChromeOS creates `TtcKeyedService` only where Glic's system requirements
+    // are met.
+    glic::GlicEnabling::SetSystemRequirementMetForTesting(true);
+  }
+  ~AppMenuModelTtcTest() override {
+    glic::GlicEnabling::SetSystemRequirementMetForTesting(std::nullopt);
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(AppMenuModelTtcTest, TtcItem) {
@@ -1170,10 +1178,7 @@ IN_PROC_BROWSER_TEST_F(
 class AppMenuModelBookmarkLimitExceededSignedInNonSyncingTest
     : public AppMenuModelTest {
  public:
-  AppMenuModelBookmarkLimitExceededSignedInNonSyncingTest() {
-    feature_list_.InitAndEnableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
-  }
+  AppMenuModelBookmarkLimitExceededSignedInNonSyncingTest() = default;
 
   void SetUpBrowserContextKeyedServices(
       content::BrowserContext* context) override {

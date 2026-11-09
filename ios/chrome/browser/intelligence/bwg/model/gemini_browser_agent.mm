@@ -6,6 +6,8 @@
 
 #import <AVFoundation/AVFoundation.h>
 
+#import <optional>
+
 #import "base/barrier_closure.h"
 #import "base/check.h"
 #import "base/containers/map_util.h"
@@ -53,7 +55,7 @@
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_session_delegate.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_session_handler.h"
-#import "ios/chrome/browser/intelligence/bwg/model/gemini_shared_tabs_delegate.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_shared_tabs_manager.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_startup_configuration.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_suggestion_delegate.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_suggestion_handler.h"
@@ -420,7 +422,7 @@ GeminiBrowserAgent::GeminiBrowserAgent(Browser* browser)
       authenticationService:AuthenticationServiceFactory::GetForProfile(
                                 browser_->GetProfile())
                eventHandler:this
-         sharedTabsDelegate:this
+          sharedTabsManager:GetSharedTabsManager()
       sessionMetricsManager:session_metrics_manager_];
 }
 
@@ -945,8 +947,9 @@ CGFloat GeminiBrowserAgent::GetFloatyOffset() {
         [layout_guide_center referencedViewUnderName:kAppBarGuide];
     if (app_bar_view &&
         scene_state.layoutState.appBarPosition == AppBarPosition::kBottom) {
-      CGFloat portrait_height =
-          is_floaty_invoked_ ? kAppBarHeightFullscreen : AppBarHeightPortrait();
+      CGFloat portrait_height = CurrentAppBarHeightPortrait(
+          is_floaty_invoked_,
+          scene_state.layoutState.assistantContainerInvoked);
       max_bottom_inset += portrait_height;
     }
   }
@@ -989,8 +992,9 @@ CGFloat GeminiBrowserAgent::GetFullyExpandedFloatyOffset() {
         [layout_guide_center referencedViewUnderName:kAppBarGuide];
     if (app_bar_view &&
         scene_state.layoutState.appBarPosition == AppBarPosition::kBottom) {
-      CGFloat portrait_height =
-          is_floaty_invoked_ ? kAppBarHeightFullscreen : AppBarHeightPortrait();
+      CGFloat portrait_height = CurrentAppBarHeightPortrait(
+          is_floaty_invoked_,
+          scene_state.layoutState.assistantContainerInvoked);
       max_bottom_inset += portrait_height;
     }
   }
@@ -1090,46 +1094,22 @@ void GeminiBrowserAgent::UpdateForTraitCollection(
 
 void GeminiBrowserAgent::HandleDormantStatus(
     ios::provider::GeminiDormantReason dormant_reason) {
-  if (IsGeminiLiveDormantReasonsEnabled()) {
-    switch (dormant_reason) {
-      case ios::provider::GeminiDormantReason::kLowVolumeInBackground:
-      case ios::provider::GeminiDormantReason::kLowVolumeInForeground:
-      case ios::provider::GeminiDormantReason::kInterruptedByExternalAudio:
-      case ios::provider::GeminiDormantReason::kUserStop:
-      case ios::provider::GeminiDormantReason::kUserPause:
-        SwitchToChatModeOrDismiss(/*animated=*/true,
-                                  ios::provider::GeminiViewState::kExpanded);
-        break;
-      case ios::provider::GeminiDormantReason::kInactivityTimeout:
-        SwitchToChatModeOrDismiss(/*animated=*/true,
-                                  ios::provider::GeminiViewState::kCollapsed);
-        is_showing_live_session_dormant_snackbar_ = true;
-        ShowLiveSessionDormantSnackbar(
-            IDS_IOS_GEMINI_LIVE_CONTINUE_SESSION_SNACKBAR);
-        break;
-      case ios::provider::GeminiDormantReason::kLongInteractionTimeout:
-      case ios::provider::GeminiDormantReason::kServerPause:
-        SwitchToChatModeOrDismiss(/*animated=*/true,
-                                  ios::provider::GeminiViewState::kCollapsed);
-        is_showing_live_session_dormant_snackbar_ = true;
-        ShowLiveSessionDormantSnackbar(
-            IDS_IOS_GEMINI_LIVE_SERVER_PAUSE_SNACKBAR);
-        break;
-      default:
-        SwitchToChatModeOrDismiss(/*animated=*/true,
-                                  ios::provider::GeminiViewState::kCollapsed);
-        is_showing_live_session_dormant_snackbar_ = true;
-        ShowLiveSessionDormantSnackbar(
-            IDS_IOS_GEMINI_LIVE_GENERAL_DORMANT_SNACKBAR);
-        break;
-    }
-  } else {
+  std::optional<int> message_id =
+      gemini::GetLiveDormantSnackbarMessageId(dormant_reason);
+  if (!message_id.has_value()) {
+    // Mode switches to chat default to `kExpanded` when no dormant snackbar
+    // needs to be shown.
     SwitchToChatModeOrDismiss(/*animated=*/true,
-                              ios::provider::GeminiViewState::kCollapsed);
-    is_showing_live_session_dormant_snackbar_ = true;
-    ShowLiveSessionDormantSnackbar(
-        IDS_IOS_GEMINI_LIVE_GENERAL_DORMANT_SNACKBAR);
+                              ios::provider::GeminiViewState::kExpanded);
+    return;
   }
+
+  // Collapse the floaty when showing a dormant snackbar so the snackbar appears
+  // above the minimized pill without overlapping the expanded chat UI.
+  SwitchToChatModeOrDismiss(/*animated=*/true,
+                            ios::provider::GeminiViewState::kCollapsed);
+  is_showing_live_session_dormant_snackbar_ = true;
+  ShowLiveSessionDormantSnackbar(*message_id);
 }
 
 void GeminiBrowserAgent::LogLiveStatusTransition(
@@ -1248,7 +1228,9 @@ void GeminiBrowserAgent::OnProcessingStatusChanged(
     }
     case ios::provider::GeminiClientMode::kDormant:
       RecordGeminiLiveDormantReason(dormant_reason);
-      HandleDormantStatus(dormant_reason);
+      if (!IsIOSGeminiBottomSheetMigrationEnabled()) {
+        HandleDormantStatus(dormant_reason);
+      }
       LogLiveSessionMetrics();
       break;
     default:
@@ -1479,6 +1461,10 @@ void GeminiBrowserAgent::OnTabPickerSelectionChanged(
 
   ios::provider::UpdateActivePageContext(active_page_context,
                                          GetInactiveSharedTabs());
+}
+
+GeminiSharedTabsManager* GeminiBrowserAgent::GetSharedTabsManager() {
+  return this;
 }
 
 std::set<web::WebStateID> GeminiBrowserAgent::GetSelectedTabsForTabPicker()

@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -74,6 +75,12 @@ NET_EXPORT extern const base::FeatureParam<base::TimeDelta>
 NET_EXPORT BASE_DECLARE_FEATURE(kDnsPlatformFailFastAndRetry);
 NET_EXPORT extern const base::FeatureParam<bool>
     kDnsPlatformCancelPreviousAttemptOnRetry;
+
+// If enabled, HostResolverDnsTask ignores errors from an address (A/AAAA) DNS
+// transaction if the sibling address transaction succeeds with usable
+// addresses, rather than failing the entire DnsTask and falling back to the
+// system resolver.
+NET_EXPORT BASE_DECLARE_FEATURE(kDnsTaskAllowPartialAddressResults);
 
 // Enables querying HTTPS DNS records that will affect results from HostResolver
 // and may be used to affect connection behavior. Whether or not those results
@@ -316,6 +323,17 @@ NET_EXPORT BASE_DECLARE_FEATURE_PARAM(bool, kFallbackInLowPowerMode);
 // Enables Connection Keep-Alive feature for Http2
 NET_EXPORT BASE_DECLARE_FEATURE(kConnectionKeepAliveForHttp2);
 
+// Configures the client-side initial RTT for QUIC preconnect sessions when no
+// cached or 2G/3G RTT estimate is available, reducing the initial handshake
+// Probe Timeout (PTO) delay (`3 * initial_rtt`).
+NET_EXPORT BASE_DECLARE_FEATURE(kQuicPreconnectInitialRtt);
+NET_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
+                                      kQuicPreconnectInitialRttParam);
+// Returns `kQuicPreconnectInitialRttParam` when `kQuicPreconnectInitialRtt` is
+// enabled and the configured duration is positive and finite; otherwise returns
+// `std::nullopt`.
+NET_EXPORT std::optional<base::TimeDelta> GetQuicPreconnectInitialRtt();
+
 // When enabled, the time threshold for Lax-allow-unsafe cookies will be lowered
 // from 2 minutes to 10 seconds. This time threshold refers to the age cutoff
 // for which cookies that default into SameSite=Lax, which are newer than the
@@ -367,6 +385,11 @@ NET_EXPORT BASE_DECLARE_FEATURE(kStaticKeyPinningEnforcement);
 
 // When enabled, cookies with a non-ASCII domain attribute will be rejected.
 NET_EXPORT BASE_DECLARE_FEATURE(kCookieDomainRejectNonASCII);
+
+// When enabled, HTTP/HTTPS/WS/WSS URLs with non-IP hosts must have a
+// DNS-compliant canonicalized host (via net::IsCanonicalizedHostCompliant())
+// to set or retrieve cookies.
+NET_EXPORT BASE_DECLARE_FEATURE(kCookieRequireCompliantHost);
 
 NET_EXPORT BASE_DECLARE_FEATURE(kThirdPartyStoragePartitioning);
 
@@ -700,6 +723,12 @@ NET_EXPORT BASE_DECLARE_FEATURE_PARAM(int,
 
 // If enabled, ignore Strict-Transport-Security for [*.]localhost hosts.
 NET_EXPORT BASE_DECLARE_FEATURE(kIgnoreHSTSForLocalhost);
+
+// If enabled, URLRequests for http, https, ws, and wss URLs whose hostnames are
+// not valid DNS names (per IsCanonicalizedHostCompliant()) fail with
+// ERR_INVALID_URL. Without this, such requests may still be sent through a
+// proxy, bypassing HSTS, which can't be applied to such hosts.
+NET_EXPORT BASE_DECLARE_FEATURE(kRejectNonCompliantHttpHosts);
 
 // If enabled, main frame navigation resources will be prioritized in Simple
 // Cache and SQL Cache. So they will be less likely to be evicted.
@@ -1106,6 +1135,11 @@ NET_EXPORT BASE_DECLARE_FEATURE_PARAM(bool, kCookieProcessBoundEncryptHttpOnly);
 
 // Enables the Rust implementation of the HTTP chunked decoder, called via FFI.
 NET_EXPORT BASE_DECLARE_FEATURE(kHttpChunkedDecoderInRust);
+
+// Enables checking all resolved IP endpoints (and preserving DNS aliases) for
+// post-handshake cross-origin IP pooling in QUIC and HTTP/2 when concurrent
+// connection attempts complete.
+NET_EXPORT BASE_DECLARE_FEATURE(kPostHandshakeIpPoolingAllEndpoints);
 
 }  // namespace net::features
 

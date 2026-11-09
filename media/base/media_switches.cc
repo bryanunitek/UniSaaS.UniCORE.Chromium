@@ -301,6 +301,21 @@ const char kAlsaOutputDevice[] = "alsa-output-device";
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_FREEBSD) || BUILDFLAG(IS_SOLARIS)
 
+#if BUILDFLAG(IS_MAC)
+// Test-only. Replaces the native screen capture picker (SCContentSharingPicker)
+// with a fake picker that selects a source automatically, without showing any
+// UI. The fake picker can only capture the browser's own windows, which
+// doesn't require screen recording permission.
+// The optional value filters the browser windows by title (substring match).
+// The largest matching window is used for both window and screen selection:
+// window capture captures that window, and screen capture captures the display
+// that overlaps it the most. Without a value, the largest browser window is
+// used. Only has an effect if the UseSCContentSharingPicker feature is enabled.
+// Example: --use-fake-native-screen-capture-picker="Page title"
+const char kUseFakeNativeScreenCapturePicker[] =
+    "use-fake-native-screen-capture-picker";
+#endif  // BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_WIN)
 // Use exclusive mode audio streaming for Windows Vista and higher.
 // Leads to lower latencies for audio streams which uses the
@@ -532,11 +547,14 @@ BASE_FEATURE(kDeferAudioFocusUntilAudible,
 // (instead of the FFmpegAudioDecoder).
 BASE_FEATURE(kDirectOpusAudioDecoding, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Killswitch for disallowing mixing opaque and non-opaque responses in
+// Killswitch for disallowing mixing opaque and non-opaque responses and
+// skipping Service Workers after network redirects in
 // ResourceMultiBufferDataProvider (crbug.com/572363265).
-// TODO(crbug.com/572363265): Remove after M158 reaches stable.
+// TODO(crbug.com/572363265): Remove killswitch (keeping mixed-opacity responses
+// disallowed and post-redirect Service Worker skipping enabled) after M159
+// reaches stable.
 BASE_FEATURE(kDisallowMixedOpaqueMediaResponses,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Adds an animation to document picture-in-picture resizes.
 BASE_FEATURE(kDocumentPictureInPictureAnimateResize,
@@ -785,6 +803,11 @@ BASE_FEATURE(kLogSodaLoadFailures,
              "kLogSodaLoadFailures",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Killswitch for applying leading empty edit list entries in MP4 MSE streams
+// (crbug.com/537235698).
+// TODO(crbug.com/537235698): Remove after M159 reaches stable.
+BASE_FEATURE(kMP4ApplyEmptyEditList, base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kMP4TimedMetadataTrack, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Allows Chrome to reconfigure the sink to match the channel count of the
@@ -1026,13 +1049,6 @@ BASE_FEATURE(kUseSequencedTaskRunnerForMojoVEAProvider,
 //   for thread safety.
 BASE_FEATURE(kUseTaskRunnerForMojoAudioDecoderService,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-// When enabled, determines whether a VideoFrame requires copying before display
-// based on whether the SharedImage usage includes
-// SHARED_IMAGE_USAGE_DISPLAY_READ, rather than using
-// VideoFrameMetadata::copy_required.
-BASE_FEATURE(kUseSharedImageUsageForVideoFrameCopy,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Safety switch to allow us to revert to the previous behavior of using the
 // restored bounds for PiP windows, rather than the window bounds.  If this
@@ -1318,8 +1334,13 @@ BASE_FEATURE(kFullscreenVideoPictureInPicture,
 
 // Enables block model on supported devices.
 // Block model is only supported on Android 17 26Q4+ where the feature is
-// properly supported by the framework.
+// properly supported by the framework. Decoders that use a MediaCrypto also
+// need kMediaCodecBlockModelEncrypted.
 BASE_FEATURE(kMediaCodecBlockModel, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables block model for decoders that use a MediaCrypto (encrypted
+// playback). Has no effect unless kMediaCodecBlockModel is enabled.
+BASE_FEATURE(kMediaCodecBlockModelEncrypted, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables output-side block model (OutputFrame) on supported devices.
 BASE_FEATURE(kMediaCodecBlockModelOutput, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -1447,8 +1468,6 @@ BASE_FEATURE(kCrOSDspBasedAgcDeactivatedGroups,
 
 BASE_FEATURE(kCrOSDspBasedNsDeactivatedGroups,
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kCrOSEnforceMonoAudioCapture, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCrOSEnforceSystemAec, base::FEATURE_ENABLED_BY_DEFAULT);
 

@@ -14,7 +14,8 @@ import type {TemplateResult} from '//resources/lit/v3_0/lit.rollup.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import {TabGroupDotSize} from '/tab_group_shared/tab_group_dot.js';
 
-import type {OrganizerListSectionClient, OrganizerListSectionDelegate} from '../organizer_list_section_delegate.js';
+import type {OrganizerAction, OrganizerListSectionClient, OrganizerListSectionDelegate, OrganizerSection} from '../organizer_list_section_delegate.js';
+import {OrganizerPanelCloseAction, setCloseAction} from '../organizer_list_section_delegate.js';
 import type {OrganizerListSectionItem} from '../organizer_list_section_item.js';
 import type {BrowserProxy as OrganizerPanelBrowserProxy} from '../organizer_panel.mojom-webui.js';
 import {browserProxyFactory as organizerPanelBrowserProxyFactory} from '../organizer_panel.mojom-webui.js';
@@ -53,6 +54,10 @@ export class TabGroupsDelegate implements
     return loadTimeData.getString('tabGroups');
   }
 
+  getHistogramSectionName(): OrganizerSection {
+    return 'TabGroups';
+  }
+
   async getItems(): Promise<Array<OrganizerListSectionItem<TabGroup>>> {
     const {tabGroups} = await this.browserProxy_.handler.getTabGroups();
     this.tabGroups_ = tabGroups;
@@ -81,19 +86,28 @@ export class TabGroupsDelegate implements
   }
 
   private onCreateTabGroupClick_() {
+    chrome.histograms?.recordUserAction?.('OrganizerPanel.CreateTabGroup');
+    setCloseAction(OrganizerPanelCloseAction.CREATE_TAB_GROUP);
     this.organizerPanelBrowserProxy_.handler.closePanel();
     this.browserProxy_.handler.createNewTabGroup();
   }
 
   onItemClick(item: OrganizerListSectionItem<TabGroup>) {
+    chrome.histograms?.recordUserAction?.('OrganizerPanel.OpenTabGroup');
+    setCloseAction(OrganizerPanelCloseAction.OPEN_TAB_GROUP);
     const data = item.data;
     assert(data);
     this.browserProxy_.handler.openTabGroup(data.id);
   }
 
+  getItemClickAction(): OrganizerAction {
+    return 'OpenTabGroup';
+  }
+
   async onItemActionButtonClicked(
       item: OrganizerListSectionItem<TabGroup>, buttonElement: HTMLElement) {
     assert(item.data);
+    setCloseAction(OrganizerPanelCloseAction.OPEN_TAB_GROUP_MENU);
     const rect = buttonElement.getBoundingClientRect();
     await this.browserProxy_.handler.showContextMenu(item.data.id, {
       x: Math.round(rect.x),
@@ -106,6 +120,7 @@ export class TabGroupsDelegate implements
   async onItemContextMenuClicked(
       item: OrganizerListSectionItem<TabGroup>, x: number, y: number) {
     assert(item.data);
+    setCloseAction(OrganizerPanelCloseAction.OPEN_TAB_GROUP_MENU);
     await this.browserProxy_.handler.showContextMenu(item.data.id, {
       x: Math.round(x),
       y: Math.round(y),

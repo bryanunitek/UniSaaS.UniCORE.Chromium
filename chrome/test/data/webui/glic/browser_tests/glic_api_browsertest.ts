@@ -5,6 +5,7 @@
 // cc_file_path: chrome/browser/glic/host/glic_api_browsertest.cc
 
 import {                             //
+  ActuationTarget,                   //
   CancelActionsResult,               //
   ClientCapabilities,                //
   ExperimentalTriggeringUpdateType,  //
@@ -20,6 +21,7 @@ import {                             //
   SbThreatType,                      //
   ScreenshotEncryptionScheme,        //
   ScrollToErrorReason,               //
+  TooltipImpressionType,             //
   WebClientMode,                     //
   WebUseCounter,                     //
 } from '/glic/glic_api/glic_api.js';
@@ -1402,14 +1404,24 @@ class ApiTests extends ApiTestFixtureBase {
     assertDefined(this.host.getPanelState);
     assertDefined(this.host.detachPanel);
     assertDefined(this.host.canAttachPanel);
+    const isGeic = Boolean((this.initData as any)?.isGeic);
     const link = document.createElement('a');
     link.setAttribute('href', 'https://www.chromium.org');
     link.setAttribute('target', '_blank');
     document.body.appendChild(link);
     link.click();
-    // The opened tab should be pinned.
-    await observeSequence(this.host.getPinnedTabs())
-        .waitFor(tabs => tabs.length === 2);
+    if (isGeic) {
+      // In GEiC, the opened tab is daisy-chained (bound) but not auto-pinned.
+      await observeSequence(this.host.getFocusedTabStateV2())
+          .waitFor(
+              state => state.hasNoFocus?.tabFocusCandidateData?.url ===
+                  'https://www.chromium.org/');
+      assertEquals(1, this.host.getPinnedTabs().getCurrentValue()?.length);
+    } else {
+      // The opened tab should be pinned.
+      await observeSequence(this.host.getPinnedTabs())
+          .waitFor(tabs => tabs.length === 2);
+    }
 
     // Detach panel
     this.host.detachPanel!();
@@ -1667,14 +1679,24 @@ class ApiTests extends ApiTestFixtureBase {
   async testCreateTabByClickingOnLinkDaisyChains() {
     assertDefined(this.host.getFocusedTabStateV2);
     assertDefined(this.host.getPinnedTabs);
+    const isGeic = Boolean((this.initData as any)?.isGeic);
     const link = document.createElement('a');
     link.setAttribute('href', 'https://www.chromium.org');
     link.setAttribute('target', '_blank');
     document.body.appendChild(link);
     link.click();
-    // The opened tab should be pinned.
-    await observeSequence(this.host.getPinnedTabs())
-        .waitFor(tabs => tabs.length === 2);
+    if (isGeic) {
+      // In GEiC, the opened tab is daisy-chained (bound) but not auto-pinned.
+      await observeSequence(this.host.getFocusedTabStateV2())
+          .waitFor(
+              state => state.hasNoFocus?.tabFocusCandidateData?.url ===
+                  'https://www.chromium.org/');
+      assertEquals(1, this.host.getPinnedTabs().getCurrentValue()?.length);
+    } else {
+      // The opened tab should be pinned.
+      await observeSequence(this.host.getPinnedTabs())
+          .waitFor(tabs => tabs.length === 2);
+    }
   }
 
   async testFailureForCapturedApiTestError() {
@@ -2881,6 +2903,7 @@ class ApiTests extends ApiTestFixtureBase {
     assertDefined(metrics.onResponseStopped);
     assertDefined(metrics.onSessionTerminated);
     assertDefined(metrics.onClosedCaptionsShown);
+    assertDefined(metrics.onTooltipImpression);
     metrics.onResponseRated(true);
     metrics.onUserInputSubmitted(WebClientMode.TEXT);
     metrics.onContextUploadStarted();
@@ -2890,6 +2913,7 @@ class ApiTests extends ApiTestFixtureBase {
     metrics.onResponseStopped({cause: ResponseStopCause.USER});
     metrics.onSessionTerminated();
     metrics.onClosedCaptionsShown();
+    metrics.onTooltipImpression(TooltipImpressionType.TOOLTIP1);
   }
 
   async testUserInputSubmittedPromptType() {
@@ -3302,6 +3326,28 @@ class InvokeTest extends ApiTests {
     assertTrue(
         client.lastInvokeOptions!.payload?.captureRegion
             ?.captureRegionHandoff === true);
+  }
+
+  // Waits for the client's invoke() call and returns its options.
+  async waitForInvokeOptions(): Promise<InvokeOptions> {
+    const client = this.getInvokeClient();
+    await runUntil(() => client.lastInvokeOptions !== null);
+    assertDefined(client.lastInvokeOptions);
+    return client.lastInvokeOptions;
+  }
+
+  async testInvokeWithActuationSurface() {
+    const options = await this.waitForInvokeOptions();
+    assertEquals(options.actuationTarget, ActuationTarget.TARGET_SURFACE);
+    // `testParams` is the headless surface ID sent by the C++ side.
+    assertEquals(options.actuationTabId, this.testParams);
+  }
+
+  async testInvokeWithTargetSurfaceSendsTabSurfaceId() {
+    const options = await this.waitForInvokeOptions();
+    assertEquals(options.actuationTarget, ActuationTarget.TARGET_SURFACE);
+    // `testParams` is the invoked tab's surface ID sent by the C++ side.
+    assertEquals(options.actuationTabId, this.testParams);
   }
 }
 

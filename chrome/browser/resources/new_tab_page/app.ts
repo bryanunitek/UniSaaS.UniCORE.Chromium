@@ -7,13 +7,13 @@ import './ntp_searchbox.js';
 import './left_hand_side.js';
 import '/strings.m.js';
 
-import {SearchboxBrowserProxy} from '//resources/cr_components/searchbox/searchbox_browser_proxy.js';
 import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {GlifAnimationState, VoiceSearchAction as ComposeVoiceSearchAction} from 'chrome://resources/cr_components/composebox/common.js';
 import type {ComposeboxState} from 'chrome://resources/cr_components/composebox/common.js';
 import type {ComposeboxVoiceSearchElement, VoicePermissionPromptState} from 'chrome://resources/cr_components/composebox/composebox_voice_search.js';
 import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 import type {SearchAnimatedGlowElement} from 'chrome://resources/cr_components/search/animated_glow.js';
+import {SearchboxBrowserProxy} from 'chrome://resources/cr_components/searchbox/searchbox_browser_proxy.js';
 import type {CrToastElement} from 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import type {ClickInfo} from 'chrome://resources/js/browser_command.mojom-webui.js';
@@ -31,7 +31,6 @@ import {ModelMode, ToolMode} from 'chrome://resources/mojo/components/omnibox/co
 import type {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
 
 import type {ActionChipClickDetail} from './action_chips/action_chips.js';
-import {ActionChipsRetrievalState} from './action_chips/action_chips_proxy.js';
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
 import {BackgroundManager} from './background_manager.js';
@@ -41,14 +40,14 @@ import {CustomizeChromeSection} from './customize_chrome.mojom-webui.js';
 import {CustomizeDialogPage} from './customize_dialog_types.js';
 import type {IframeElement} from './iframe.js';
 import type {LogoElement} from './logo.js';
-import {recordBoolean, recordDuration, recordEnumeration, recordLinearValue, recordLoadDuration, recordSparseValueWithPersistentHash, recordVoiceAction, VoiceAction} from './metrics_utils.js';
+import {recordBoolean, recordDuration, recordEnumeration, recordLinearValue, recordSparseValueWithPersistentHash, recordVoiceAction, VoiceAction} from './metrics_utils.js';
 import {ParentTrustedDocumentProxy} from './modules/microsoft_auth_frame_connector.js';
 import type {PageCallbackRouter, PageHandlerInterface, Theme} from './new_tab_page.mojom-webui.js';
 import {browserProxyFactory as newTabPageProxyFactory, NtpBackgroundImageSource} from './new_tab_page.mojom-webui.js';
 import type {NtpComposeboxElement} from './ntp_composebox.js';
 import {ShowNtpPromosResult} from './ntp_promo.mojom-webui.js';
 import type {NtpSearchboxElement} from './ntp_searchbox.js';
-import {$$} from './utils.js';
+import {$$, ActionChipsRetrievalState} from './utils.js';
 import {WindowProxy} from './window_proxy.js';
 
 enum ModuleLoadStatus {
@@ -1093,7 +1092,7 @@ export class AppElement extends AppElementBase {
           ?.focusInput();
     }
     if (!this.wasComposeboxOpened_) {
-      recordLoadDuration(
+      recordDuration(
           'NewTabPage.Composebox.FromNTPLoadToSessionStart',
           WindowProxy.getInstance().now());
       this.wasComposeboxOpened_ = true;
@@ -1456,7 +1455,7 @@ export class AppElement extends AppElementBase {
   private onModulesLoadedChange_() {
     if (this.modulesLoaded_ &&
         loadTimeData.getBoolean('modulesEnabled')) {
-      recordLoadDuration(
+      recordDuration(
           'NewTabPage.Modules.ShownTime', WindowProxy.getInstance().now());
     }
   }

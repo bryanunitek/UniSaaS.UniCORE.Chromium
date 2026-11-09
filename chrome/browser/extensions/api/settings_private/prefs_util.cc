@@ -1016,8 +1016,6 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
   (*s_allowlist)[ash::kStatsReportingPref] = settings_api::PrefType::kBoolean;
   (*s_allowlist)[::metrics::prefs::kMetricsUserConsent] =
       settings_api::PrefType::kBoolean;
-  (*s_allowlist)[ash::prefs::kSuggestedContentEnabled] =
-      settings_api::PrefType::kBoolean;
   (*s_allowlist)[ash::kAttestationForContentProtectionEnabled] =
       settings_api::PrefType::kBoolean;
   (*s_allowlist)[ash::kDevicePeripheralDataAccessEnabled] =
@@ -1181,7 +1179,7 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
       settings_api::PrefType::kDictionary;
   (*s_allowlist)[ash::kDisplayRotationDefault] =
       settings_api::PrefType::kDictionary;
-  (*s_allowlist)[::prefs::kAllowExcludeDisplayInMirrorMode] =
+  (*s_allowlist)[ash::prefs::kAllowExcludeDisplayInMirrorMode] =
       settings_api::PrefType::kBoolean;
   (*s_allowlist)[arc::prefs::kArcVisibleExternalStorages] =
       settings_api::PrefType::kList;
@@ -1362,9 +1360,6 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
       optimization_guide::UserVisibleFeatureKey::kWallpaperSearch)] =
       settings_api::PrefType::kNumber;
   (*s_allowlist)[optimization_guide::prefs::GetSettingEnabledPrefName(
-      optimization_guide::UserVisibleFeatureKey::kHistorySearch)] =
-      settings_api::PrefType::kNumber;
-  (*s_allowlist)[optimization_guide::prefs::GetSettingEnabledPrefName(
       optimization_guide::UserVisibleFeatureKey::kPasswordChangeSubmission)] =
       settings_api::PrefType::kNumber;
   (*s_allowlist)[contextual_tasks::kContextualTasksShareOpenTabsEveryThread] =
@@ -1399,6 +1394,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
       settings_api::PrefType::kNumber;
 
   // Glic prefs
+  (*s_allowlist)[glic::prefs::kGlicAssistantSelection] =
+      settings_api::PrefType::kNumber;
   (*s_allowlist)[glic::prefs::kGlicPinnedToTabstrip] =
       settings_api::PrefType::kBoolean;
   (*s_allowlist)[glic::prefs::kGlicLauncherEnabled] =

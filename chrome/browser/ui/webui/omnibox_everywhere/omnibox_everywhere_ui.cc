@@ -43,6 +43,7 @@
 #include "chrome/browser/ui/webui/omnibox_everywhere/composebox_everywhere_handler.h"
 #include "chrome/browser/ui/webui/omnibox_everywhere/debug/omnibox_everywhere_debug_page_handler.h"
 #include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_handler.h"
+#include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_hotkey_bubble_view.h"
 #include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_page_handler.h"
 #include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/common/webui_url_constants.h"
@@ -282,6 +283,9 @@ OmniboxEverywhereUI::OmniboxEverywhereUI(content::WebUI* web_ui)
       {"loomniboxFreWhereToFindPrimary",
        IDS_LOOMNIBOX_FRE_WHERE_TO_FIND_PRIMARY},
       {"managedByYourOrganization", IDS_MANAGED},
+      // Reuses the standard "More options" accessible label for the overflow
+      // (three-dot) button.
+      {"overflowMenuButtonLabel", IDS_FUSEBOX_MORE_OPTIONS},
       {"profileButtonLabel", IDS_OVERFLOW_MENU_ITEM_TEXT_PROFILE},
       {"profileTooltipHeader", IDS_OMNIBOX_EVERYWHERE_PROFILE_TOOLTIP},
       {"screenshotEntireScreenLabel", IDS_OMNIBOX_EVERYWHERE_ENTIRE_SCREEN},
@@ -409,6 +413,10 @@ OmniboxEverywhereUI::OmniboxEverywhereUI(content::WebUI* web_ui)
       "ntpRealboxDynamicAiModeButton",
       is_fusebox_enabled && base::FeatureList::IsEnabled(
                                 ntp_realbox::kNtpRealboxDynamicAiModeButton));
+  source->AddBoolean(
+      "ntpRealboxDynamicAiModeButtonPreventEarlyPaint",
+      base::FeatureList::IsEnabled(
+          ntp_realbox::kNtpRealboxDynamicAiModeButtonPreventEarlyPaint));
   source->AddBoolean("composeboxShowTypedSuggest",
                      omnibox::kShowComposeboxTypedSuggest.Get());
   source->AddBoolean("composeboxShowZps", omnibox::kShowComposeboxZps.Get());
@@ -1126,6 +1134,35 @@ void OmniboxEverywhereUI::OnContextMenuClosed() {
   SynthesizeMouseMoveEvent();
 }
 
+void OmniboxEverywhereUI::OnOverflowMenuClosed() {
+  if (page_handler_) {
+    page_handler_->OnOverflowMenuClosed();
+  }
+  // Clear stale hover state on the overflow button after the menu closes.
+  SynthesizeMouseMoveEvent();
+}
+
+void OmniboxEverywhereUI::CancelTransientUi() {
+  if (context_menu_) {
+    context_menu_->Cancel();
+    context_menu_.reset();
+  }
+  if (screenshot_menu_runner_ && screenshot_menu_runner_->IsRunning()) {
+    screenshot_menu_runner_->Cancel();
+  }
+  ResetScreenshotMenu();
+  if (file_selector_) {
+    file_selector_->CancelFileSelection();
+  }
+  if (omnibox_handler_) {
+    omnibox_handler_->CleanupDrivePicker();
+  }
+  if (composebox_handler_) {
+    composebox_handler_->CleanupDrivePicker();
+  }
+  omnibox_everywhere::OmniboxEverywhereHotkeyBubbleView::CloseIfOpen();
+}
+
 void OmniboxEverywhereUI::OnFileChooserOpened() {
   if (auto* service =
           OmniboxEverywhereServiceFactory::GetForProfile(profile_)) {
@@ -1182,6 +1219,27 @@ void OmniboxEverywhereUI::ShowContextActionMenu(const gfx::Rect& anchor_rect) {
       base::BindRepeating(&OmniboxEverywhereUI::OnContextMenuClosed,
                           weak_factory_.GetWeakPtr()));
   context_menu_->RunMenuAt(screen_point, ui::mojom::MenuSourceType::kNone);
+}
+
+// The overflow menu is hosted by `OmniboxEverywhereUIManager` (via the service)
+// so it shares the right-click menu's model, command handling, and dismissal
+// suppression (the popup must stay open while the native menu has activation).
+void OmniboxEverywhereUI::ShowOverflowMenu(
+    const gfx::Rect& anchor_rect,
+    ui::mojom::MenuSourceType source_type) {
+  content::WebContents* web_contents = web_ui()->GetWebContents();
+  auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
+  if (!web_contents || !service) {
+    OnOverflowMenuClosed();
+    return;
+  }
+  // `anchor_rect` is in WebUI viewport coordinates; offset it by the
+  // WebContents' screen position to get screen DIP coordinates.
+  service->ShowOverflowMenu(
+      anchor_rect + web_contents->GetContainerBounds().OffsetFromOrigin(),
+      source_type,
+      base::BindOnce(&OmniboxEverywhereUI::OnOverflowMenuClosed,
+                     weak_factory_.GetWeakPtr()));
 }
 
 // static

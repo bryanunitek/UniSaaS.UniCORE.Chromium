@@ -89,7 +89,6 @@
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "components/signin/public/identity_manager/test_identity_manager_observer.h"
 #include "components/signin/public/identity_manager/tribool.h"
-#include "components/sync/base/features.h"
 #include "components/sync/base/pref_names.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/protocol/sync_enums.pb.h"
@@ -1169,8 +1168,11 @@ class DiceWebSigninInterceptorSigninBubbleWithAccountPreviewBrowserTest
     : public DiceWebSigninInterceptorSigninBubbleBrowserTest {
  public:
   DiceWebSigninInterceptorSigninBubbleWithAccountPreviewBrowserTest() {
-    feature_list_.InitAndEnableFeature(
-        switches::kEnableAccountPreviewPreferredAccount);
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {switches::kEnableAccountPreviewPreferredAccount,
+         switches::kEnableAccountPreviewPreferredAccountIntercept},
+        /*disabled_features=*/{});
   }
 
  private:
@@ -2019,10 +2021,6 @@ class DiceWebSigninInterceptorSigninNotAllowedByPatternBrowserTest
     g_browser_process->local_state()->SetString(
         prefs::kGoogleServicesUsernamePattern, ".*@example.com");
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_{
-      syncer::kReplaceSyncPromosWithSignInPromos};
 };
 
 IN_PROC_BROWSER_TEST_P(

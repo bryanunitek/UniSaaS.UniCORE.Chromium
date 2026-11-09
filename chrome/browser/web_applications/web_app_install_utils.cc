@@ -275,11 +275,11 @@ void PopulateHomeTabIcons(WebAppInstallInfo* web_app_info,
 }
 
 apps::FileHandler::LaunchType ToFileHandlerLaunchType(
-    blink::mojom::ManifestFileHandler::LaunchType launch_type) {
+    blink::Manifest::FileHandler::LaunchType launch_type) {
   switch (launch_type) {
-    case blink::mojom::ManifestFileHandler::LaunchType::kSingleClient:
+    case blink::Manifest::FileHandler::LaunchType::kSingleClient:
       return apps::FileHandler::LaunchType::kSingleClient;
-    case blink::mojom::ManifestFileHandler::LaunchType::kMultipleClients:
+    case blink::Manifest::FileHandler::LaunchType::kMultipleClients:
       return apps::FileHandler::LaunchType::kMultipleClients;
   }
 }
@@ -313,23 +313,19 @@ void PopulateTrustedIconsFromDownloadedBitmapsAndMetadata(
 }  // namespace
 
 void PopulateFileHandlerInfoFromManifest(
-    const std::vector<blink::mojom::ManifestFileHandlerPtr>&
-        manifest_file_handlers,
+    const std::vector<blink::Manifest::FileHandler>& manifest_file_handlers,
     const GURL& app_scope,
     WebAppInstallInfo* web_app_info) {
   apps::FileHandlers web_app_file_handlers;
 
   for (const auto& manifest_file_handler : manifest_file_handlers) {
-    if (!manifest_file_handler) {
-      continue;
-    }
     apps::FileHandler web_app_file_handler;
-    web_app_file_handler.action = manifest_file_handler->action;
-    web_app_file_handler.display_name = manifest_file_handler->name;
+    web_app_file_handler.action = manifest_file_handler.action;
+    web_app_file_handler.display_name = manifest_file_handler.name;
     web_app_file_handler.launch_type =
-        ToFileHandlerLaunchType(manifest_file_handler->launch_type);
+        ToFileHandlerLaunchType(manifest_file_handler.launch_type);
 
-    for (const auto& it : manifest_file_handler->accept) {
+    for (const auto& it : manifest_file_handler.accept) {
       std::string mime_type = base::UTF16ToUTF8(it.first);
       std::string top_level_mime_type;
       if (!net::ParseMimeTypeWithoutParameter(mime_type, &top_level_mime_type,
@@ -494,6 +490,12 @@ void RecordDownloadedIconsHttpResultsCodeClass(
   for (const auto& url_and_http_status_code : icons_http_results) {
     int http_status_code = url_and_http_status_code.second;
     if (http_status_code != 0) {
+      // CHECK-exclusion: http_status_code originates from remote HTTP server
+      // responses when downloading web app icons. Using CHECK_LE(100,
+      // http_status_code, base::NotFatalUntil::M163) and CHECK_GT(600,
+      // http_status_code, base::NotFatalUntil::M163) validates untrusted
+      // website data using CHECK, allowing external web servers returning
+      // non-standard status codes to crash the browser process.
       DCHECK_LE(100, http_status_code);
       DCHECK_GT(600, http_status_code);
       base::UmaHistogramExactLinear(histogram_name.data(),

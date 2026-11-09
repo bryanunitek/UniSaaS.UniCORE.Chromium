@@ -92,7 +92,7 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window_state.h"
-#include "chrome/browser/ui/browser_window_theme_observer.h"
+#include "chrome/browser/ui/browser_window_theme_observer/browser_window_theme_observer.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
@@ -108,7 +108,10 @@
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_view.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
@@ -204,9 +207,6 @@
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
 #include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_coordinator.h"
-#include "chrome/browser/ui/views/send_tab_to_self/send_tab_to_self_bubble_view.h"
-#include "chrome/browser/ui/views/send_tab_to_self/send_tab_to_self_device_picker_bubble_view.h"
-#include "chrome/browser/ui/views/send_tab_to_self/send_tab_to_self_promo_bubble_view.h"
 #include "chrome/browser/ui/views/sharing/sharing_dialog_view.h"
 #include "chrome/browser/ui/views/sharing_hub/screenshot/screenshot_captured_bubble.h"
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_view_impl.h"
@@ -326,12 +326,12 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/bytes_formatting.h"
 #include "ui/base/theme_provider.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/debug_utils.h"
@@ -2346,6 +2346,20 @@ void BrowserView::FullscreenStateChanged() {
     }
   }
 
+  // Reopen a popup that `OmniboxPopupView::OnFullscreenTransitionStarting()`
+  // closed for the transition. This runs after entering and after exiting, as
+  // immersive fullscreen keeps the location bar drawn. Skip it in content
+  // fullscreen, where the toolbar is hidden. `ReshowPopup()` only reopens the
+  // popup for an unfocused draft.
+  if (!fullscreen_utils::IsInContentFullscreen(browser())) {
+    if (LocationBar* const location_bar = GetLocationBar()) {
+      if (OmniboxPopupView* const popup_view =
+              location_bar->GetOmniboxPopupView()) {
+        popup_view->ReshowPopup();
+      }
+    }
+  }
+
 #endif  // BUILDFLAG(IS_MAC)
 
   ExclusiveAccessManager::From(browser_)
@@ -2589,7 +2603,8 @@ base::CallbackListSubscription BrowserView::AddOnLinkOpeningFromGestureCallback(
   return link_opened_from_gesture_callbacks_.Add(callback);
 }
 
-void BrowserView::LinkOpeningFromGesture(WindowOpenDisposition disposition) {
+void BrowserView::LinkOpeningFromGesture(
+    ui::mojom::WindowOpenDisposition disposition) {
   link_opened_from_gesture_callbacks_.Notify(disposition);
 }
 
@@ -4445,8 +4460,7 @@ void BrowserView::UpdateTabModalDialogHost() {
         SafeInvoke(contents_view->web_contents())
             .Then(Overload<content::WebContents*>(
                 &tabs::TabInterface::GetFromContents))
-            .Then(Overload<>(&tabs::TabInterface::GetTabFeatures))
-            .Then(&tabs::TabFeatures::tab_dialog_manager)
+            .Then(&tabs::TabDialogManager::From)
             .Then(&tabs::TabDialogManager::UpdateModalDialogHost);
       }));
 }
@@ -4913,12 +4927,17 @@ void BrowserView::Layout(PassKey) {
     // However, if the window size changed since the last layout pass, do not
     // defer; child views must be laid out to match the new window size.
     //
-    // Also, if the active contents container has not yet received its
-    // initial non-empty bounds (e.g. during tab restore or when the first tab
-    // is added to the window), allow this layout pass so that the web contents
-    // gets properly sized before it starts loading.
+    // Also, if the active contents container or visible tab strip has not yet
+    // received initial non-empty bounds (e.g. during tab restore or when the
+    // first tab is added or attached to the window), allow this layout pass so
+    // views get properly sized before loading or computing drag offsets.
+    const bool needs_initial_tab_strip_layout =
+        GetTabStripVisible() && !browser_->GetTabStripModel()->empty() &&
+        tab_strip_view() && tab_strip_view()->GetTabStripView() &&
+        tab_strip_view()->GetTabStripView()->size().IsEmpty();
     const bool size_changed = size() != last_laid_out_size_;
-    if (!size_changed && (size().IsEmpty() || !GetContentsSize().IsEmpty())) {
+    if (!size_changed && !needs_initial_tab_strip_layout &&
+        (size().IsEmpty() || !GetContentsSize().IsEmpty())) {
       layout_deferred_while_invisible_ = true;
       return;
     }
@@ -5063,6 +5082,13 @@ void BrowserView::AddedToWidget() {
       kActiveContentsWebViewRetrievalId,
       base::BindRepeating(&BrowserView::GetActiveContentsWebView,
                           base::Unretained(this)));
+  browser_elements->AddRetrievalCallback(
+      kVerticalTabStripRegionRetrievalId,
+      base::BindRepeating(
+          [](BrowserView* browser_view) -> views::View* {
+            return browser_view->vertical_tab_strip_region_view_;
+          },
+          base::Unretained(this)));
 
   // Stow a pointer to this object onto the window handle so that we can get at
   // it later when all we have is a native view.
@@ -5226,6 +5252,13 @@ void BrowserView::AddedToWidget() {
       kFallbackPopupAnchorElementId, *this);
 
   initialized_ = true;
+  // `View::AddChildViewAtImpl()` runs `PropagateThemeChanged()` before
+  // `AddedToWidget()`, so the initial `OnThemeChanged()` returned early before
+  // `initialized_` was set.
+  if (base::FeatureList::IsEnabled(
+          views::features::kSkipRedundantSetNativeThemeUpdate)) {
+    FrameColorsChanged();
+  }
 }
 
 void BrowserView::RemovedFromWidget() {
@@ -5541,6 +5574,13 @@ void BrowserView::PrepareFullscreen(bool fullscreen) {
         fullscreen);
   }
 
+  if (LocationBar* const location_bar = GetLocationBar()) {
+    if (OmniboxPopupView* const popup_view =
+            location_bar->GetOmniboxPopupView()) {
+      popup_view->OnFullscreenTransitionStarting();
+    }
+  }
+
   // Reduce jankiness during the following position changes by:
   //   * Hiding the window until it's in the final position
   //   * Ignoring all intervening layout attempts, which would resize the
@@ -5549,6 +5589,24 @@ void BrowserView::PrepareFullscreen(bool fullscreen) {
   if (fullscreen) {
     // Move focus out of the location bar if necessary.
     LocationBar* location_bar = GetLocationBar();
+#if BUILDFLAG(IS_CHROMEOS)
+    // The Full WebUI popup sits on top of the location bar but isn't part of
+    // it, and immersive fullscreen keeps the location bar drawn, so blur the
+    // omnibox here. A draft keeps the popup open.
+    // TODO(crbug.com/582521205): Update macOS to have the same behavior and
+    // unify code flow if possible.
+    if (OmniboxController* const controller =
+            location_bar ? location_bar->GetOmniboxController() : nullptr;
+        controller && controller->edit_model()->has_focus() &&
+        controller->popup_state_manager()->popup_state() ==
+            OmniboxPopupState::kFull) {
+      // A tab switch while the popup held activation may have set this. Hiding
+      // the popup would then restore the tab's focus, which is the omnibox on
+      // the NTP, and reopen the popup.
+      restore_focus_on_activation_ = false;
+      location_bar->GetOmniboxPopupView()->Blur();
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
     if (location_bar && location_bar->IsFocusWithin()) {
       views::FocusManager* focus_manager = GetFocusManager();
       CHECK(focus_manager, base::NotFatalUntil::M162);

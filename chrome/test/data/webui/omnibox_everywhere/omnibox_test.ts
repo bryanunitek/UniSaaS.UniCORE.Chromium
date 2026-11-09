@@ -24,7 +24,8 @@ import {FreStage, SelectionDirection, SelectionLineState, SelectionStep} from 'c
 import type {PageCallbackRouter as SearchboxPageCallbackRouter, PageHandlerRemote as SearchboxPageHandlerRemote, SelectedFileInfo} from 'chrome://resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 import {TextDirection} from 'chrome://resources/mojo/mojo/public/mojom/base/text_direction.mojom-webui.js';
 import type {UnguessableToken} from 'chrome://resources/mojo/mojo/public/mojom/base/unguessable_token.mojom-webui.js';
-import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {MenuSourceType} from 'chrome://resources/mojo/ui/base/mojom/menu_source_type.mojom-webui.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {MockTimer} from 'chrome://webui-test/mock_timer.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
@@ -1427,6 +1428,116 @@ suite('OmniboxEverywhereOmniboxTest', () => {
             loadTimeData.getString('searchBoxHint'),
             nonFuseboxInput.placeholder);
       });
+
+  suite('OverflowMenu', () => {
+    test('renders after Lens button with menu ARIA semantics', () => {
+      const buttons = omnibox.shadowRoot.querySelectorAll<HTMLElement>(
+          '#actionButtons .searchbox-icon-button');
+      assertDeepEquals(
+          ['voiceSearchButton', 'lensSearchButton', 'overflowMenuButton'],
+          Array.from(buttons, button => button.id));
+      assertEquals(
+          'menu', omnibox.$.overflowMenuButton.getAttribute('aria-haspopup'));
+      assertEquals(
+          'false', omnibox.$.overflowMenuButton.getAttribute('aria-expanded'));
+    });
+
+    test('is hidden when expanded unless focused', async () => {
+      const container = omnibox.$.overflowMenuButton.parentElement!;
+      const display = () => window.getComputedStyle(container).display;
+      assertEquals('flex', display());
+
+      omnibox.dropdownIsVisible = true;
+      await microtasksFinished();
+      assertEquals('none', display());
+
+      omnibox.dropdownIsVisible = false;
+      omnibox.setInputText('query');
+      await microtasksFinished();
+      assertEquals('none', display());
+
+      omnibox.setInputText('');
+      await microtasksFinished();
+      omnibox.$.overflowMenuButton.focus();
+      omnibox.dropdownIsVisible = true;
+      await microtasksFinished();
+      assertEquals('flex', display());
+    });
+
+    test(
+        'opens with rounded rect, preserves dropdown on focusout, and resets ' +
+            'on close or dismissing click',
+        async () => {
+          const button = omnibox.$.overflowMenuButton;
+          button.getBoundingClientRect = () =>
+              ({left: 120.4, top: 35.6, width: 28.2, height: 28.2} as DOMRect);
+          omnibox.dropdownIsVisible = true;
+          button.click();
+
+          const [rect, sourceType] =
+              await testEverywhereProxy.handler.whenCalled('showOverflowMenu');
+          assertDeepEquals({x: 120, y: 36, width: 28, height: 28}, rect);
+          // click() has `detail` 0, like a keyboard activation.
+          assertEquals(MenuSourceType.kKeyboard, sourceType);
+
+          await microtasksFinished();
+          assertTrue(omnibox.isOverflowMenuOpen);
+          assertEquals('true', button.getAttribute('aria-expanded'));
+          assertTrue(button.parentElement!.classList.contains('menu-open'));
+
+          // Focusout while overflow menu is open keeps dropdown visible.
+          omnibox.$.inputWrapper.dispatchEvent(
+              new FocusEvent('focusout', {bubbles: true, relatedTarget: null}));
+          assertTrue(omnibox.dropdownIsVisible);
+
+          // Primary pointerdown prevents focus transfer and suppresses reopen
+          // unless cancelled by pointercancel.
+          testEverywhereProxy.handler.reset();
+          const downEvent = new PointerEvent(
+              'pointerdown', {bubbles: true, cancelable: true, button: 0});
+          button.dispatchEvent(downEvent);
+          assertTrue(downEvent.defaultPrevented);
+          button.click();
+          await microtasksFinished();
+          assertEquals(
+              0, testEverywhereProxy.handler.getCallCount('showOverflowMenu'));
+          assertFalse(omnibox.isOverflowMenuOpen);
+
+          // pointercancel clears suppression so the next click opens the menu.
+          omnibox.isOverflowMenuOpen = true;
+          button.dispatchEvent(
+              new PointerEvent('pointerdown', {bubbles: true, button: 0}));
+          button.dispatchEvent(
+              new PointerEvent('pointercancel', {bubbles: true}));
+          omnibox.onOverflowMenuClosed();
+          await microtasksFinished();
+          assertFalse(omnibox.isOverflowMenuOpen);
+          assertFalse(button.parentElement!.classList.contains('menu-open'));
+
+          button.click();
+          await testEverywhereProxy.handler.whenCalled('showOverflowMenu');
+          assertTrue(omnibox.isOverflowMenuOpen);
+        });
+
+    test('passes the pointer type as the menu source', async () => {
+      const button = omnibox.$.overflowMenuButton;
+      for (const [pointerType, expected] of [
+               ['mouse', MenuSourceType.kMouse],
+               ['touch', MenuSourceType.kTouch],
+      ] as Array<[string, MenuSourceType]>) {
+        testEverywhereProxy.handler.reset();
+        omnibox.isOverflowMenuOpen = false;
+        button.dispatchEvent(new PointerEvent(
+            'pointerdown', {bubbles: true, button: 0, pointerType}));
+        button.dispatchEvent(
+            new MouseEvent('click', {bubbles: true, detail: 1}));
+        const [, sourceType] =
+            await testEverywhereProxy.handler.whenCalled('showOverflowMenu');
+        assertEquals(expected, sourceType);
+        omnibox.onOverflowMenuClosed();
+      }
+    });
+  });
 });
 
 
@@ -2508,8 +2619,6 @@ suite('OmniboxEverywhereAppTest', () => {
             '', app.style.getPropertyValue('--voice_search_minimum_width'));
       });
 
-  // TODO(crbug.com/552283274): Flaky on Mac.
-  // <if expr="not is_macosx">
   test(
       'open-voice-search reflects attribute on app and hides MV tiles and ' +
           'content',
@@ -2558,6 +2667,7 @@ suite('OmniboxEverywhereAppTest', () => {
         assertTrue(!!searchbox);
         assertTrue(!!mvContainer);
         assertFalse(appWithMv.hasAttribute('show-voice-search-overlay_'));
+        assertEquals('flex', window.getComputedStyle(mvContainer).display);
 
         searchbox.fire('open-voice-search');
         await microtasksFinished();
@@ -2585,7 +2695,6 @@ suite('OmniboxEverywhereAppTest', () => {
         assertEquals('block', window.getComputedStyle(content).display);
         assertEquals('flex', window.getComputedStyle(mvContainer).display);
       });
-  // </if>
 
   test(
       'MVT container hides when context menu, screenshot menu, or user input is present',
@@ -2651,6 +2760,16 @@ suite('OmniboxEverywhereAppTest', () => {
 
         // Closing screenshot menu restores MVT container.
         searchbox.isScreenshotMenuOpen = false;
+        await microtasksFinished();
+        assertEquals('flex', window.getComputedStyle(mvContainer).display);
+
+        // Opening overflow menu hides MVT container.
+        searchbox.isOverflowMenuOpen = true;
+        await microtasksFinished();
+        assertEquals('none', window.getComputedStyle(mvContainer).display);
+
+        // Closing overflow menu restores MVT container.
+        searchbox.isOverflowMenuOpen = false;
         await microtasksFinished();
         assertEquals('flex', window.getComputedStyle(mvContainer).display);
 
@@ -3465,6 +3584,138 @@ suite('OmniboxEverywhereAppTest', () => {
       });
 
   test(
+      'visibilitychange on document focuses active input when visible',
+      async () => {
+        const searchbox =
+            app.shadowRoot.querySelector('omnibox-everywhere-omnibox')!;
+        let focusCount = 0;
+        searchbox.focusInput = () => {
+          ++focusCount;
+        };
+
+        Object.defineProperty(
+            document, 'visibilityState', {value: 'hidden', configurable: true});
+        try {
+          document.dispatchEvent(new Event('visibilitychange'));
+          await microtasksFinished();
+          assertEquals(0, focusCount);
+
+          Object.defineProperty(document, 'visibilityState', {
+            value: 'visible',
+            configurable: true,
+          });
+          document.dispatchEvent(new Event('visibilitychange'));
+          await microtasksFinished();
+          assertEquals(1, focusCount);
+        } finally {
+          delete (document as {visibilityState?: string}).visibilityState;
+        }
+      });
+
+  test(
+      'rendering FRE stage calls recordFreImpression once per session',
+      async () => {
+        window.dispatchEvent(new Event('focus'));
+        await microtasksFinished();
+        testProxy.handler.resetResolver('recordFreImpression');
+
+        testProxy.page.setFreState({
+          stage: FreStage.kIntroModal,
+          currentHotkeyTokens: [],
+        });
+        await microtasksFinished();
+
+        assertTrue(!!app.shadowRoot.querySelector('fre-modal'));
+        assertDeepEquals(
+            [FreStage.kIntroModal],
+            testProxy.handler.getArgs('recordFreImpression'));
+
+        // Entering and exiting composebox mode within the same session remounts
+        // fre-modal but must not record a duplicate impression.
+        const searchbox =
+            app.shadowRoot.querySelector('omnibox-everywhere-omnibox')!;
+        searchbox.fire(
+            'open-composebox', {text: '', files: [], mode: 0, model: 0});
+        await microtasksFinished();
+        assertFalse(!!app.shadowRoot.querySelector('fre-modal'));
+
+        window.dispatchEvent(new KeyboardEvent(
+            'keydown', {key: 'Escape', bubbles: true, cancelable: true}));
+        await microtasksFinished();
+        assertTrue(!!app.shadowRoot.querySelector('fre-modal'));
+        assertEquals(1, testProxy.handler.getCallCount('recordFreImpression'));
+
+        // Transitioning to a new FRE stage records an impression for the new
+        // stage.
+        testProxy.page.setFreState({
+          stage: FreStage.kShortcutSetupChin,
+          currentHotkeyTokens: [],
+        });
+        await microtasksFinished();
+        assertTrue(!!app.shadowRoot.querySelector('#freShortcutSetupChin'));
+        assertDeepEquals(
+            [FreStage.kIntroModal, FreStage.kShortcutSetupChin],
+            testProxy.handler.getArgs('recordFreImpression'));
+
+        // In persistent mode, a stage update pushed while blurred/demoted waits
+        // until the window regains focus before recording an impression.
+        window.dispatchEvent(new Event('blur'));
+        await microtasksFinished();
+        testProxy.page.setFreState({
+          stage: FreStage.kShortcutReminderChin,
+          currentHotkeyTokens: ['Alt', 'Space'],
+        });
+        await microtasksFinished();
+        assertEquals(2, testProxy.handler.getCallCount('recordFreImpression'));
+
+        window.dispatchEvent(new Event('focus'));
+        await microtasksFinished();
+        assertDeepEquals(
+            [
+              FreStage.kIntroModal,
+              FreStage.kShortcutSetupChin,
+              FreStage.kShortcutReminderChin,
+            ],
+            testProxy.handler.getArgs('recordFreImpression'));
+
+        // Hiding and re-showing the document (new open-window session) resets
+        // the session guard and records an impression for the new session.
+        Object.defineProperty(
+            document, 'visibilityState', {value: 'hidden', configurable: true});
+        try {
+          document.dispatchEvent(new Event('visibilitychange'));
+          await microtasksFinished();
+          assertEquals(
+              3, testProxy.handler.getCallCount('recordFreImpression'));
+
+          Object.defineProperty(document, 'visibilityState', {
+            value: 'visible',
+            configurable: true,
+          });
+          document.dispatchEvent(new Event('visibilitychange'));
+          await microtasksFinished();
+          assertDeepEquals(
+              [
+                FreStage.kIntroModal,
+                FreStage.kShortcutSetupChin,
+                FreStage.kShortcutReminderChin,
+                FreStage.kShortcutReminderChin,
+              ],
+              testProxy.handler.getArgs('recordFreImpression'));
+        } finally {
+          delete (document as {visibilityState?: string}).visibilityState;
+        }
+
+        // Transitioning to FreStage.kNone does not record an impression.
+        testProxy.page.setFreState({
+          stage: FreStage.kNone,
+          currentHotkeyTokens: [],
+        });
+        await microtasksFinished();
+        assertEquals(4, testProxy.handler.getCallCount('recordFreImpression'));
+      });
+
+  test(
       'escape key with text in composebox clears text and stays in composebox',
       async () => {
         const searchbox =
@@ -3905,6 +4156,12 @@ suite('OmniboxEverywhereContextMenuTest', () => {
       smallFont: false,
       isPersistentMode: true,
     });
+    const mostVisitedHandler = TestMock.fromClass(MostVisitedPageHandlerRemote);
+    const {instance: mostVisitedInstance} =
+        browserProxyFactory.createForTest(mostVisitedHandler);
+    browserProxyFactory.setInstance(mostVisitedInstance);
+    mostVisitedHandler.setResultFor(
+        'getMostVisitedExpandedState', Promise.resolve({isExpanded: false}));
     testProxy = new TestSearchboxBrowserProxy();
     SearchboxBrowserProxy.setInstance(testProxy);
     testEverywhereProxy = new TestOmniboxEverywhereBrowserProxy();
@@ -3976,6 +4233,7 @@ suite('OmniboxEverywhereContextMenuTest', () => {
             showInCurrentTabChip: false,
             showInPreviousTabChip: false,
             isLoading: false,
+            recentTab: false,
             lastActive: {internalValue: 0n},
           },
           fileToken: null,
@@ -4359,5 +4617,20 @@ suite('OmniboxEverywhereContextMenuTest', () => {
         } finally {
           darkTokens.forEach(([k]) => rootStyle.removeProperty(k));
         }
+      });
+
+  test(
+      'onOverflowMenuClosed Mojo listener resets searchbox overflow state',
+      async () => {
+        const omnibox =
+            app.shadowRoot.querySelector('omnibox-everywhere-omnibox');
+        assertTrue(!!omnibox);
+        omnibox.isOverflowMenuOpen = true;
+        await microtasksFinished();
+
+        testEverywhereProxy.page.onOverflowMenuClosed();
+        await microtasksFinished();
+
+        assertFalse(omnibox.isOverflowMenuOpen);
       });
 });

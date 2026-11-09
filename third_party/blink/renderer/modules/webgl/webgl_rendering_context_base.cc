@@ -207,17 +207,13 @@ unsigned WebGLRenderingContextBase::max_active_webgl_contexts_on_worker_ = 0;
 
 namespace {
 
+// LINT.IfChange(WebGLANGLEImplementation)
 enum class WebGLANGLEImplementation {
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
 
-  // vWebGL = 0 (for WebGL1) or 2 (for WebGL2).
-  // vWebGLANGLEImplementation = vWebGL * 10 + vANGLEImplementation
-  // where vANGLEImplementation is aligned with ANGLEImplementation enum
-  // values defined in ui/gl/gl_implementation.h.
-
   kWebGL1_None = 0,
-  kWebGL1_D3D9 = 1,
+  kWebGL1_D3D9 = 1,  // Deprecated
   kWebGL1_D3D11 = 2,
   kWebGL1_OpenGL = 3,
   kWebGL1_OpenGLES = 4,
@@ -245,6 +241,44 @@ enum class WebGLANGLEImplementation {
 
   kMaxValue = kWebGL2_D3D11Warp,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:WebGLANGLEImplementation)
+
+WebGLANGLEImplementation ToWebGLANGLEImplementation(
+    gl::ANGLEImplementation angle_impl,
+    bool is_webgl2) {
+  using Impl = gl::ANGLEImplementation;
+  using Uma = WebGLANGLEImplementation;
+  // clang-format off
+  if (is_webgl2) {
+    switch (angle_impl) {
+      case Impl::kNone:        return Uma::kWebGL2_None;
+      case Impl::kD3D11:       return Uma::kWebGL2_D3D11;
+      case Impl::kOpenGL:      return Uma::kWebGL2_OpenGL;
+      case Impl::kOpenGLES:    return Uma::kWebGL2_OpenGLES;
+      case Impl::kNull:        return Uma::kWebGL2_Null;
+      case Impl::kVulkan:      return Uma::kWebGL2_Vulkan;
+      case Impl::kSwiftShader: return Uma::kWebGL2_SwiftShader;
+      case Impl::kMetal:       return Uma::kWebGL2_Metal;
+      case Impl::kDefault:     return Uma::kWebGL2_Default;
+      case Impl::kD3D11Warp:   return Uma::kWebGL2_D3D11Warp;
+    }
+  } else {
+    switch (angle_impl) {
+      case Impl::kNone:        return Uma::kWebGL1_None;
+      case Impl::kD3D11:       return Uma::kWebGL1_D3D11;
+      case Impl::kOpenGL:      return Uma::kWebGL1_OpenGL;
+      case Impl::kOpenGLES:    return Uma::kWebGL1_OpenGLES;
+      case Impl::kNull:        return Uma::kWebGL1_Null;
+      case Impl::kVulkan:      return Uma::kWebGL1_Vulkan;
+      case Impl::kSwiftShader: return Uma::kWebGL1_SwiftShader;
+      case Impl::kMetal:       return Uma::kWebGL1_Metal;
+      case Impl::kDefault:     return Uma::kWebGL1_Default;
+      case Impl::kD3D11Warp:   return Uma::kWebGL1_D3D11Warp;
+    }
+  }
+  // clang-format on
+  NOTREACHED();
+}
 
 bool CopyVideoFrameTexturesToGLTextureViaIntermediateSI(
     viz::RasterContextProvider* raster_context_provider,
@@ -1840,7 +1874,9 @@ WebGLRenderingContextBase::ClearIfComposited(
     //
     // Note: we don't call MarkContentsChanged(), because it hasn't (there is
     // no new content to present yet).
-    GetDrawingBuffer()->EnsureBuffers();
+    if (!GetDrawingBuffer()->EnsureBuffers()) {
+      return kSkipped;
+    }
   }
 
   if (!GetDrawingBuffer()->BufferClearNeeded() ||
@@ -1900,16 +1936,21 @@ WebGLRenderingContextBase::ClearIfComposited(
         true, true, true,
         !GetDrawingBuffer()->DefaultBufferRequiresAlphaChannelToBePreserved());
   }
+  bool cleared = false;
   {
     ScopedDisableRasterizerDiscard scoped_disable(this,
                                                   rasterizer_discard_enabled_);
-    GetDrawingBuffer()->ClearFramebuffers(clear_mask);
+    cleared = GetDrawingBuffer()->ClearFramebuffers(clear_mask);
   }
 
   // Call the DrawingBufferClient method to restore scissor test, mask, and
   // clear values, because we dirtied them above.
   DrawingBufferClientRestoreScissorTest();
   DrawingBufferClientRestoreMaskAndClearValues();
+
+  if (!cleared) {
+    return kSkipped;
+  }
 
   GetDrawingBuffer()->SetBufferClearNeeded(false);
 
@@ -2160,8 +2201,7 @@ WebGLRenderingContextBase::PaintRenderingResultsToSnapshot(
       snapshot = resource_provider->DoExternalOverdrawAndSnapshot(
           [&image](cc::PaintCanvas& canvas) {
             DrawImageToCanvas(image.get(), canvas);
-          },
-          ImageOrientationEnum::kDefault);
+          });
       copy_succeeded = true;
     }
   }
@@ -2342,7 +2382,6 @@ bool WebGLRenderingContextBase::
         CanvasNon2DResourceProvider* resource_provider,
         SourceDrawingBuffer source_buffer) {
   DCHECK(resource_provider);
-  DCHECK(!resource_provider->IsSingleBuffered());
   CHECK(!resource_provider->IsSoftware());
 
   // Early-out if the context has been lost.
@@ -4062,15 +4101,10 @@ void WebGLRenderingContextBase::RecordANGLEImplementation() {
   DCHECK(drawing_buffer_.get());
   const Platform::WebGLContextInfo& context_info =
       drawing_buffer_->ContextInfo();
-  // For mapping mathematics, see WebGLANGLEImplementation definition above.
-  int webgl_version_multiplier =
-      (context_type_ == Platform::kWebGL2ContextType ? 2 : 0);
-  WebGLANGLEImplementation webgl_angle_implementation =
-      static_cast<WebGLANGLEImplementation>(
-          webgl_version_multiplier * 10 +
-          static_cast<int>(context_info.angle_implementation));
-  UMA_HISTOGRAM_ENUMERATION("Blink.Canvas.WebGLANGLEImplementation",
-                            webgl_angle_implementation);
+  UMA_HISTOGRAM_ENUMERATION("Blink.Canvas.WebGLANGLEImplementation2",
+                            ToWebGLANGLEImplementation(
+                                context_info.angle_implementation,
+                                context_type_ == Platform::kWebGL2ContextType));
 }
 
 ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
@@ -6410,7 +6444,12 @@ void WebGLRenderingContextBase::TexImageViaGPU(
               params.GetDestinationAlphaType(), params.GetDestinationOrigin(),
               gfx::Point(params.xoffset, params.yoffset), source_sub_rectangle,
               kBackBuffer)) {
-        NOTREACHED();
+        // Copy failure, source context is lost. Make sure to not leak the
+        // texture.
+        if (!possible_direct_copy) {
+          ContextGL()->DeleteTextures(1, &target_texture);
+        }
+        return;
       }
     }
   }
@@ -7984,11 +8023,29 @@ bool WebGLRenderingContextBase::
 
 void WebGLRenderingContextBase::
     DrawingBufferClientForceLostContextWithAutoRecovery(const char* reason) {
-  ForceLostContext(WebGLRenderingContextBase::kSyntheticLostContext,
-                   WebGLRenderingContextBase::kAuto);
+  if (isContextLost() || !drawing_buffer_) {
+    return;
+  }
   if (reason) {
     PrintWarningToConsole(reason);
   }
+  // Post context loss asynchronously rather than running ForceLostContext
+  // re-entrantly while DrawingBuffer / WebGLRenderingContextBase frames are
+  // still on the stack, matching CommandBufferProxyImpl's lost-context
+  // callback behavior.
+  GetContextTaskRunner()->PostTask(
+      FROM_HERE,
+      blink::BindOnce(
+          &WebGLRenderingContextBase::ForceLostContextFromDrawingBuffer,
+          WrapWeakPersistent(this), blink::RetainedRef(drawing_buffer_)));
+}
+
+void WebGLRenderingContextBase::ForceLostContextFromDrawingBuffer(
+    DrawingBuffer* failed_drawing_buffer) {
+  if (isContextLost() || drawing_buffer_.get() != failed_drawing_buffer) {
+    return;
+  }
+  ForceLostContext(kRealLostContext, kAuto);
 }
 
 void WebGLRenderingContextBase::DrawingBufferClientInitializeLayer(

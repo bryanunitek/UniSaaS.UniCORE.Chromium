@@ -62,7 +62,8 @@ class ContextualTasksBrowserTest : public WebUIMochaBrowserTest {
     scoped_feature_list_.InitWithFeatures(
         {contextual_tasks::kContextualTasks,
          contextual_tasks::kContextualTasksForceEntryPointEligibility},
-        {});
+        {contextual_tasks::kContextualTasksRearchitecture,
+         contextual_tasks::kContextualTasksSidePanelRearchitecture});
     set_test_loader_host(chrome::kChromeUIContextualTasksHost);
   }
 
@@ -619,29 +620,15 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest, UnboundedMenu) {
   RunTest("contextual_tasks/unbounded_menu_test.js", "mocha.run();");
 }
 
-// TODO(crbug.com/564474841): Flaky on Linux-js coverage.
-// Disabled on Linux after timing out during JS coverage collection, after all
-// Mocha assertions passed.
-#if BUILDFLAG(IS_LINUX)
-#define MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceTrue \
-  DISABLED_Composebox_Voice_SurfaceAndStartup_CoherenceTrue
-#define MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceFalse \
-  DISABLED_Composebox_Voice_SurfaceAndStartup_CoherenceFalse
-#else
-#define MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceTrue \
-  Composebox_Voice_SurfaceAndStartup_CoherenceTrue
-#define MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceFalse \
-  Composebox_Voice_SurfaceAndStartup_CoherenceFalse
-#endif
 IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest,
-                       MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceTrue) {
+                       Composebox_Voice_SurfaceAndStartup_CoherenceTrue) {
   RunTest("contextual_tasks/composebox_test.js",
           "runMochaSuite('ContextualTasksComposeboxForkVoiceTest "
           "\\\\(coherence = true\\\\) SurfaceAndStartup')");
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest,
-                       MAYBE_Composebox_Voice_SurfaceAndStartup_CoherenceFalse) {
+                       Composebox_Voice_SurfaceAndStartup_CoherenceFalse) {
   RunTest("contextual_tasks/composebox_test.js",
           "runMochaSuite('ContextualTasksComposeboxForkVoiceTest "
           "\\\\(coherence = false\\\\) SurfaceAndStartup')");
@@ -704,13 +691,11 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest,
 // TODO(crbug.com/565086795): Flaky on Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_PostMessageHandler DISABLED_PostMessageHandler
-#define MAYBE_TopToolbarTest DISABLED_TopToolbarTest
 #define MAYBE_OverflowMenu DISABLED_OverflowMenu
 #define MAYBE_Toolbar DISABLED_Toolbar
 #define MAYBE_OnboardingTooltip DISABLED_OnboardingTooltip
 #else
 #define MAYBE_PostMessageHandler PostMessageHandler
-#define MAYBE_TopToolbarTest TopToolbarTest
 #define MAYBE_OverflowMenu OverflowMenu
 #define MAYBE_Toolbar Toolbar
 #define MAYBE_OnboardingTooltip OnboardingTooltip
@@ -719,7 +704,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest, MAYBE_PostMessageHandler) {
   RunTest("contextual_tasks/post_message_handler_test.js", "mocha.run();");
 }
 
-IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest, MAYBE_TopToolbarTest) {
+IN_PROC_BROWSER_TEST_F(ContextualTasksBrowserTest, TopToolbarTest) {
   RunTest("contextual_tasks/top_toolbar_test.js", "mocha.run();");
 }
 

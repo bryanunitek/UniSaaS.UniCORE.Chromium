@@ -10,6 +10,7 @@
 #import "components/sessions/core/live_tab.h"
 #import "components/sessions/core/tab_restore_types.h"
 #import "components/split_tabs/split_tab_id.h"
+#import "ui/base/mojom/window_open_disposition.mojom-shared.h"
 
 namespace {
 
@@ -78,6 +79,18 @@ void FakeTabRestoreService::GroupClosed(const tab_groups::TabGroupId& group) {
 
 void FakeTabRestoreService::GroupCloseStopped(
     const tab_groups::TabGroupId& group) {
+  NOTREACHED();
+}
+
+void FakeTabRestoreService::PromoteEphemeralTabGroup(
+    const tab_groups::TabGroupId& group_id,
+    const tab_groups::TabGroupVisualData& visual_data) {
+  NOTREACHED();
+}
+
+void FakeTabRestoreService::UpdateSavedTabGroupId(
+    const tab_groups::TabGroupId& group_id,
+    const base::Uuid& saved_group_id) {
   NOTREACHED();
 }
 

@@ -12,6 +12,7 @@
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/new_tab_page/new_tab_page_util.h"
 #include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
@@ -24,14 +25,6 @@
 #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
-#include "ui/base/page_transition_types.h"
-// Android uses a different implementation of tab features.
-#if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/android/tab_features.h"
-#else
-#include "chrome/browser/ui/tabs/public/tab_features.h"
-#endif
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "components/history/core/browser/features.h"
 #include "components/ntp_tiles/constants.h"
@@ -45,6 +38,8 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "services/network/public/cpp/constants.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition_utils.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -80,14 +75,12 @@ MostVisitedHandler::MostVisitedHandler(
     mojo::PendingRemote<most_visited::mojom::MostVisitedPage> pending_page,
     Profile* profile,
     content::WebContents* web_contents,
-    std::unique_ptr<MostVisitedMetricsLogger> logger,
-    const base::Time& navigation_start_time)
+    std::unique_ptr<MostVisitedMetricsLogger> logger)
     : profile_(profile),
       most_visited_sites_(
           ChromeMostVisitedSitesFactory::NewForProfile(profile)),
       web_contents_(web_contents),
       logger_(std::move(logger)),
-      navigation_start_time_(navigation_start_time),
       page_handler_(this, std::move(pending_page_handler)),
       page_(std::move(pending_page)) {
   CHECK(logger_);
@@ -250,8 +243,7 @@ void MostVisitedHandler::OnMostVisitedTilesRendered(
   bool is_expanded =
       profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpShowAllMostVisitedTiles);
   logger_->LogMostVisitedLoaded(
-      base::Time::FromMillisecondsSinceUnixEpoch(time) - navigation_start_time_,
-      most_visited_sites_->IsTopSitesEnabled(),
+      base::Milliseconds(time), most_visited_sites_->IsTopSitesEnabled(),
       most_visited_sites_->IsCustomLinksEnabled(),
       most_visited_sites_->IsEnterpriseShortcutsEnabled(),
       most_visited_sites_->IsShortcutsVisible(), is_expanded);
@@ -448,8 +440,7 @@ void MostVisitedHandler::OnIconMadeAvailable(const GURL& site_url) {}
 NewTabPagePreloadPipelineManager*
 MostVisitedHandler::GetNewTabPagePreloadPipelineManager() {
   tabs::TabInterface* tab = webui::GetTabInterface(web_contents_);
-  return tab ? tab->GetTabFeatures()->new_tab_page_preload_pipeline_manager()
-             : nullptr;
+  return NewTabPagePreloadPipelineManager::From(tab);
 }
 
 bool MostVisitedHandler::MaybeRemoveStaleShortcuts() {

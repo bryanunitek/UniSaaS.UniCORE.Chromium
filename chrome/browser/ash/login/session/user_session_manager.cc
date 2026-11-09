@@ -123,7 +123,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
-#include "chrome/common/logging_chrome.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_flusher.h"
@@ -1989,8 +1988,10 @@ bool UserSessionManager::InitializeUserSession(Profile* profile) {
     if (auto* host = LoginDisplayHost::default_host();
         host && host->GetWizardContext()) {
       WizardContext& wizard_context = *host->GetWizardContext();
-      CHECK(!wizard_context.onboarding_account_id.has_value());
-      wizard_context.onboarding_account_id = account_id;
+      CHECK(!wizard_context.onboarding_user);
+      wizard_context.onboarding_user =
+          user_manager->FindUserAndModify(account_id);
+      CHECK(wizard_context.onboarding_user);
     }
     std::string pending_screen =
         known_user.GetPendingOnboardingScreen(account_id);

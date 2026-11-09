@@ -60,6 +60,8 @@ class CORE_EXPORT DisplayAdElementMonitor final
   bool IsVideoAd() const { return is_video_ad_; }
   void UpdateToVideoAd();
 
+  bool IsStickyAd() const { return is_sticky_ad_; }
+
   bool IsOverlayPopupAd() const { return is_overlay_popup_ad_; }
   void SetIsOverlayPopupAd();
 
@@ -155,6 +157,11 @@ class CORE_EXPORT DisplayAdElementMonitor final
   // Records the video ad UseCounter if the element is a video ad with
   // non-trivial geometry.
   void MaybeRecordVideoAdUseCounter();
+
+  // Invalidates paint so a currently shown ad highlight picks up a newly
+  // detected ad kind in its label (see BoxFragmentPainter::AdLabelType). No-op
+  // unless the highlight is shown and labels are enabled.
+  void InvalidatePaintForAdLabel();
 
   Member<Element> element_;
 

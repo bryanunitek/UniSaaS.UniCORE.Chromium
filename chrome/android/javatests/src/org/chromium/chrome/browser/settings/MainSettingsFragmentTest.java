@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.settings;
 
 import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
@@ -18,6 +19,7 @@ import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withParent;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -107,6 +109,9 @@ import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
 import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
+import org.chromium.chrome.browser.signin.services.DisplayableProfileData;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityService;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityServiceFactory;
 import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.SyncTestRule;
@@ -155,6 +160,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
                 + ":set_default_to_false_on_homepage_on_desktop/false")
 public class MainSettingsFragmentTest {
     private static final String SEARCH_ENGINE_SHORT_NAME = "Google";
+    private static final String ADVANCED_SECTION = "advanced_section";
 
     private static final int RENDER_TEST_REVISION = 15;
     private static final String RENDER_TEST_DESCRIPTION =
@@ -195,6 +201,8 @@ public class MainSettingsFragmentTest {
     @Mock private DefaultBrowserPromoUtils mMockDefaultBrowserPromoUtils;
 
     @Mock private SettingsIndexData mSearchIndexDataMock;
+
+    @Mock private SubscriptionEligibilityService mSubscriptionEligibilityService;
 
     private MainSettings mMainSettings;
 
@@ -303,6 +311,39 @@ public class MainSettingsFragmentTest {
         assertSettingsExists(MainSettings.PREF_DOWNLOADS, DownloadSettings.class);
         assertSettingsExists(MainSettings.PREF_DEVELOPER, DeveloperSettings.class);
         assertSettingsExists("about_chrome", AboutChromeSettings.class);
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ChromeFeatureList.SETTINGS_IA_REORGANIZATION)
+    public void testSettingsIaReorganization_dropsHeadersAndGroupsRowsBySection() {
+        startSettings();
+
+        // The category headers are removed from the screen.
+        Assert.assertNull(
+                mMainSettings.findPreference(
+                        MainSettings.PREF_ACCOUNT_AND_GOOGLE_SERVICES_SECTION));
+        Assert.assertNull(mMainSettings.findPreference(MainSettings.PREF_BASICS_SECTION));
+        Assert.assertNull(mMainSettings.findPreference(ADVANCED_SECTION));
+
+        // Each row reports the header it used to sit under as its section id.
+        assertSectionId(
+                MainSettings.PREF_ACCOUNT_AND_GOOGLE_SERVICES_SECTION,
+                MainSettings.PREF_GOOGLE_SERVICES);
+        assertSectionId(MainSettings.PREF_BASICS_SECTION, MainSettings.PREF_SEARCH_ENGINE);
+        assertSectionId(MainSettings.PREF_BASICS_SECTION, "privacy");
+        assertSectionId(MainSettings.PREF_BASICS_SECTION, MainSettings.PREF_AUTOFILL_AND_PASSWORDS);
+        assertSectionId(ADVANCED_SECTION, MainSettings.PREF_DOWNLOADS);
+        assertSectionId(ADVANCED_SECTION, "about_chrome");
+    }
+
+    private void assertSectionId(String expectedSectionId, String key) {
+        Preference preference = mMainSettings.findPreference(key);
+        Assert.assertNotNull("Preference should exist: " + key, preference);
+        Assert.assertEquals(
+                "Unexpected section for " + key,
+                expectedSectionId,
+                mMainSettings.getSectionId(preference));
     }
 
     @Test
@@ -570,6 +611,194 @@ public class MainSettingsFragmentTest {
 
         assertSettingsExists(MainSettings.PREF_SIGN_IN, ManageSyncSettings.class);
         onView(allOf(withId(R.id.alert_icon), isDisplayed())).check(matches(isDisplayed()));
+    }
+
+    // Tests that the account row shows the AI tier ring for an eligible account.
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    // Avoids UserActionableError.NEEDS_UPM_BACKEND_UPGRADE, which would hide the ring.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testSigninRowShowsAiTierRing() {
+        setEligibleAiSubscriptionTier();
+        CoreAccountInfo accountInfo = mSyncTestRule.setUpAccountAndSignInForTesting();
+        startSettings();
+
+        Assert.assertTrue(signinRowHasAiTierRing(accountInfo));
+        // Screen readers also read the membership.
+        String description =
+                mMainSettings.getString(
+                        R.string.settings_account_row_description_with_membership,
+                        TestAccounts.ACCOUNT1.getFullName(),
+                        TestAccounts.ACCOUNT1.getEmail());
+        onView(withContentDescription(description)).check(matches(isDisplayed()));
+    }
+
+    // Tests that screen readers read the email only once for an account without a name, whose
+    // account row shows the email as both its title and summary.
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    // Avoids UserActionableError.NEEDS_UPM_BACKEND_UPGRADE, which would hide the ring.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testSigninRowDescriptionReadsEmailOnceWithoutName() {
+        setEligibleAiSubscriptionTier();
+        AccountInfo accountInfo = TestAccounts.TEST_ACCOUNT_NO_NAME;
+        mSyncTestRule.getSigninTestRule().addAccountThenSignin(accountInfo);
+        startSettings();
+
+        CriteriaHelper.pollInstrumentationThread(() -> signinRowHasAiTierRing(accountInfo));
+        onView(
+                        withContentDescription(
+                                mMainSettings.getString(
+                                        R.string
+                                                .settings_account_row_description_single_line_with_membership,
+                                        accountInfo.getEmail())))
+                .check(matches(isDisplayed()));
+    }
+
+    // Tests that the account row shows no AI tier ring while it shows an identity error.
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testSigninRowShowsNoAiTierRingForIdentityErrors() {
+        setEligibleAiSubscriptionTier();
+        FakeSyncServiceImpl fakeSyncService =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            FakeSyncServiceImpl fakeSyncServiceImpl = new FakeSyncServiceImpl();
+                            SyncServiceFactory.setInstanceForTesting(fakeSyncServiceImpl);
+                            return fakeSyncServiceImpl;
+                        });
+        // Fake an identity error.
+        fakeSyncService.setRequiresClientUpgrade(true);
+        CoreAccountInfo accountInfo = mSyncTestRule.setUpAccountAndSignInForTesting();
+        startSettings();
+
+        onView(allOf(withId(R.id.alert_icon), isDisplayed())).check(matches(isDisplayed()));
+        Assert.assertFalse(signinRowHasAiTierRing(accountInfo));
+        // Without the ring, screen readers read the title and summary, without the membership.
+        String description =
+                mMainSettings.getString(
+                        R.string.settings_account_row_description_with_membership,
+                        TestAccounts.ACCOUNT1.getFullName(),
+                        TestAccounts.ACCOUNT1.getEmail());
+        onView(withContentDescription(description)).check(doesNotExist());
+    }
+
+    // Tests that the account row shows the AI tier ring again after the identity error is fixed on
+    // the Account page.
+    @Test
+    @MediumTest
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testSigninRowShowsAiTierRingAfterIdentityErrorIsFixedOnAccountPage() {
+        setEligibleAiSubscriptionTier();
+        FakeSyncServiceImpl fakeSyncService =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            FakeSyncServiceImpl fakeSyncServiceImpl = new FakeSyncServiceImpl();
+                            SyncServiceFactory.setInstanceForTesting(fakeSyncServiceImpl);
+                            return fakeSyncServiceImpl;
+                        });
+        // Fake an identity error.
+        fakeSyncService.setRequiresClientUpgrade(true);
+        CoreAccountInfo accountInfo = mSyncTestRule.setUpAccountAndSignInForTesting();
+        startSettings();
+        Assert.assertFalse(signinRowHasAiTierRing(accountInfo));
+
+        // Open the Account page, fix the error there and go back.
+        onView(
+                        allOf(
+                                withText(accountInfo.getEmail()),
+                                isDescendantOfA(withId(R.id.preferences_header))))
+                .perform(click());
+        fakeSyncService.setRequiresClientUpgrade(false);
+        pressBack();
+
+        onView(allOf(withId(R.id.alert_icon), isDisplayed())).check(doesNotExist());
+        Assert.assertTrue(signinRowHasAiTierRing(accountInfo));
+    }
+
+    @Test
+    @LargeTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    // Avoids UserActionableError.NEEDS_UPM_BACKEND_UPGRADE, which would hide the ring.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testRenderSigninRowWithAiTierRing() throws IOException {
+        setEligibleAiSubscriptionTier();
+        CoreAccountInfo accountInfo = mSyncTestRule.setUpAccountAndSignInForTesting();
+        startSettings();
+        waitForProfileData(accountInfo);
+        Assert.assertTrue(signinRowHasAiTierRing(accountInfo));
+
+        renderSigninRow("main_settings_account_row_with_ai_tier_ring");
+    }
+
+    // Without a ring, the ring layout shows the avatar and the texts where the other layout does.
+    @Test
+    @LargeTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    // Avoids UserActionableError.NEEDS_UPM_BACKEND_UPGRADE, which would show the alert icon.
+    @Restriction(GmsCoreVersionRestriction.RESTRICTION_TYPE_VERSION_GE_24W15)
+    @RequiresRestart(
+            "SigninManagerImpl only observes the AccountManagerFacade installed for the first test"
+                    + " of a batched process, so accounts added later are never seeded into native")
+    public void testRenderSigninRowInAiTierRingLayoutWithoutRing() throws IOException {
+        CoreAccountInfo accountInfo = mSyncTestRule.setUpAccountAndSignInForTesting();
+        startSettings();
+        waitForProfileData(accountInfo);
+        Assert.assertFalse(signinRowHasAiTierRing(accountInfo));
+
+        renderSigninRow("main_settings_account_row_in_ai_tier_ring_layout_without_ring");
+    }
+
+    // The signed-out icon is padded by the ring padding, so it looks as in the other layout.
+    @Test
+    @LargeTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({
+        SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING,
+        SigninFeatures.AI_SUBSCRIPTION_AVATAR_RING_FOLLOWUP
+    })
+    public void testRenderSignedOutSigninRowInAiTierRingLayout() throws IOException {
+        startSettings();
+
+        renderSigninRow("main_settings_signed_out_account_row_in_ai_tier_ring_layout");
     }
 
     @Test
@@ -1084,6 +1313,47 @@ public class MainSettingsFragmentTest {
         mSettingsTestRule.startSettingsActivity();
         mMainSettings = mSettingsTestRule.getFragment();
         Assert.assertNotNull("SettingsActivity failed to launch.", mMainSettings);
+    }
+
+    /** Makes the primary account eligible for the AI tier ring. */
+    private void setEligibleAiSubscriptionTier() {
+        when(mSubscriptionEligibilityService.getAiSubscriptionTier()).thenReturn(1);
+        SubscriptionEligibilityServiceFactory.setForTesting(mSubscriptionEligibilityService);
+    }
+
+    /** Returns whether the image shown by the account row has the AI tier ring. */
+    private boolean signinRowHasAiTierRing(CoreAccountInfo accountInfo) {
+        SignInPreference signInPreference = mMainSettings.findPreference(MainSettings.PREF_SIGN_IN);
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    DisplayableProfileData profileData =
+                            signInPreference.getProfileDataCache().getById(accountInfo.getId());
+                    // The row shows the image of the cached profile data.
+                    Assert.assertSame(profileData.getImage(), signInPreference.getIcon());
+                    return profileData.hasAiTierRing();
+                });
+    }
+
+    /** Waits for the account row's cache to have the account's profile data. */
+    private void waitForProfileData(CoreAccountInfo accountInfo) {
+        SignInPreference signInPreference = mMainSettings.findPreference(MainSettings.PREF_SIGN_IN);
+        CriteriaHelper.pollUiThread(
+                () ->
+                        signInPreference
+                                .getProfileDataCache()
+                                .hasProfileDataForTesting(accountInfo.getId()));
+    }
+
+    /** Renders the account row of Main Settings. */
+    private void renderSigninRow(String goldenName) throws IOException {
+        onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_header))))
+                .perform(scrollTo(withId(R.id.account_management_account_row)));
+        onView(withId(R.id.account_management_account_row)).check(matches(isDisplayed()));
+
+        View accountRow =
+                mSettingsTestRule.getActivity().findViewById(R.id.account_management_account_row);
+        ChromeRenderTestRule.sanitize(accountRow);
+        mRenderTestRule.render(accountRow, goldenName);
     }
 
     private void configureMockSearchEngine() {

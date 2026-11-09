@@ -194,10 +194,40 @@ static_library("utils") {
 
 source_set("host_types") {
   sources = [
+    "host_type_environment.cc",
+    "host_type_environment.h",
     "host_types.cc",
     "host_types.h",
   ]
-  deps = [ "//base" ]
+  public_deps = [ "//base" ]
+  deps = [ ":session_routing_config" ]
+}
+
+source_set("secure_file_reader") {
+  sources = [
+    "secure_file_reader.cc",
+    "secure_file_reader.h",
+  ]
+  deps = [
+    "//base",
+    "//remoting/base",
+  ]
+}
+
+source_set("session_routing_config") {
+  sources = [
+    "session_routing_config.cc",
+    "session_routing_config.h",
+  ]
+  public_deps = [
+    "//base",
+    "//remoting/base",
+    "//remoting/base:errors",
+  ]
+  deps = [
+    ":secure_file_reader",
+    "//remoting/signaling",
+  ]
 }
 
 source_set("remoting_migrate_host_main_impl") {
@@ -240,6 +270,8 @@ static_library("platform_impls") {
     "clipboard_gnome.h",
     "clipboard_portal.cc",
     "clipboard_portal.h",
+    "created_session_tracker.cc",
+    "created_session_tracker.h",
     "curtain_mode_wayland.cc",
     "curtain_mode_wayland.h",
     "curtain_mode_x11.cc",
@@ -352,8 +384,6 @@ static_library("platform_impls") {
     "scoped_portal_session.h",
     "screen_saver_inhibitor.cc",
     "screen_saver_inhibitor.h",
-    "session_routing_config.cc",
-    "session_routing_config.h",
     "systemd_user_env_setter.cc",
     "systemd_user_env_setter.h",
     "systemd_utils.cc",
@@ -367,6 +397,8 @@ static_library("platform_impls") {
     ":gvariant",
     ":pipewire_loader",
     ":remote_session_info_main_headers",
+    ":secure_file_reader",
+    ":session_routing_config",
     ":utils",
     ":x11",
     ":x11_display_utils",
@@ -475,6 +507,7 @@ source_set("unit_tests") {
   sources = [
     "audio_pipe_reader_unittest.cc",
     "certificate_watcher_unittest.cc",
+    "created_session_tracker_unittest.cc",
     "fake_capture_stream.cc",
     "fake_capture_stream.h",
     "gdbus_connection_ref_unittest.cc",
@@ -485,12 +518,14 @@ source_set("unit_tests") {
     "gnome_lock_state_tracker_unittest.cc",
     "gvariant_ref_unittest.cc",
     "gvariant_type_unittest.cc",
+    "host_types_unittest.cc",
     "peer_connection_bpf_policy_linux_unittest.cc",
     "peer_connection_landlock_policy_linux_unittest.cc",
     "pipewire_audio_capturer_unittest.cc",
     "pipewire_mouse_cursor_capturer_unittest.cc",
     "pulse_audio_capturer_unittest.cc",
     "remote_display_session_manager_unittest.cc",
+    "secure_file_reader_unittest.cc",
     "session_routing_config_unittest.cc",
     "systemd_utils_unittest.cc",
     "test_util.cc",
@@ -518,7 +553,10 @@ source_set("unit_tests") {
   configs += [ "//build/config/linux/dbus" ]
 
   deps = [
+    ":host_types",
     ":platform_impls",
+    ":secure_file_reader",
+    ":session_routing_config",
     ":utils",
     ":x11_display_utils",
     "dbus_interfaces:interface_headers",

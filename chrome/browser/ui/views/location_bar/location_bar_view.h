@@ -263,6 +263,7 @@ class LocationBarView
   views::Widget* GetLocationBarWidget() override;
   OmniboxPopupFileSelector* GetOmniboxPopupFileSelector() const override;
   OmniboxPopupAimPresenter* GetOmniboxPopupAimPresenter() const override;
+  void OnPopupFirstVisuallyNonEmptyPaint() override;
   views::View* GetLocationBarFocusRestoreView() override;
   bool is_full_webui_omnibox() const override;
 
@@ -508,7 +509,7 @@ class LocationBarView
   bool GetPopupMode() const;
 
   // Returns the `PageActionController` for the currently active tab, or nullptr
-  // if there is no valid active tab or the tab is in the process of being
+  // if there is no valid active tab or its `PageActionController` has been
   // destroyed.
   page_actions::PageActionController* GetPageActionController();
 

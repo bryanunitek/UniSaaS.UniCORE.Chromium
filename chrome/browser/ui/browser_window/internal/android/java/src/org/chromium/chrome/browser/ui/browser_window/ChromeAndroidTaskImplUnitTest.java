@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.description;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
@@ -96,6 +97,7 @@ import org.chromium.ui.mojom.WindowShowState;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 @RunWith(BaseRobolectricTestRunner.class)
@@ -919,11 +921,35 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     @Test
-    public void removeActivityScopedObjects_dissociatesTabModelBeforeDestroyingNativeWindow() {
+    public void
+            removeActivityScopedObjects_notifiesObserverThenDissociatesTabModelThenDestroysWindow() {
+        assertBrowserWindowTeardownOrder(
+                chromeAndroidTaskWithMockDeps ->
+                        chromeAndroidTaskWithMockDeps.mChromeAndroidTask
+                                .removeActivityScopedObjects(
+                                        chromeAndroidTaskWithMockDeps
+                                                .mActivityScopedObjects
+                                                .mActivityWindowAndroid));
+    }
+
+    @Test
+    public void onProfileDestroyed_notifiesObserverThenDissociatesTabModelThenDestroysWindow() {
+        assertBrowserWindowTeardownOrder(
+                chromeAndroidTaskWithMockDeps ->
+                        ProfileManager.onProfileDestroyed(
+                                chromeAndroidTaskWithMockDeps.mMockProfile));
+    }
+
+    /**
+     * Asserts that {@code removeWindow} removes the browser window from the task before notifying
+     * observers, notifies observers before dissociating the TabModel, and dissociates the TabModel
+     * before destroying the native browser window.
+     */
+    private static void assertBrowserWindowTeardownOrder(
+            Consumer<ChromeAndroidTaskWithMockDeps> removeWindow) {
         // Arrange
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(1);
-        var chromeAndroidTask =
-                (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
         var mockTabModel = activityScopedObjects.mTabModelSelector.getCurrentModel();
         var nativeBrowserWindow =
@@ -933,12 +959,27 @@ public class ChromeAndroidTaskImplUnitTest {
                                         chromeAndroidTaskWithMockDeps.mMockProfile)
                                 .get(0)
                                 .getNativePtr();
+        var observer = mock(AndroidBrowserWindowObserver.class);
+        chromeAndroidTask.addAndroidBrowserWindowObserver(observer);
+        var windowInfo =
+                new AndroidBrowserWindowInfo(
+                        FAKE_NATIVE_ANDROID_BROWSER_WINDOW_PTR,
+                        chromeAndroidTaskWithMockDeps.mMockProfile,
+                        activityScopedObjects.mActivityWindowAndroid);
+        doAnswer(
+                        _ -> {
+                            assertTrue(chromeAndroidTask.getAllNativeBrowserWindowPtrs().isEmpty());
+                            return null;
+                        })
+                .when(observer)
+                .onBrowserWindowRemoved(windowInfo);
 
         // Act
-        chromeAndroidTask.removeActivityScopedObjects(activityScopedObjects.mActivityWindowAndroid);
+        removeWindow.accept(chromeAndroidTaskWithMockDeps);
 
         // Assert: Strict ordering
-        InOrder inOrder = inOrder(mockTabModel, nativeBrowserWindow);
+        InOrder inOrder = inOrder(observer, mockTabModel, nativeBrowserWindow);
+        inOrder.verify(observer).onBrowserWindowRemoved(windowInfo);
         inOrder.verify(mockTabModel).dissociateWithBrowserWindow();
         inOrder.verify(nativeBrowserWindow).destroy();
     }
@@ -1172,70 +1213,6 @@ public class ChromeAndroidTaskImplUnitTest {
         // Assert.
         assertEquals(testFeature, returnedFeature);
         assertEquals(testFeature, chromeAndroidTask.getFeatureForTesting(featureKey));
-    }
-
-    @Test
-    public void removeAllFeaturesForActivity_removesFeatureAndInvokesOnFeatureRemoved()
-            throws Exception {
-        // Arrange.
-        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
-        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
-        var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        var windowAndroid =
-                chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mActivityWindowAndroid;
-        var featureKey =
-                new ChromeAndroidTaskFeatureKey(
-                        TestChromeAndroidTaskFeature.class, /* profile= */ null, windowAndroid);
-        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
-
-        // Act.
-        chromeAndroidTask.removeAllFeaturesForActivity(windowAndroid);
-
-        // Assert.
-        testFeature.mOnFeatureRemovedHelper.waitForCallback(
-                /* currentCallCount= */ 0, /* numberOfCallsToWaitFor= */ 1);
-        assertNull(
-                "Feature should be removed from the Task.",
-                chromeAndroidTask.getFeatureForTesting(featureKey));
-    }
-
-    @Test
-    public void removeAllFeaturesForActivity_keepFeaturesNotAssociatedWithGivenActivity()
-            throws Exception {
-        // Arrange.
-        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
-        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
-        var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        var windowAndroid =
-                chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mActivityWindowAndroid;
-        var featureKey =
-                new ChromeAndroidTaskFeatureKey(
-                        TestChromeAndroidTaskFeature.class, /* profile= */ null, windowAndroid);
-        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
-
-        var activityScopedObjects2 = createActivityScopedObjects(/* taskId= */ 1);
-        chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
-        var testFeature2 = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        var featureKey2 =
-                new ChromeAndroidTaskFeatureKey(
-                        TestChromeAndroidTaskFeature.class,
-                        /* profile= */ null,
-                        activityScopedObjects2.mActivityWindowAndroid);
-        chromeAndroidTask.addFeature(featureKey2, () -> testFeature2);
-
-        // Act.
-        chromeAndroidTask.removeAllFeaturesForActivity(windowAndroid);
-
-        // Assert.
-        testFeature.mOnFeatureRemovedHelper.waitForCallback(
-                /* currentCallCount= */ 0, /* numberOfCallsToWaitFor= */ 1);
-        assertNull(
-                "Feature should be removed from the Task.",
-                chromeAndroidTask.getFeatureForTesting(featureKey));
-        assertEquals(
-                "Feature should not be removed from the Task.",
-                testFeature2,
-                chromeAndroidTask.getFeatureForTesting(featureKey2));
     }
 
     @Test

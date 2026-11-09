@@ -296,8 +296,6 @@ class ComputedStyle final : public ComputedStyleBase {
   friend class StyleCascade;
   // Editing has to only reveal unvisited info.
   friend class EditingStyle;
-  // Saves Border/Background information for later comparison.
-  friend class CachedUAStyle;
   // Accesses visited and unvisited colors.
   friend class ColorPropertyFunctions;
   // Accesses inset and sizing property values.
@@ -2103,8 +2101,7 @@ class ComputedStyle final : public ComputedStyleBase {
     if (BorderCollapse() == EBorderCollapse::kCollapse) {
       return LogicalSize();
     }
-    return LogicalSize(LayoutUnit(HorizontalBorderSpacing()),
-                       LayoutUnit(VerticalBorderSpacing()));
+    return LogicalSize(HorizontalBorderSpacing(), VerticalBorderSpacing());
   }
 
   // Returns true if the computed style contains a 3D transform operation. This
@@ -3426,7 +3423,8 @@ class ComputedStyleBuilder final : public ComputedStyleBuilderBase {
                                      Element& animating_element);
 
   // Copies the animated source for the given property from a parent style
-  // (e.g. when inheriting from a parent style).
+  // (e.g. when inheriting from a parent style), preserving any untracked
+  // dependencies already on the parent's source.
   CORE_EXPORT void CopyAnimatedSourceFrom(CSSPropertyID property,
                                           const ComputedStyle* parent_style,
                                           bool has_untracked_dependencies);

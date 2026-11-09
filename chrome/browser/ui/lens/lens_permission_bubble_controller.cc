@@ -19,7 +19,6 @@
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
 #include "chrome/browser/ui/lens/lens_string_utils.h"
 #include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -35,10 +34,10 @@
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/dialog_model_field.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
@@ -121,8 +120,7 @@ std::unique_ptr<views::Widget> LensPermissionBubbleController::ShowDialogWidget(
       views::Widget::InitParams::CLIENT_OWNS_WIDGET);
 
   auto widget =
-      tab_interface_->GetTabFeatures()
-          ->tab_dialog_manager()
+      tabs::TabDialogManager::From(&*tab_interface_)
           ->CreateAndShowDialog(
               model_host, std::make_unique<tabs::TabDialogManager::Params>());
   widget->MakeCloseSynchronous(
@@ -217,8 +215,8 @@ void LensPermissionBubbleController::OnHelpCenterLinkClicked(
                              invocation_source_);
   tab_interface_->GetBrowserWindowInterface()->OpenGURL(
       GURL(lens::features::GetLensOverlayHelpCenterURL()),
-      ui::DispositionFromEventFlags(event.flags(),
-                                    WindowOpenDisposition::kNewForegroundTab));
+      ui::DispositionFromEventFlags(
+          event.flags(), ui::mojom::WindowOpenDisposition::kNewForegroundTab));
 }
 
 void LensPermissionBubbleController::OnPermissionDialogAccept(

@@ -63,7 +63,6 @@
 #include "components/history_clusters/core/config.h"
 #include "components/history_clusters/core/features.h"
 #include "components/history_clusters/core/history_clusters_prefs.h"
-#include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/prefs/pref_service.h"
 #include "components/query_parser/snippet.h"
@@ -103,7 +102,7 @@
 #include "ui/android/window_android.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "chrome/browser/quick_delete/jni_headers/QuickDeleteControllerProvider_jni.h"
+#include "chrome/browser/settings/jni_headers/SettingsNavigationFactory_jni.h"
 #endif
 
 using bookmarks::BookmarkModel;
@@ -545,7 +544,8 @@ void BrowsingHistoryHandler::ShowSidePanelUI() {
 void BrowsingHistoryHandler::QueryHistory(
     const std::string& query,
     int max_count,
-    std::optional<double> begin_timestamp,
+    std::optional<base::Time> begin_time,
+    std::optional<base::Time> end_time,
     bool include_user_visits,
     bool include_actor_visits,
     const std::vector<std::string>& client_ids,
@@ -562,14 +562,15 @@ void BrowsingHistoryHandler::QueryHistory(
 
   query_history_callback_ = std::move(callback);
 
-  SendHistoryQuery(max_count, query, begin_timestamp, include_user_visits,
+  SendHistoryQuery(max_count, query, begin_time, end_time, include_user_visits,
                    include_actor_visits, client_ids);
 }
 
 void BrowsingHistoryHandler::SendHistoryQuery(
     int max_count,
     const std::string& query,
-    std::optional<double> begin_timestamp,
+    std::optional<base::Time> begin_time,
+    std::optional<base::Time> end_time,
     bool include_user_visits,
     bool include_actor_visits,
     const std::vector<std::string>& client_ids) {
@@ -577,7 +578,10 @@ void BrowsingHistoryHandler::SendHistoryQuery(
   history::QueryOptions options;
   options.max_count = max_count;
   options.policy_for_404_visits = history::VisitQuery404sPolicy::kExclude404s;
-  options.duplicate_policy = history::QueryOptions::REMOVE_DUPLICATES_PER_DAY;
+  // `BrowsingHistoryService` has more elaborate deduplication logic. Using the
+  // DB-level deduplication would also drop some data, like the visit IDs of
+  // the merged visits.
+  options.duplicate_policy = history::QueryOptions::KEEP_ALL_DUPLICATES;
   options.include_actor_visits = include_actor_visits;
   options.include_user_visits = include_user_visits;
   std::string text_query;
@@ -610,9 +614,11 @@ void BrowsingHistoryHandler::SendHistoryQuery(
 
   query_hostname_suffix_ = options.hostname_suffix;
 
-  if (begin_timestamp.has_value()) {
-    options.begin_time =
-        base::Time::FromMillisecondsSinceUnixEpoch(begin_timestamp.value());
+  if (begin_time.has_value()) {
+    options.begin_time = begin_time.value();
+  }
+  if (end_time.has_value()) {
+    options.end_time = end_time.value();
   }
 
   options.client_ids = client_ids;
@@ -669,7 +675,7 @@ void BrowsingHistoryHandler::OpenClearBrowsingDataDialog() {
   ui::WindowAndroid* window =
       web_contents_ ? web_contents_->GetTopLevelNativeWindow() : nullptr;
   if (window) {
-    Java_QuickDeleteControllerProvider_showDialog(
+    Java_SettingsNavigationFactory_showClearBrowsingData(
         base::android::AttachCurrentThread(), window->GetJavaObject());
   } else {
     DLOG(WARNING)
@@ -1136,11 +1142,10 @@ void BrowsingHistoryHandler::GetTimePeriodOptions(
         static_cast<history::mojom::TimePeriodOptionId>(option.id);
     option_mojom->label = base::UTF16ToUTF8(option.label);
     if (!option.begin_time.is_null()) {
-      option_mojom->begin_time =
-          option.begin_time.InMillisecondsFSinceUnixEpoch();
+      option_mojom->begin_time = option.begin_time;
     }
     if (!option.end_time.is_null()) {
-      option_mojom->end_time = option.end_time.InMillisecondsFSinceUnixEpoch();
+      option_mojom->end_time = option.end_time;
     }
     options_mojom.push_back(std::move(option_mojom));
   }

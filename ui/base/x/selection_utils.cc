@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/containers/span.h"
@@ -79,8 +80,14 @@ std::u16string RefCountedMemoryToString16(
   CHECK(memory.get());
 
   auto in_bytes = base::span(*memory);
+  // Selection data comes from other processes and may contain an incomplete
+  // UTF-16 code unit. Reject it before copying into a std::u16string.
+  if (in_bytes.size() % sizeof(char16_t) != 0) {
+    return {};
+  }
+
   std::u16string out;
-  out.resize(memory->size() / 2u);
+  out.resize(in_bytes.size() / sizeof(char16_t));
   base::as_writable_byte_span(out).copy_from(in_bytes);
   return out;
 }
@@ -221,10 +228,10 @@ void SelectionData::AssignTo(std::vector<uint8_t>* result) const {
 }
 
 scoped_refptr<base::RefCountedBytes> SelectionData::TakeBytes() {
-  if (!memory_.get()) {
+  if (!memory_) {
     return nullptr;
   }
-  auto* memory = memory_.release();
+  scoped_refptr<base::RefCountedMemory> memory = std::move(memory_);
   return base::MakeRefCounted<base::RefCountedBytes>(*memory);
 }
 

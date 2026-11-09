@@ -205,6 +205,7 @@ void ApplyHeaderElementShadow(UIView* targetView) {
   _titleLabel.font =
       PreferredFontForTextStyle(UIFontTextStyleHeadline, UIFontWeightSemibold);
   _titleLabel.isAccessibilityElement = YES;
+  _titleLabel.accessibilityTraits |= UIAccessibilityTraitButton;
   _titleLabel.accessibilityIdentifier =
       kAssistantAIMTitleLabelAccessibilityIdentifier;
   [self updateTitleAlpha];
@@ -263,7 +264,8 @@ void ApplyHeaderElementShadow(UIView* targetView) {
   _closeButton.tintColor = [UIColor clearColor];
   _closeButton.accessibilityIdentifier =
       kAssistantAIMCloseButtonAccessibilityIdentifier;
-  _closeButton.accessibilityLabel = l10n_util::GetNSString(IDS_IOS_ICON_CLOSE);
+  _closeButton.accessibilityLabel =
+      l10n_util::GetNSString(IDS_IOS_AIM_CLOSE_BUTTON_ACCESSIBILITY_LABEL);
   _closeButton.showsLargeContentViewer = YES;
   _closeButton.scalesLargeContentImage = YES;
   _closeButton.largeContentTitle = _closeButton.accessibilityLabel;

@@ -745,13 +745,26 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                 openInBrowserState = CustomTabsButtonState.BUTTON_STATE_OFF;
             }
             builder.setOpenInBrowserState(openInBrowserState);
+            builder.setLightColorSchemeParams(
+                    CustomTabColorProviderImpl.getColorSchemeParams(
+                            intent, CustomTabsIntent.COLOR_SCHEME_LIGHT));
+            builder.setDarkColorSchemeParams(
+                    CustomTabColorProviderImpl.getColorSchemeParams(
+                            intent, CustomTabsIntent.COLOR_SCHEME_DARK));
+            builder.setInitialBackgroundColor(
+                    CustomTabColorProviderImpl.retrieveInitialBackgroundColor(intent));
+            builder.setCustomButtonParams(CustomButtonParamsImpl.fromIntent(context, intent));
 
             mDataHolder = builder.build();
         }
 
-        // ColorProvider is not stored in CustomTabIntentDataHolder because the colorScheme can
-        // change when the Activity is recreated (e.g. when the system dark/light theme changes).
-        mColorProvider = new CustomTabColorProviderImpl(intent, context, colorScheme);
+        // Color scheme params for both schemes live in the holder; the ColorProvider is re-derived
+        // for the colorScheme in use because it can change on Activity recreation.
+        mColorProvider =
+                new CustomTabColorProviderImpl(
+                        mDataHolder.getColorSchemeParams(colorScheme),
+                        context,
+                        mDataHolder.mInitialBackgroundColor);
 
         if (getUiType() == CustomTabsUiType.POPUP) {
             mShareState = CustomTabsIntent.SHARE_STATE_OFF;
@@ -772,7 +785,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             }
         }
 
-        retrieveCustomButtons(intent, context);
+        retrieveCustomButtons(context);
 
         List<Bundle> menuItems =
                 IntentUtils.getParcelableArrayListExtra(intent, CustomTabsIntent.EXTRA_MENU_ITEMS);
@@ -919,19 +932,24 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     }
 
     /**
-     * Gets custom buttons from the intent and updates {@link #mCustomButtonParams}, {@link
-     * #mBottombarButtons} and {@link #mToolbarButtons}.
+     * Gets custom buttons from {@link #mDataHolder} and updates {@link #mCustomButtonParams},
+     * {@link #mBottombarButtons} and {@link #mToolbarButtons}. If a toolbar button's icon no longer
+     * fits the toolbar (e.g. after an in-place {@link CustomButtonParams#update} call or a density
+     * configuration change), it is demoted to the bottom bar and {@link
+     * CustomButtonParams#updateShowOnToolbar(boolean)} is updated to match.
      */
-    private void retrieveCustomButtons(Intent intent, Context context) {
+    private void retrieveCustomButtons(Context context) {
         assert mCustomButtonParams == null;
-        mCustomButtonParams = CustomButtonParamsImpl.fromIntent(context, intent);
+        mCustomButtonParams = new ArrayList<>(mDataHolder.mCustomButtonParams);
         Set<Integer> googleBottomBarSupportedCustomButtonParamIds =
                 getGoogleBottomBarSupportedCustomButtonParamIds();
         for (CustomButtonParams params : mCustomButtonParams) {
             if (googleBottomBarSupportedCustomButtonParamIds.contains(params.getId())) {
                 mGoogleBottomBarButtons.add(params);
                 params.updateShowOnToolbar(false);
-            } else if (!params.showOnToolbar()) {
+            } else if (!params.showOnToolbar() || !params.doesIconFitToolbar(context)) {
+                // Keep mIsOnToolbar in sync if the button was demoted due to icon size.
+                params.updateShowOnToolbar(false);
                 mBottombarButtons.add(params);
             } else if (canAddMoreToolbarItems()) {
                 mToolbarButtons.add(params);

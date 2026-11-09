@@ -130,7 +130,18 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
                ClientSideDetectionType request_type,
                std::optional<bool> did_match_high_confidence_allowlist),
               (override));
-  GURL GetCurrentUrl() const override { return current_url(); }
+  GURL GetCurrentUrl() const override {
+    if (current_url_override_.has_value()) {
+      return *current_url_override_;
+    }
+    return current_url();
+  }
+  void set_current_url_override(const GURL& url) {
+    current_url_override_ = url;
+  }
+  void clear_current_url_override() {
+    current_url_override_.reset();
+  }
   MOCK_METHOD(void,
               ClassifyPhishingThroughThresholds,
               (ClientPhishingRequest * verdict),
@@ -155,7 +166,17 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
 
   void CaptureScreenshot(ScreenshotCallback callback) override {
     ++capture_screenshot_count_;
+    if (defer_screenshot_) {
+      pending_screenshot_callback_ = std::move(callback);
+      return;
+    }
     std::move(callback).Run(next_screenshot_);
+  }
+
+  // Runs the capture callback held back by `set_defer_screenshot(true)`.
+  void FinishDeferredScreenshot() {
+    ASSERT_TRUE(pending_screenshot_callback_);
+    std::move(pending_screenshot_callback_).Run(next_screenshot_);
   }
 
   visual_utils::CanExtractVisualFeaturesResult
@@ -183,6 +204,7 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
   void set_next_screenshot(const gfx::Image& image) {
     next_screenshot_ = image;
   }
+  void set_defer_screenshot(bool value) { defer_screenshot_ = value; }
   void set_can_extract_visual_features_result(
       visual_utils::CanExtractVisualFeaturesResult result) {
     can_extract_visual_features_result_ = result;
@@ -190,6 +212,7 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
 
   void MaybeStartPreClassification(
       ClientSideDetectionType request_type) override {
+    preclassification_count_++;
     last_preclassification_request_type_ = request_type;
     set_last_committed_url(request_type, current_url());
   }
@@ -233,6 +256,12 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
   void set_site_engagement_score(std::optional<double> score) {
     site_engagement_score_ = score;
   }
+
+  std::string GetPageTitle() const override { return page_title_; }
+
+  void set_page_title(std::string page_title) {
+    page_title_ = std::move(page_title);
+  }
   MOCK_METHOD(void,
               ShowBlockingPage,
               (GURL phishing_url,
@@ -251,18 +280,23 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
   using ClientSideDetectionHostBase::
       AddMiscellaneousMetadataToClientPhishingRequest;
   using ClientSideDetectionHostBase::CancelBrowserSideClassification;
+  using ClientSideDetectionHostBase::CancelPendingRequests;
   using ClientSideDetectionHostBase::CanGetAccessToken;
   using ClientSideDetectionHostBase::CanSendSamplePing;
   using ClientSideDetectionHostBase::classification_image_;
   using ClientSideDetectionHostBase::classifier_;
+  using ClientSideDetectionHostBase::current_url;
   using ClientSideDetectionHostBase::ExtractClipboardData;
   using ClientSideDetectionHostBase::GetTierValue;
   using ClientSideDetectionHostBase::HasDonePreclassificationCheckOnSameURL;
   using ClientSideDetectionHostBase::HasForceRequestFromRtUrlLookup;
   using ClientSideDetectionHostBase::image_embedder_;
+  using ClientSideDetectionHostBase::is_checking_uniform_image;
   using ClientSideDetectionHostBase::is_classifying;
   using ClientSideDetectionHostBase::is_csd_running;
+  using ClientSideDetectionHostBase::is_uniform_image_retry_timer_running;
   using ClientSideDetectionHostBase::MaybeSendClientPhishingRequest;
+  using ClientSideDetectionHostBase::MaybeStartIntelligentScanForScamDetection;
   using ClientSideDetectionHostBase::NewRequestTypeTierHigher;
   using ClientSideDetectionHostBase::OnCreditCardFormVisitCount;
   using ClientSideDetectionHostBase::OnImageEmbeddingDone;
@@ -270,6 +304,7 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
   using ClientSideDetectionHostBase::OnTextCopiedToClipboard;
   using ClientSideDetectionHostBase::OnVisualClassificationDone;
   using ClientSideDetectionHostBase::PhishingDetectionDone;
+  using ClientSideDetectionHostBase::PhishingImageEmbeddingDone;
   using ClientSideDetectionHostBase::SendRequest;
   using ClientSideDetectionHostBase::set_current_url;
   using ClientSideDetectionHostBase::set_is_classifying;
@@ -286,8 +321,12 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
   credit_card_form::ReferringApp referring_app_ =
       credit_card_form::ReferringApp::kNoReferringApp;
   std::optional<double> site_engagement_score_;
+  std::optional<GURL> current_url_override_;
+  std::string page_title_;
   bool use_browser_side_image_embedding_ = false;
   gfx::Image next_screenshot_;
+  bool defer_screenshot_ = false;
+  ScreenshotCallback pending_screenshot_callback_;
   int capture_screenshot_count_ = 0;
   int cancel_pending_requests_count_ = 0;
   visual_utils::CanExtractVisualFeaturesResult
@@ -295,6 +334,7 @@ class TestClientSideDetectionHostBase : public ClientSideDetectionHostBase {
           CanExtractVisualFeaturesResult::kCanExtractVisualFeatures;
   std::optional<VisualClassificationEarlyReturnReason>
       last_early_return_reason_;
+  int preclassification_count_ = 0;
 };
 
 class ClientSideDetectionHostBaseTest : public testing::Test {
@@ -324,7 +364,8 @@ class ClientSideDetectionHostBaseTest : public testing::Test {
     content_setting_map_->ShutdownOnUIThread();
   }
 
-  base::test::TaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   sync_preferences::TestingPrefServiceSyncable prefs_;
   scoped_refptr<HostContentSettingsMap> content_setting_map_;
   std::unique_ptr<VerdictCacheManager> cache_manager_;
@@ -531,6 +572,10 @@ TEST_F(ClientSideDetectionHostBaseTest,
   EXPECT_EQ(request.client_side_detection_type(), TRIGGER_MODELS);
   EXPECT_EQ(request.population().user_population(),
             ChromeUserPopulation::ENHANCED_PROTECTION);
+  EXPECT_THAT(
+      request.population().finch_active_groups(),
+      ::testing::Not(::testing::Contains(::testing::HasSubstr(
+          "ClientSideDetectionKeyboardLockUniformPageDelay"))));
 }
 
 TEST_F(ClientSideDetectionHostBaseTest, PhishingDetectionDoneMetricsAndCache) {
@@ -648,6 +693,307 @@ TEST_F(ClientSideDetectionHostBaseTest, SendRequest) {
 
   // State should be reset.
   EXPECT_FALSE(host_->is_csd_running());
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       ForceRequest_SendsImmediateFirstPingAndDelayedSecondPingWhenEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kClientSideDetectionSecondForceRequestWithDelay);
+
+  GURL url("https://example.com/");
+  MockClientSideDetectionServiceBase mock_csd_service;
+  host_ = std::make_unique<TestClientSideDetectionHostBase>(
+      cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+      mock_csd_service.GetWeakPtr(), /*is_off_the_record=*/false);
+  host_->set_current_url(url);
+
+  std::vector<ClientPhishingRequest> sent_requests;
+  EXPECT_CALL(mock_csd_service, SendClientReportPhishingRequest(_, _, _))
+      .WillRepeatedly([&](std::unique_ptr<ClientPhishingRequest> verdict,
+                          ClientSideDetectionServiceBase::
+                              ClientReportPhishingRequestCallback callback,
+                          const std::string& access_token) {
+        ClientSideDetectionType request_type =
+            verdict->client_side_detection_type();
+        sent_requests.push_back(*verdict);
+        host_->CallMaybeShowPhishingWarning(
+            /*is_from_cache=*/false, request_type,
+            /*did_match_high_confidence_allowlist=*/false, url,
+            /*is_phishing=*/false, net::HTTP_OK,
+            IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+      });
+
+  base::HistogramTester histograms;
+  auto verdict1 = std::make_unique<ClientPhishingRequest>();
+  verdict1->set_url(url.spec());
+  verdict1->set_client_side_detection_type(FORCE_REQUEST);
+  verdict1->set_report_type(ClientPhishingRequest::FULL_REPORT);
+
+  // 1st ping is sent immediately at t = 0 ms, and safe verdict schedules 2nd
+  // ping.
+  host_->SendRequest(std::move(verdict1), "token",
+                     /*did_match_high_confidence_allowlist=*/false,
+                     /*is_invalid_ip=*/false);
+  ASSERT_EQ(sent_requests.size(), 1u);
+  EXPECT_EQ(host_->preclassification_count_, 0);
+  EXPECT_THAT(
+      sent_requests[0].population().finch_active_groups(),
+      ::testing::AllOf(
+          ::testing::Contains(
+              "ClientSideDetectionSecondForceRequestWithDelay.Enabled.2000"),
+          ::testing::Contains("ClientSideDetectionSecondForceRequestWithDelay."
+                              "Enabled.2000.FirstPing")));
+  histograms.ExpectUniqueSample("SBClientPhishing.ForceRequest.PingOrder",
+                                ForceRequestPingOrder::kFirstPing, 1);
+  histograms.ExpectUniqueSample(
+      "SBClientPhishing.ForceRequest.DelayedPingEvent",
+      DelayedForceRequestPingEvent::kScheduled, 1);
+
+  // At 1999 ms, the 2nd preclassification has not started yet.
+  task_environment_.FastForwardBy(base::Milliseconds(1999));
+  EXPECT_EQ(host_->preclassification_count_, 0);
+
+  // At 2000 ms, the timer triggers MaybeStartPreClassification(FORCE_REQUEST).
+  task_environment_.FastForwardBy(base::Milliseconds(1));
+  EXPECT_EQ(host_->preclassification_count_, 1);
+  EXPECT_EQ(host_->last_preclassification_request_type_, FORCE_REQUEST);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kStarted, 1);
+
+  // When the 2nd FORCE_REQUEST completes and sends its ping, it is tagged with
+  // .SecondPing and kSecondPing.
+  auto verdict2 = std::make_unique<ClientPhishingRequest>();
+  verdict2->set_url(url.spec());
+  verdict2->set_client_side_detection_type(FORCE_REQUEST);
+  verdict2->set_report_type(ClientPhishingRequest::FULL_REPORT);
+  host_->SendRequest(std::move(verdict2), "token",
+                     /*did_match_high_confidence_allowlist=*/false,
+                     /*is_invalid_ip=*/false);
+  ASSERT_EQ(sent_requests.size(), 2u);
+  EXPECT_THAT(
+      sent_requests[1].population().finch_active_groups(),
+      ::testing::AllOf(
+          ::testing::Contains(
+              "ClientSideDetectionSecondForceRequestWithDelay.Enabled.2000"),
+          ::testing::Contains("ClientSideDetectionSecondForceRequestWithDelay."
+                              "Enabled.2000.SecondPing")));
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.PingOrder",
+                               ForceRequestPingOrder::kFirstPing, 1);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.PingOrder",
+                               ForceRequestPingOrder::kSecondPing, 1);
+  histograms.ExpectTotalCount("SBClientPhishing.ForceRequest.PingOrder", 2);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kScheduled, 1);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kStarted, 1);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kSent, 1);
+  histograms.ExpectTotalCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                              3);
+
+  // Advancing another 2000 ms must not trigger a 3rd preclassification.
+  task_environment_.FastForwardBy(base::Milliseconds(2000));
+  EXPECT_EQ(host_->preclassification_count_, 1);
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       ForceRequest_UsesConfiguredRequestDelayMsParamForSecondPing) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kClientSideDetectionSecondForceRequestWithDelay,
+      {{"RequestDelayMs", "500"}});
+
+  GURL url("https://example.com/");
+  MockClientSideDetectionServiceBase mock_csd_service;
+  host_ = std::make_unique<TestClientSideDetectionHostBase>(
+      cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+      mock_csd_service.GetWeakPtr(), /*is_off_the_record=*/false);
+  host_->set_current_url(url);
+
+  std::vector<ClientPhishingRequest> sent_requests;
+  EXPECT_CALL(mock_csd_service, SendClientReportPhishingRequest(_, _, _))
+      .WillRepeatedly([&](std::unique_ptr<ClientPhishingRequest> verdict,
+                          ClientSideDetectionServiceBase::
+                              ClientReportPhishingRequestCallback callback,
+                          const std::string& access_token) {
+        ClientSideDetectionType request_type =
+            verdict->client_side_detection_type();
+        sent_requests.push_back(*verdict);
+        host_->CallMaybeShowPhishingWarning(
+            /*is_from_cache=*/false, request_type,
+            /*did_match_high_confidence_allowlist=*/false, url,
+            /*is_phishing=*/false, net::HTTP_OK,
+            IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+      });
+
+  auto verdict1 = std::make_unique<ClientPhishingRequest>();
+  verdict1->set_url(url.spec());
+  verdict1->set_client_side_detection_type(FORCE_REQUEST);
+
+  host_->SendRequest(std::move(verdict1), "token",
+                     /*did_match_high_confidence_allowlist=*/false,
+                     /*is_invalid_ip=*/false);
+  ASSERT_EQ(sent_requests.size(), 1u);
+  EXPECT_THAT(sent_requests[0].population().finch_active_groups(),
+              ::testing::Contains("ClientSideDetectionSecondForceRequestWithDel"
+                                  "ay.Enabled.500.FirstPing"));
+
+  task_environment_.FastForwardBy(base::Milliseconds(499));
+  EXPECT_EQ(host_->preclassification_count_, 0);
+
+  task_environment_.FastForwardBy(base::Milliseconds(1));
+  EXPECT_EQ(host_->preclassification_count_, 1);
+
+  auto verdict2 = std::make_unique<ClientPhishingRequest>();
+  verdict2->set_url(url.spec());
+  verdict2->set_client_side_detection_type(FORCE_REQUEST);
+  host_->SendRequest(std::move(verdict2), "token",
+                     /*did_match_high_confidence_allowlist=*/false,
+                     /*is_invalid_ip=*/false);
+  ASSERT_EQ(sent_requests.size(), 2u);
+  EXPECT_THAT(sent_requests[1].population().finch_active_groups(),
+              ::testing::Contains("ClientSideDetectionSecondForceRequestWithDel"
+                                  "ay.Enabled.500.SecondPing"));
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       ForceRequest_SendsOnlyOnePingWhenFeatureDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      kClientSideDetectionSecondForceRequestWithDelay);
+
+  GURL url("https://example.com/");
+  MockClientSideDetectionServiceBase mock_csd_service;
+  host_ = std::make_unique<TestClientSideDetectionHostBase>(
+      cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+      mock_csd_service.GetWeakPtr(), /*is_off_the_record=*/false);
+  host_->set_current_url(url);
+
+  std::vector<ClientPhishingRequest> sent_requests;
+  EXPECT_CALL(mock_csd_service, SendClientReportPhishingRequest(_, _, _))
+      .WillRepeatedly([&](std::unique_ptr<ClientPhishingRequest> verdict,
+                          ClientSideDetectionServiceBase::
+                              ClientReportPhishingRequestCallback callback,
+                          const std::string& access_token) {
+        sent_requests.push_back(*verdict);
+        host_->CallMaybeShowPhishingWarning(
+            /*is_from_cache=*/false, verdict->client_side_detection_type(),
+            /*did_match_high_confidence_allowlist=*/false, url,
+            /*is_phishing=*/false, net::HTTP_OK,
+            IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+      });
+
+  base::HistogramTester histograms;
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(url.spec());
+  verdict->set_client_side_detection_type(FORCE_REQUEST);
+
+  host_->SendRequest(std::move(verdict), "token",
+                     /*did_match_high_confidence_allowlist=*/false,
+                     /*is_invalid_ip=*/false);
+  ASSERT_EQ(sent_requests.size(), 1u);
+  EXPECT_THAT(sent_requests[0].population().finch_active_groups(),
+              ::testing::Contains(
+                  "ClientSideDetectionSecondForceRequestWithDelay.Control"));
+  histograms.ExpectUniqueSample("SBClientPhishing.ForceRequest.PingOrder",
+                                ForceRequestPingOrder::kFirstPing, 1);
+  histograms.ExpectTotalCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                              0);
+
+  task_environment_.FastForwardBy(base::Milliseconds(2000));
+  EXPECT_EQ(host_->preclassification_count_, 0);
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       NonForceRequestOrUnsafeVerdict_DoesNotScheduleSecondPing) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kClientSideDetectionSecondForceRequestWithDelay);
+
+  GURL url("https://example.com/");
+  MockClientSideDetectionServiceBase mock_csd_service;
+  host_ = std::make_unique<TestClientSideDetectionHostBase>(
+      cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+      mock_csd_service.GetWeakPtr(), /*is_off_the_record=*/false);
+  host_->set_current_url(url);
+
+  base::HistogramTester histograms;
+
+  // Non-FORCE_REQUEST with safe verdict does not schedule second request.
+  host_->CallMaybeShowPhishingWarning(
+      /*is_from_cache=*/false, KEYBOARD_LOCK_REQUESTED,
+      /*did_match_high_confidence_allowlist=*/false, url,
+      /*is_phishing=*/false, net::HTTP_OK,
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+
+  // FORCE_REQUEST with phishy = true does not schedule second request.
+  EXPECT_CALL(*host_, ShowBlockingPage(url, FORCE_REQUEST, _, true, false))
+      .Times(1);
+  host_->CallMaybeShowPhishingWarning(
+      /*is_from_cache=*/false, FORCE_REQUEST,
+      /*did_match_high_confidence_allowlist=*/false, url,
+      /*is_phishing=*/true, net::HTTP_OK,
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+
+  // FORCE_REQUEST without INTELLIGENT_SCAN_VERDICT_SAFE does not schedule
+  // second request.
+  host_->CallMaybeShowPhishingWarning(
+      /*is_from_cache=*/false, FORCE_REQUEST,
+      /*did_match_high_confidence_allowlist=*/false, url,
+      /*is_phishing=*/false, net::HTTP_OK,
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_UNSPECIFIED);
+
+  histograms.ExpectTotalCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                              0);
+  task_environment_.FastForwardBy(base::Milliseconds(2000));
+  EXPECT_EQ(host_->preclassification_count_, 0);
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       ForceRequest_SecondPingCancelledByNavigationDuringDelay) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kClientSideDetectionSecondForceRequestWithDelay);
+
+  GURL url("https://example.com/");
+  MockClientSideDetectionServiceBase mock_csd_service;
+  host_ = std::make_unique<TestClientSideDetectionHostBase>(
+      cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+      mock_csd_service.GetWeakPtr(), /*is_off_the_record=*/false);
+  host_->set_current_url(url);
+
+  base::HistogramTester histograms;
+  host_->CallMaybeShowPhishingWarning(
+      /*is_from_cache=*/false, FORCE_REQUEST,
+      /*did_match_high_confidence_allowlist=*/false, url,
+      /*is_phishing=*/false, net::HTTP_OK,
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kScheduled, 1);
+
+  // Navigation occurs at 500 ms before the 2000 ms timer fires.
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+  host_->CancelPendingRequests();
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kCancelled, 1);
+
+  // Advancing past 2000 ms must not start the 2nd preclassification.
+  task_environment_.FastForwardBy(base::Milliseconds(2000));
+  EXPECT_EQ(host_->preclassification_count_, 0);
+  histograms.ExpectTotalCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                              2);
+
+  // After navigation resets state in CancelPendingRequests(), a new safe
+  // FORCE_REQUEST verdict on the next page schedules a delayed ping again.
+  host_->CallMaybeShowPhishingWarning(
+      /*is_from_cache=*/false, FORCE_REQUEST,
+      /*did_match_high_confidence_allowlist=*/false,
+      GURL("https://example2.com/"),
+      /*is_phishing=*/false, net::HTTP_OK,
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  histograms.ExpectBucketCount("SBClientPhishing.ForceRequest.DelayedPingEvent",
+                               DelayedForceRequestPingEvent::kScheduled, 2);
 }
 
 // Verifies that OnCreditCardFormVisitCount returns early without triggering
@@ -1214,6 +1560,7 @@ TEST_F(
 
 TEST_F(ClientSideDetectionHostBaseTest,
        StartIntelligentScan_SkipsWhenBothInnerTextAndScreenshotAreEmpty) {
+  base::HistogramTester histogram_tester;
   GURL url("https://example.com/");
   auto verdict = std::make_unique<ClientPhishingRequest>();
   verdict->set_url(url.spec());
@@ -1244,10 +1591,13 @@ TEST_F(ClientSideDetectionHostBaseTest,
                               /*did_match_high_confidence_allowlist=*/false,
                               /*is_invalid_ip=*/false, /*inner_text=*/"",
                               /*tab_screenshot=*/std::nullopt);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.Multimodal.ScreenshotCaptureSize", 0);
 }
 
 TEST_F(ClientSideDetectionHostBaseTest,
        StartIntelligentScan_SkipsWhenInnerTextTooShortAndScreenshotEmpty) {
+  base::HistogramTester histogram_tester;
   GURL url("https://example.com/");
   auto verdict = std::make_unique<ClientPhishingRequest>();
   verdict->set_url(url.spec());
@@ -1278,10 +1628,13 @@ TEST_F(ClientSideDetectionHostBaseTest,
                               /*did_match_high_confidence_allowlist=*/false,
                               /*is_invalid_ip=*/false, /*inner_text=*/"text",
                               /*tab_screenshot=*/"");
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.Multimodal.ScreenshotCaptureSize", 0);
 }
 
 TEST_F(ClientSideDetectionHostBaseTest,
        StartIntelligentScan_ProceedsWhenInnerTextEmptyAndScreenshotPresent) {
+  base::HistogramTester histogram_tester;
   GURL url("https://example.com/");
   auto verdict = std::make_unique<ClientPhishingRequest>();
   verdict->set_url(url.spec());
@@ -1307,10 +1660,14 @@ TEST_F(ClientSideDetectionHostBaseTest,
                               /*tab_screenshot=*/"fake_png_bytes");
   EXPECT_EQ(host_->last_intelligent_scan_tab_screenshot_for_testing(),
             "fake_png_bytes");
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.Multimodal.ScreenshotCaptureSize",
+      std::string("fake_png_bytes").size(), 1);
 }
 
 TEST_F(ClientSideDetectionHostBaseTest,
        StartIntelligentScan_ProceedsWhenInnerTextTooShortAndScreenshotPresent) {
+  base::HistogramTester histogram_tester;
   GURL url("https://example.com/");
   auto verdict = std::make_unique<ClientPhishingRequest>();
   verdict->set_url(url.spec());
@@ -1336,6 +1693,183 @@ TEST_F(ClientSideDetectionHostBaseTest,
                               /*tab_screenshot=*/"fake_png_bytes");
   EXPECT_EQ(host_->last_intelligent_scan_tab_screenshot_for_testing(),
             "fake_png_bytes");
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.Multimodal.ScreenshotCaptureSize",
+      std::string("fake_png_bytes").size(), 1);
+}
+
+TEST_F(ClientSideDetectionHostBaseTest,
+       KeyboardLockUniformImageRetry_CancelledOnSameDocumentNavigationUrlChange) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kClientSideDetectionKeyboardLockUniformPageDelay,
+      {{"DelayDurationMs", "500"}, {"MaxRetries", "3"}});
+
+  host_->set_tick_clock_for_testing(task_environment_.GetMockTickClock());
+
+  GURL initial_url("https://example.com/initial");
+  host_->set_current_url(initial_url);
+
+  base::HistogramTester histograms;
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(initial_url.spec());
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  // A 1x1 image with identical bytes across channels is uniform.
+  VisualFeatures visual_features;
+  visual_features.mutable_image()->set_width(1);
+  visual_features.mutable_image()->set_height(1);
+  visual_features.mutable_image()->set_data(std::string(3, '\0'));
+
+  host_->PhishingImageEmbeddingDone(
+      std::move(verdict),
+      /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false,
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kSuccess,
+      /*image_feature_embedding=*/std::nullopt,
+      std::move(visual_features));
+
+  // The retry timer should now be running.
+  EXPECT_TRUE(host_->is_uniform_image_retry_timer_running());
+  EXPECT_TRUE(host_->is_checking_uniform_image());
+  histograms.ExpectUniqueSample(
+      "SBClientPhishing.KeyboardLock.IsInitialImageUniform", true, 1);
+
+  // Simulate a same-document navigation URL change before the timer fires.
+  GURL changed_url("https://example.com/changed");
+  host_->set_current_url_override(changed_url);
+  ASSERT_NE(host_->GetCurrentUrl().GetWithoutRef(),
+            host_->current_url().GetWithoutRef());
+
+  // Fast forward to timer expiration.
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+
+  // The retry timer should no longer be running, and the retry should be
+  // cancelled without hanging.
+  EXPECT_FALSE(host_->is_uniform_image_retry_timer_running());
+  EXPECT_FALSE(host_->is_checking_uniform_image());
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.PhishingImageEmbeddingResult",
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kCancelled, 1);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.PhishingImageEmbeddingResult.KeyboardLockRequested",
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kCancelled, 1);
+  histograms.ExpectTotalCount(
+      "SBClientPhishing.KeyboardLock.IsFinalImageUniform", 0);
+}
+
+class ClientSideDetectionHostBaseIntelligentScanTitleTest
+    : public ClientSideDetectionHostBaseTest {
+ protected:
+  std::unique_ptr<ClientPhishingRequest> PrepareIntelligentScan(
+      std::string page_title,
+      std::string inner_text) {
+    host_ = std::make_unique<TestClientSideDetectionHostBase>(
+        cache_manager_.get(), &prefs_, /*history_service=*/nullptr,
+        mock_csd_service_.GetWeakPtr(), /*is_off_the_record=*/false,
+        &mock_intelligent_scan_delegate_);
+    host_->set_current_url(url_);
+    host_->set_page_title(std::move(page_title));
+
+    EXPECT_CALL(mock_intelligent_scan_delegate_,
+                ShouldRequestIntelligentScan(_))
+        .WillOnce(Return(true));
+    EXPECT_CALL(mock_intelligent_scan_delegate_,
+                GetIntelligentScanModelType(true))
+        .WillOnce(Return(IntelligentScanDelegate::ModelType::kServerSide));
+    EXPECT_CALL(*host_, GetInnerText(_))
+        .WillOnce([inner_text =
+                       std::move(inner_text)](HostInnerTextCallback callback) {
+          std::move(callback).Run(inner_text);
+        });
+
+    auto verdict = std::make_unique<ClientPhishingRequest>();
+    verdict->set_url(url_.spec());
+    verdict->set_client_side_detection_type(FORCE_REQUEST);
+    return verdict;
+  }
+
+  const GURL url_{"https://example.com/"};
+  MockClientSideDetectionServiceBase mock_csd_service_;
+  MockIntelligentScanDelegate mock_intelligent_scan_delegate_;
+};
+
+TEST_F(ClientSideDetectionHostBaseIntelligentScanTitleTest,
+       ExcludesTitleWhenFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      kClientSideDetectionIncludeTitleInInnerText);
+  base::HistogramTester histogram_tester;
+  auto verdict = PrepareIntelligentScan("Test Title", "Page body text");
+  EXPECT_CALL(mock_intelligent_scan_delegate_,
+              StartIntelligentScan("Page body text", url_.spec(), _, _))
+      .WillOnce(Return(base::UnguessableToken::Create()));
+
+  host_->MaybeStartIntelligentScanForScamDetection(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false);
+
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.IntelligentScanPageTitleSize", 0);
+}
+
+TEST_F(ClientSideDetectionHostBaseIntelligentScanTitleTest,
+       PrependsTitleWhenFeatureEnabled) {
+  base::test::ScopedFeatureList feature_list(
+      kClientSideDetectionIncludeTitleInInnerText);
+  base::HistogramTester histogram_tester;
+  auto verdict = PrepareIntelligentScan("Test Title", "Page body text");
+  const std::string expected_text = "Test Title\nPage body text";
+  EXPECT_CALL(mock_intelligent_scan_delegate_,
+              StartIntelligentScan(expected_text, url_.spec(), _, _))
+      .WillOnce(Return(base::UnguessableToken::Create()));
+
+  host_->MaybeStartIntelligentScanForScamDetection(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false);
+
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.IntelligentScanPageTitleSize",
+      std::string("Test Title").size(), 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.IntelligentScanInnerTextSize", expected_text.size(), 1);
+}
+
+TEST_F(ClientSideDetectionHostBaseIntelligentScanTitleTest,
+       NoLeadingNewlineWhenTitleEmpty) {
+  base::test::ScopedFeatureList feature_list(
+      kClientSideDetectionIncludeTitleInInnerText);
+  base::HistogramTester histogram_tester;
+  auto verdict = PrepareIntelligentScan(/*page_title=*/"", "Page body text");
+  EXPECT_CALL(mock_intelligent_scan_delegate_,
+              StartIntelligentScan("Page body text", url_.spec(), _, _))
+      .WillOnce(Return(base::UnguessableToken::Create()));
+
+  host_->MaybeStartIntelligentScanForScamDetection(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false);
+
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.IntelligentScanPageTitleSize", 0, 1);
+}
+
+TEST_F(ClientSideDetectionHostBaseIntelligentScanTitleTest,
+       DoesNotPrependTitleWhenBodyIsBelowMinThreshold) {
+  base::test::ScopedFeatureList feature_list(
+      kClientSideDetectionIncludeTitleInInnerText);
+  base::HistogramTester histogram_tester;
+  auto verdict = PrepareIntelligentScan("Test Title", /*inner_text=*/"");
+  EXPECT_CALL(mock_intelligent_scan_delegate_, StartIntelligentScan(_, _, _, _))
+      .Times(0);
+  EXPECT_CALL(mock_csd_service_, SendClientReportPhishingRequest(_, _, _));
+
+  host_->MaybeStartIntelligentScanForScamDetection(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.IntelligentScanPageTitleSize", 0);
 }
 
 // Unit tests for ExtractClipboardData
@@ -1711,7 +2245,6 @@ TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
        BrowserSideImageEmbeddingUsesRetainedImage) {
   PrepareImageEmbeddingTest();
   MockScorer* scorer = InstallMockScorer();
-  host_->image_embedder_->set_scorer(scorer);
   EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _))
       .WillOnce(&RunEmbeddingCallback);
   host_->classification_image_ = CreateTestImage();
@@ -1753,7 +2286,6 @@ TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
        BrowserSideImageEmbeddingEmptyResultRecordsFailed) {
   PrepareImageEmbeddingTest();
   MockScorer* scorer = InstallMockScorer();
-  host_->image_embedder_->set_scorer(scorer);
   EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _))
       .WillOnce([](const gfx::Image& image,
                    base::OnceCallback<void(ImageFeatureEmbedding)> callback) {
@@ -1791,12 +2323,68 @@ TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
   Mock::VerifyAndClearExpectations(scorer);
 }
 
+// Without a retained classification image (e.g. classification was skipped
+// for a non-page-load trigger), image embedding captures the page itself.
 TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
-       BrowserSideImageEmbeddingSkippedWithoutRetainedImage) {
+       BrowserSideImageEmbeddingRecapturesWithoutRetainedImage) {
   PrepareImageEmbeddingTest();
   MockScorer* scorer = InstallMockScorer();
-  host_->image_embedder_->set_scorer(scorer);
+  // No prior classification handed the embedder a scorer; the re-capture path
+  // injects the service's current one itself.
+  EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _))
+      .WillOnce(&RunEmbeddingCallback);
+  host_->set_next_screenshot(CreateTestImage());
+  // Visual features are allowed for skipped classifications even when the
+  // viewport check fails.
+  host_->set_can_extract_visual_features_result(
+      visual_utils::CanExtractVisualFeaturesResult::kBelowMinFrame);
+
+  std::unique_ptr<ClientPhishingRequest> sent_verdict;
+  EXPECT_CALL(service_, SendClientReportPhishingRequest(_, _, _))
+      .WillOnce([&](std::unique_ptr<ClientPhishingRequest> verdict,
+                    ClientSideDetectionServiceBase::
+                        ClientReportPhishingRequestCallback callback,
+                    const std::string& access_token) {
+        sent_verdict = std::move(verdict);
+      });
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(url_.spec());
+  verdict->set_client_side_detection_type(TRIGGER_MODELS);
+  verdict->set_is_phishing(true);
+  base::HistogramTester histograms;
+
+  host_->StartBrowserSideImageEmbedding(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SKIPPED);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(host_->capture_screenshot_count_, 1);
+  EXPECT_TRUE(host_->classification_image_.IsEmpty());
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent.TriggerModel",
+      ClientSideDetectionEvent::kImageEmbeddingBegin, 1);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent",
+      ClientSideDetectionEvent::kImageEmbeddingComplete, 1);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent.TriggerModel",
+      ClientSideDetectionEvent::kImageEmbeddingComplete, 1);
+  histograms.ExpectUniqueSample(
+      "SBClientPhishing.PhishingImageEmbeddingResult.TriggerModel",
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kSuccess, 1);
+  ASSERT_TRUE(sent_verdict);
+  EXPECT_EQ(sent_verdict->image_feature_embedding().embedding_value_size(), 1);
+  EXPECT_TRUE(sent_verdict->visual_features().has_image());
+  Mock::VerifyAndClearExpectations(scorer);
+}
+
+TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
+       BrowserSideImageEmbeddingRecaptureFailureStillSendsPing) {
+  PrepareImageEmbeddingTest();
+  MockScorer* scorer = InstallMockScorer();
   EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _)).Times(0);
+  // `next_screenshot_` is empty: the capture fails.
   EXPECT_CALL(service_, SendClientReportPhishingRequest(_, _, _)).Times(1);
 
   auto verdict = std::make_unique<ClientPhishingRequest>();
@@ -1807,12 +2395,112 @@ TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
 
   host_->StartBrowserSideImageEmbedding(
       std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
-      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SUCCESS);
+      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SKIPPED);
   task_environment_.RunUntilIdle();
 
+  EXPECT_EQ(host_->capture_screenshot_count_, 1);
   histograms.ExpectBucketCount(
       "SBClientPhishing.ClientSideDetectionEvent.TriggerModel",
-      ClientSideDetectionEvent::kImageEmbeddingBegin, 0);
+      ClientSideDetectionEvent::kImageEmbeddingBegin, 1);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent.TriggerModel",
+      ClientSideDetectionEvent::kImageEmbeddingComplete, 1);
+  histograms.ExpectUniqueSample(
+      "SBClientPhishing.PhishingImageEmbeddingResult.TriggerModel",
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kFailed, 1);
+  EXPECT_TRUE(host_->classification_image_.IsEmpty());
+}
+
+TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
+       BrowserSideImageEmbeddingWithoutScorerSkipsRecapture) {
+  PrepareImageEmbeddingTest();
+  ASSERT_FALSE(service_.GetScorer());
+  host_->set_next_screenshot(CreateTestImage());
+  EXPECT_CALL(service_, SendClientReportPhishingRequest(_, _, _)).Times(1);
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(url_.spec());
+  verdict->set_client_side_detection_type(TRIGGER_MODELS);
+  verdict->set_is_phishing(true);
+  base::HistogramTester histograms;
+
+  host_->StartBrowserSideImageEmbedding(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SKIPPED);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(host_->capture_screenshot_count_, 0);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent",
+      ClientSideDetectionEvent::kImageEmbeddingComplete, 1);
+  histograms.ExpectBucketCount(
+      "SBClientPhishing.ClientSideDetectionEvent.TriggerModel",
+      ClientSideDetectionEvent::kImageEmbeddingComplete, 1);
+  histograms.ExpectUniqueSample(
+      "SBClientPhishing.PhishingImageEmbeddingResult.TriggerModel",
+      ClientSideDetectionHostBase::ImageEmbeddingResult::kImageEmbedderNotReady,
+      1);
+  EXPECT_TRUE(host_->classification_image_.IsEmpty());
+}
+
+TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
+       ScorerChangeDuringRecaptureDropsEmbedding) {
+  PrepareImageEmbeddingTest();
+  MockScorer* scorer = InstallMockScorer();
+  EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _)).Times(0);
+  EXPECT_CALL(service_, SendClientReportPhishingRequest(_, _, _)).Times(0);
+  host_->set_next_screenshot(CreateTestImage());
+  host_->set_defer_screenshot(true);
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(url_.spec());
+  verdict->set_client_side_detection_type(TRIGGER_MODELS);
+  base::HistogramTester histograms;
+
+  host_->StartBrowserSideImageEmbedding(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SKIPPED);
+  EXPECT_EQ(host_->capture_screenshot_count_, 1);
+  const int cancel_count = host_->cancel_pending_requests_count_;
+
+  // The scorer change cancels pending work, so the late capture is dropped
+  // rather than embedded with a scorer that is being destroyed.
+  service_.SetScorerForTesting(
+      std::make_unique<testing::NiceMock<MockScorer>>());
+  EXPECT_EQ(host_->cancel_pending_requests_count_, cancel_count + 1);
+  host_->FinishDeferredScreenshot();
+  task_environment_.RunUntilIdle();
+
+  histograms.ExpectTotalCount(
+      "SBClientPhishing.PhishingImageEmbeddingResult.TriggerModel", 0);
+  EXPECT_TRUE(host_->classification_image_.IsEmpty());
+}
+
+TEST_F(ClientSideDetectionHostBaseVisualClassificationTest,
+       CancelPendingRequestsDuringRecaptureDropsEmbedding) {
+  PrepareImageEmbeddingTest();
+  MockScorer* scorer = InstallMockScorer();
+  EXPECT_CALL(*scorer, ApplyVisualTfLiteModelImageEmbedding(_, _)).Times(0);
+  EXPECT_CALL(service_, SendClientReportPhishingRequest(_, _, _)).Times(0);
+  host_->set_next_screenshot(CreateTestImage());
+  host_->set_defer_screenshot(true);
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(url_.spec());
+  verdict->set_client_side_detection_type(TRIGGER_MODELS);
+  base::HistogramTester histograms;
+
+  host_->StartBrowserSideImageEmbedding(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, PhishingDetectorResult::CLASSIFICATION_SKIPPED);
+  EXPECT_EQ(host_->capture_screenshot_count_, 1);
+
+  // Cancelling pending requests (e.g. on navigation) invalidates
+  // `base_weak_factory_`, so a late capture callback is ignored cleanly.
+  host_->CancelPendingRequests();
+  host_->FinishDeferredScreenshot();
+  task_environment_.RunUntilIdle();
+
   histograms.ExpectTotalCount(
       "SBClientPhishing.PhishingImageEmbeddingResult.TriggerModel", 0);
   EXPECT_TRUE(host_->classification_image_.IsEmpty());

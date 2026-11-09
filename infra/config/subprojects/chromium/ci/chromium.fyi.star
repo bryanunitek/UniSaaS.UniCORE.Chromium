@@ -2265,7 +2265,7 @@ ci.builder(
             "no_safe_browsing",
             "release_builder",
             "remoteexec",
-            "x86",
+            "x64",
             "no_symbols",
             "win",
         ],
@@ -2681,9 +2681,10 @@ ci.builder(
 ci.builder(
     name = "linux-devtools-frontend-rel",
     description_html = "Builder for DevTools Frontend tests",
-    schedule = "triggered",
-    triggered_by = [],
     builder_spec = builder_config.copy_from("ci/Linux Builder"),
+    builder_config_settings = builder_config.ci_settings(
+        retry_failed_shards = True,
+    ),
     gn_args = gn_args.config(
         configs = [
             "ci/Linux Builder",
@@ -2727,9 +2728,10 @@ ci.builder(
 ci.builder(
     name = "mac-devtools-frontend-rel",
     description_html = "Builder for DevTools Frontend tests",
-    schedule = "triggered",
-    triggered_by = [],
     builder_spec = builder_config.copy_from("ci/mac-arm64-rel"),
+    builder_config_settings = builder_config.ci_settings(
+        retry_failed_shards = True,
+    ),
     gn_args = gn_args.config(
         configs = [
             "ci/mac-arm64-rel",
@@ -2775,9 +2777,10 @@ ci.builder(
 ci.builder(
     name = "win-devtools-frontend-rel",
     description_html = "Builder for DevTools Frontend tests",
-    schedule = "triggered",
-    triggered_by = [],
     builder_spec = builder_config.copy_from("ci/Win x64 Builder"),
+    builder_config_settings = builder_config.ci_settings(
+        retry_failed_shards = True,
+    ),
     gn_args = gn_args.config(
         configs = [
             "ci/Win x64 Builder",

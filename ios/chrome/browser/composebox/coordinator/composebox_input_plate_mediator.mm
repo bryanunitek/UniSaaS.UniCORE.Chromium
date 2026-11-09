@@ -32,6 +32,7 @@
 #import "base/task/bind_post_task.h"
 #import "base/task/thread_pool.h"
 #import "base/time/time.h"
+#import "base/timer/timer.h"
 #import "base/unguessable_token.h"
 #import "components/contextual_search/contextual_search_context_controller.h"
 #import "components/contextual_search/contextual_search_metrics_recorder.h"
@@ -62,6 +63,7 @@
 #import "ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_constants.h"
 #import "ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_recorder.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_constants.h"
+#import "ios/chrome/browser/composebox/coordinator/composebox_input_plate_mediator+testing.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_query_contextualizer_delegate_bridge.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_url_loader.h"
 #import "ios/chrome/browser/composebox/debugger/composebox_debugger_logger.h"
@@ -81,8 +83,10 @@
 #import "ios/chrome/browser/composebox/ui/composebox_ui_input_state.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
 #import "ios/chrome/browser/intelligence/persist_tab_context/model/persist_tab_context_browser_agent.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/default_page_context_wrapper_factory.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_config.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_factory.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
@@ -104,6 +108,7 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_utils.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_util.h"
+#import "ios/chrome/browser/voice/model/voice_search_navigations_tab_helper.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 #import "ios/chrome/common/ui/util/image_util.h"
@@ -121,6 +126,7 @@
 #import "third_party/omnibox_proto/searchbox_config.pb.h"
 #import "third_party/omnibox_proto/tool_config.pb.h"
 #import "third_party/omnibox_proto/tool_mode.pb.h"
+#import "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #import "ui/base/page_transition_types.h"
 #import "ui/gfx/favicon_size.h"
 #import "url/gurl.h"
@@ -129,6 +135,10 @@ namespace {
 
 // The timeout for Page Context execution.
 constexpr base::TimeDelta kPageContextTimeout = base::Seconds(10);
+
+// How long a send waits for the lazy extraction and upload of an auto-added
+// tab before dropping the tab and sending without it.
+constexpr base::TimeDelta kLazyTabUploadTimeout = base::Seconds(10);
 
 // Reads data from a file URL. Runs on a background thread.
 NSData* ReadDataFromURL(GURL url) {
@@ -274,6 +284,8 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
                      PageContextWrapper*,
                      base::UnguessableTokenHash>
       _pageContextWrappers;
+  // Factory used to create `PageContextWrapper` instances.
+  raw_ptr<PageContextWrapperFactory> _pageContextWrapperFactory;
   std::unordered_map<base::UnguessableToken,
                      web::WebStateID,
                      base::UnguessableTokenHash>
@@ -286,6 +298,14 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   // Holds a pending send callback while attachments are being extracted or
   // uploaded.
   base::OnceClosure _pendingSendCallback;
+
+  // Identifiers of the auto-added tabs whose extraction and upload were started
+  // by a send (see `-promoteAutoAddedItems`).
+  std::set<base::UnguessableToken> _lazilyUploadingItemIdentifiers;
+
+  // Drops the tabs in `_lazilyUploadingItemIdentifiers` that are still not
+  // uploaded `kLazyTabUploadTimeout` after a send started waiting for them.
+  base::OneShotTimer _lazyTabUploadTimer;
 
   // Delegate for the query contextualizer.
   std::unique_ptr<QueryContextualizerDelegateBridge>
@@ -363,6 +383,8 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   self = [super init];
   if (self) {
     _entrypoint = entrypoint;
+    _pageContextWrapperFactory =
+        &DefaultPageContextWrapperFactory::GetInstance();
     _browserCoordinatorHandler = browserCoordinatorHandler;
     _sceneHandler = sceneHandler;
     _prefService = prefService;
@@ -467,6 +489,8 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   _stateManager = nil;
   _aimEligibilityService = nullptr;
   _cobrowseBrowserAgent = nullptr;
+  _lazyTabUploadTimer.Stop();
+  _lazilyUploadingItemIdentifiers.clear();
   // Reset the pending send callback before `_queryContextualizer`, since
   // `_pendingSendCallback` may hold an unretained pointer to it.
   _pendingSendCallback.Reset();
@@ -809,14 +833,18 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
                                   title:[self
                                             attachmentEventTitleForItem:item]]];
 
+  // Delete the item's server-side file before removing the item, as removing it
+  // can synchronously send a pending query (see
+  // `-composeboxInputItemCollectionDidUpdateItems:`), which must not reference
+  // the file. Attachments removed before their server upload starts have no
+  // server token, and so no server-side file to delete.
+  if (_contextualSearchSession && !item.serverToken.is_empty()) {
+    _contextualSearchSession->DeleteFile(item.serverToken);
+  }
+
   [_items removeItem:item];
 
   if (_contextualSearchSession) {
-    // Attachments removed before their server upload starts have no server
-    // token, and so no server-side file to delete.
-    if (!item.serverToken.is_empty()) {
-      _contextualSearchSession->DeleteFile(item.serverToken);
-    }
     [self reloadSuggestions];
   }
 
@@ -831,6 +859,22 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 - (void)sendText:(NSString*)text
     additionalParams:(std::map<std::string, std::string>)additionalParams {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
+  [self sendText:text
+      additionalParams:std::move(additionalParams)
+       fromVoiceSearch:NO];
+}
+
+- (void)sendVoiceSearchQuery:(NSString*)query {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
+  [self sendText:query additionalParams:{} fromVoiceSearch:YES];
+}
+
+// Sends `text` with `additionalParams`. `fromVoiceSearch` indicates whether
+// `text` was recognized by Voice Search.
+- (void)sendText:(NSString*)text
+    additionalParams:(std::map<std::string, std::string>)additionalParams
+     fromVoiceSearch:(BOOL)fromVoiceSearch {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   // If the session is null, or if this is a regular search with no attachments,
   // the contextual session is bypassed and a standard search URL is generated.
   BOOL isRegularSearchWithoutContext =
@@ -839,7 +883,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
     if (_templateURLService) {
       GURL URL = GetDefaultSearchURLForSearchTerms(_templateURLService,
                                                    [text cr_UTF16String]);
-      [self didCreateSearchURL:URL];
+      [self didCreateSearchURL:URL fromVoiceSearch:fromVoiceSearch];
     }
     return;
   }
@@ -874,7 +918,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   __weak __typeof(self) weakSelf = self;
   auto callback =
       base::BindPostTaskToCurrentDefault(base::BindOnce(^(GURL URL) {
-        [weakSelf didCreateSearchURL:URL];
+        [weakSelf didCreateSearchURL:URL fromVoiceSearch:fromVoiceSearch];
       }));
 
   auto createSearchUrlCallback = base::BindOnce(
@@ -1028,6 +1072,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
                                           kComposeboxInputItemTypeImage
                               assetID:assetID
                                source:source];
+  item.title = itemProvider.suggestedName;
   item.uploadIndex = _imageUploadCount++;
   [self addItem:item];
   item.imageProvider = itemProvider;
@@ -1257,15 +1302,21 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
                                         .SetDefaultRichExtraction(use_apc_v2)
                                         .Build();
 
-  PageContextWrapper* pageContextWrapper = [[PageContextWrapper alloc]
-        initWithWebState:webState
-                  config:config
-      completionCallback:base::BindOnce(^(
-                             PageContextWrapperCallbackResponse response) {
-        [weakSelf didExtractPageContext:std::move(response)
-                               webState:weakWebState.get()
-                             identifier:identifier];
-      })];
+  PageContextWrapper* pageContextWrapper = [self
+      newPageContextWrapperForWebState:webState
+                                config:config
+                    completionCallback:
+                        base::BindOnce(
+                            [](__typeof(self) strongSelf,
+                               base::WeakPtr<web::WebState> weakWebState,
+                               base::UnguessableToken identifier,
+                               PageContextWrapperCallbackResponse response) {
+                              [strongSelf
+                                  didExtractPageContext:std::move(response)
+                                               webState:weakWebState.get()
+                                             identifier:identifier];
+                            },
+                            weakSelf, weakWebState, identifier)];
 
   pageContextWrapper.shouldGetAnnotatedPageContent = YES;
   pageContextWrapper.shouldGetSnapshot = YES;
@@ -1276,6 +1327,25 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   // devices or bots.
   [pageContextWrapper
       populatePageContextFieldsAsyncWithTimeout:kPageContextTimeout];
+}
+
+// Creates a `PageContextWrapper` for `webState` using
+// `_pageContextWrapperFactory`. Named with the `new` prefix
+// (`NS_RETURNS_RETAINED`) so ARC returns a +1 owned reference without placing
+// the wrapper in the caller's autorelease pool.
+- (PageContextWrapper*)
+    newPageContextWrapperForWebState:(web::WebState*)webState
+                              config:(PageContextWrapperConfig)config
+                  completionCallback:(base::OnceCallback<void(
+                                          PageContextWrapperCallbackResponse)>)
+                                         completionCallback {
+  // `PageContextWrapperFactory::Create` returns an autoreleased Objective-C
+  // pointer. Drain the pool so `_pageContextWrappers` is the sole owner of the
+  // wrapper and erasing its entry immediately cancels extraction.
+  @autoreleasepool {
+    return _pageContextWrapperFactory->Create(webState, config,
+                                              std::move(completionCallback));
+  }
 }
 
 // Handles the result of fetching cached page context for `webState`.
@@ -1609,6 +1679,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
         [self setState:ComposeboxInputItemState::kLoading onItem:item];
         [self.consumer updateState:item.state
              forItemWithIdentifier:item.identifier];
+        _lazilyUploadingItemIdentifiers.insert(item.identifier);
         [self attachWebState:webState identifier:item.identifier isCached:NO];
       } else {
         [self handleFailedAttachment:item.identifier];
@@ -1619,10 +1690,26 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 
 // Runs `callback` immediately if no attachment is awaiting extraction or
 // upload, or holds it in `_pendingSendCallback` until all attachments
-// settle.
+// settle. While held, the send is shown as pending, and auto-added tabs that
+// are lazily uploaded are dropped if they don't upload within
+// `kLazyTabUploadTimeout`.
 - (void)runOrWaitForPendingAttachments:(base::OnceClosure)callback {
   _pendingSendCallback = std::move(callback);
   [self maybeRunPendingSendCallback];
+  if (!_pendingSendCallback) {
+    return;
+  }
+  // TODO(crbug.com/582333512): Keep the typed text while the send is pending.
+  [self.consumer setSendPending:YES];
+  if (!_lazilyUploadingItemIdentifiers.empty()) {
+    __weak __typeof(self) weakSelf = self;
+    _lazyTabUploadTimer.Start(FROM_HERE, kLazyTabUploadTimeout,
+                              base::BindOnce(
+                                  [](__typeof(self) strongSelf) {
+                                    [strongSelf lazyTabUploadDidTimeOut];
+                                  },
+                                  weakSelf));
+  }
 }
 
 // Runs `_pendingSendCallback` if one is waiting and all attachments are ready
@@ -1636,7 +1723,26 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
       return;
     }
   }
+  _lazyTabUploadTimer.Stop();
+  _lazilyUploadingItemIdentifiers.clear();
+  [self.consumer setSendPending:NO];
   std::move(_pendingSendCallback).Run();
+}
+
+// Drops the auto-added tabs whose lazy extraction and upload did not complete
+// within `kLazyTabUploadTimeout`, so that the pending send proceeds without
+// them.
+- (void)lazyTabUploadDidTimeOut {
+  std::set<base::UnguessableToken> identifiers;
+  std::swap(identifiers, _lazilyUploadingItemIdentifiers);
+  for (const base::UnguessableToken& identifier : identifiers) {
+    ComposeboxInputItem* item = [_items itemForIdentifier:identifier];
+    if (item && !item.readyForSend) {
+      // TODO(crbug.com/582333512): Show a clearer message than the generic
+      // attachment upload error.
+      [self handleFailedAttachment:identifier];
+    }
+  }
 }
 
 // Whether the current instance is associated with cobrowse.
@@ -1981,8 +2087,9 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 }
 
 // Loads the aim query once the URL is generated by the Contextual search
-// session.
-- (void)didCreateSearchURL:(GURL)URL {
+// session. `fromVoiceSearch` indicates whether the query was recognized by
+// Voice Search.
+- (void)didCreateSearchURL:(GURL)URL fromVoiceSearch:(BOOL)fromVoiceSearch {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   [self recordNavigationInitiated];
 
@@ -2006,10 +2113,17 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   }
 
   UrlLoadParams params = CreateOmniboxUrlLoadParams(
-      URL, /*post_content=*/nullptr, WindowOpenDisposition::kCurrentTab,
+      URL, /*post_content=*/nullptr,
+      ui::mojom::WindowOpenDisposition::kCurrentTab,
       ui::PAGE_TRANSITION_GENERATED,
       /*destination_url_entered_without_scheme=*/false, _isIncognito);
 
+  if (fromVoiceSearch && _webStateList) {
+    if (web::WebState* activeWebState = _webStateList->GetActiveWebState()) {
+      VoiceSearchNavigationTabHelper::FromWebState(activeWebState)
+          ->WillLoadVoiceSearchResult();
+    }
+  }
   [self.URLLoader loadURLParams:params];
 }
 
@@ -2019,6 +2133,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
     case ComposeboxMode::kRegularSearch:
       return AutocompleteRequestType::kSearch;
     case ComposeboxMode::kAIM:
+    case ComposeboxMode::kPTM:
       return AutocompleteRequestType::kAIMode;
     case ComposeboxMode::kImageGeneration:
       return AutocompleteRequestType::kImageGeneration;
@@ -2039,6 +2154,24 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
     return;
   }
   _inNavigation = YES;
+
+  // Only record `kOmnibox` when Composebox was opened from the Fakebox
+  // (`kNTPFakebox`) or the omnibox (`kOther`). Other NTP entrypoints (such as
+  // `kNTPAIMButton` and `kNTPPlusButton`) already record their own
+  // `IOSHomeActionType` when tapped, so recording `kOmnibox` on submission
+  // would double-count the NTP interaction.
+  if (_entrypoint == ComposeboxEntrypoint::kNTPFakebox ||
+      _entrypoint == ComposeboxEntrypoint::kOther) {
+    if (web::WebState* webState =
+            _webStateList ? _webStateList->GetActiveWebState() : nullptr) {
+      if (IsVisibleURLNewTabPage(webState)) {
+        NewTabPageTabHelper* NTPHelper =
+            NewTabPageTabHelper::FromWebState(webState);
+        RecordHomeAction(IOSHomeActionType::kOmnibox,
+                         NTPHelper && NTPHelper->ShouldShowStartSurface());
+      }
+    }
+  }
 
   [self.metricsRecorder recordAutocompleteRequestTypeAtNavigation:
                             [self currentAutocompleteRequestType]];
@@ -2429,14 +2562,6 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
   switch (_modeHolder.mode) {
     case ComposeboxMode::kRegularSearch:
       [self recordNavigationInitiated];
-      if (web::WebState* web_state = _webStateList->GetActiveWebState()) {
-        if (IsVisibleURLNewTabPage(web_state)) {
-          NewTabPageTabHelper* NTPHelper =
-              NewTabPageTabHelper::FromWebState(web_state);
-          RecordHomeAction(IOSHomeActionType::kOmnibox,
-                           NTPHelper && NTPHelper->ShouldShowStartSurface());
-        }
-      }
       [self.URLLoader loadURLParams:URLLoadParams];
       break;
     case ComposeboxMode::kAIM:
@@ -2451,6 +2576,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
     case ComposeboxMode::kImageGeneration:
     case ComposeboxMode::kCanvas:
     case ComposeboxMode::kDeepSearch:
+    case ComposeboxMode::kPTM:
       [self sendText:[NSString cr_fromString16:text]];
       break;
   }
@@ -2587,6 +2713,9 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
       break;
     case ComposeboxMode::kDeepSearch:
       modeSwitchButton = kDeepSearch;
+      break;
+    case ComposeboxMode::kPTM:
+      modeSwitchButton = kPTM;
       break;
   }
 
@@ -2895,6 +3024,12 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 }
 
 #pragma mark - Testing
+
+- (void)setPageContextWrapperFactoryForTesting:
+    (PageContextWrapperFactory*)factory {
+  _pageContextWrapperFactory =
+      factory ? factory : &DefaultPageContextWrapperFactory::GetInstance();
+}
 
 - (BOOL)isWebStateIDRemoved:(web::WebStateID)webStateID {
   return _removedWebStateIDs.contains(webStateID);

@@ -80,6 +80,7 @@ using ::blink::WebElement;
 using ::blink::WebElementCollection;
 using ::blink::WebFormControlElement;
 using ::blink::WebFormElement;
+using ::blink::WebFrame;
 using ::blink::WebInputElement;
 using ::blink::WebLocalFrame;
 using ::blink::WebNode;
@@ -290,7 +291,13 @@ class FormAutofillUtilsTest : public content::RenderViewTest {
       .last_dom_content_loaded = {},
   };
 
-  FormAutofillUtilsTest() = default;
+  FormAutofillUtilsTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {features::kAutofillExtractShadowDomIframes,
+         features::kAutofillFixIframeOwnership},
+        /*disabled_features=*/{});
+  }
   ~FormAutofillUtilsTest() override = default;
 
   WebDocument GetDocument() { return GetMainFrame()->GetDocument(); }
@@ -313,8 +320,7 @@ class FormAutofillUtilsTest : public content::RenderViewTest {
   FieldDataManager& field_data_manager() { return *field_data_manager_; }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kAutofillFixIframeOwnership};
+  base::test::ScopedFeatureList scoped_feature_list_;
   scoped_refptr<FieldDataManager> field_data_manager_ =
       base::MakeRefCounted<FieldDataManager>();
 };
@@ -657,10 +663,10 @@ TEST_P(InferLabelForElementParameterizedTest, InferLabelForElementTest) {
   LoadHTML(test_case.html);
   WebFormControlElement form_target =
       GetFormControlElementById(GetDocument(), "target");
-  std::vector<FormFieldData> fields(1);
-  InferLabelForElementsForTesting(
-      std::to_array<WebFormControlElement>({form_target}), fields);
-  EXPECT_EQ(fields.front().label(), expected_label);
+  FormFieldData field;
+  field.set_renderer_id(GetFieldRendererId(form_target));
+  InferLabelForElementsForTesting(base::span_from_ref(field));
+  EXPECT_EQ(field.label(), expected_label);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -737,10 +743,10 @@ TEST_P(InferLabelSourceParameterizedTest, InferLabelSourceTest) {
   LoadHTML(test_case.html);
   WebFormControlElement form_target =
       GetFormControlElementById(GetDocument(), "target");
-  std::vector<FormFieldData> fields(1);
-  InferLabelForElementsForTesting(
-      std::to_array<WebFormControlElement>({form_target}), fields);
-  EXPECT_EQ(fields.front().label_source(), expected_label_source);
+  FormFieldData field;
+  field.set_renderer_id(GetFieldRendererId(form_target));
+  InferLabelForElementsForTesting(base::span_from_ref(field));
+  EXPECT_EQ(field.label_source(), expected_label_source);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1319,9 +1325,11 @@ TEST_F(FormAutofillUtilsTest,
   ExecuteJavaScriptForTests(R"(
     const obj = document.getElementById('obj');
     const doc = obj.contentDocument;
-    doc.body.innerHTML =
+    doc.open();
+    doc.write(
         '<div style="content-visibility: hidden">' +
-        '<input id="i1"><input id="i2"><iframe></iframe></div>';
+        '<input id="i1"><input id="i2"><iframe></iframe></div>');
+    doc.close();
     // Flush layout so the content-visibility DisplayLockContext is active, and
     // detach `obj`'s LayoutObject (without detaching its ContentFrame) via
     // display:none.
@@ -1692,8 +1700,18 @@ TEST_F(FormAutofillUtilsTest, GetOutermostAncestorFormElement) {
   LoadHTML(R"(
       <body>
         <iframe id=unowned></iframe>
+        <div id=unowned_shadow_host>
+          <template shadowrootmode=open>
+            <iframe id=unowned_shadow></iframe>
+          </template>
+        </div>
         <form id=outer_form>
           <iframe id=owned1></iframe>
+          <div id=owned_shadow_host>
+            <template shadowrootmode=open>
+              <iframe id=owned_shadow></iframe>
+            </template>
+          </div>
           <!-- A nested 'inner_form' with an iframe 'owned2' will be
                created dynamically. -->
           <form id=non_existent>
@@ -1712,18 +1730,22 @@ TEST_F(FormAutofillUtilsTest, GetOutermostAncestorFormElement) {
   content::RunAllTasksUntilIdle();
 
   WebDocument doc = GetDocument();
-  EXPECT_EQ(
-      GetOutermostAncestorFormElementForTesting(GetElementById(doc, "unowned")),
-      WebFormElement());
-  EXPECT_EQ(
-      GetOutermostAncestorFormElementForTesting(GetElementById(doc, "owned1")),
-      GetFormElementById(doc, "outer_form"));
-  EXPECT_EQ(
-      GetOutermostAncestorFormElementForTesting(GetElementById(doc, "owned2")),
-      GetFormElementById(doc, "outer_form"));
-  EXPECT_EQ(
-      GetOutermostAncestorFormElementForTesting(GetElementById(doc, "owned3")),
-      GetFormElementById(doc, "outer_form"));
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(doc, "unowned")),
+            WebFormElement());
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(
+                GetElementById(doc, "unowned_shadow_host").ShadowRoot(),
+                "unowned_shadow")),
+            WebFormElement());
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(doc, "owned1")),
+            GetFormElementById(doc, "outer_form"));
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(
+                GetElementById(doc, "owned_shadow_host").ShadowRoot(),
+                "owned_shadow")),
+            GetFormElementById(doc, "outer_form"));
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(doc, "owned2")),
+            GetFormElementById(doc, "outer_form"));
+  EXPECT_EQ(GetOutermostAncestorFormElement(GetElementById(doc, "owned3")),
+            GetFormElementById(doc, "outer_form"));
   EXPECT_EQ(WebFormControlElement(),
             GetFormElementById(doc, "non_existent_form", AllowNull(true)));
 }
@@ -1736,23 +1758,42 @@ TEST_F(FormAutofillUtilsTest, GetOutermostAncestorFormElement) {
 // before Y, then X.id is lexicographically less than Y.id.
 TEST_F(FormAutofillUtilsTest, IsDomPredecessorTest) {
   LoadHTML(R"(
-      <body id=0>
-        <div id=00>
-          <input id=000>
-          <input id=001>
-          <div id=002>
-            <input id=0020>
+      <body id=a>
+        <div id=a0>
+          <input id=a00>
+          <input id=a01>
+          <div id=a02>
+            <input id=a020>
           </div>
-          <div id=003>
-            <input id=0030>
+          <div id=a03>
+            <input id=a030>
           </div>
-          <input id=004>
+          <input id=a04>
         </div>
-        <div id=01>
-          <iframe id=010></iframe>
-          <input id=011>
+        <div id=a1>
+          <iframe id=a10></iframe>
+          <input id=a11>
+        </div>
+        <div id=a2>
+          <template shadowrootmode=open>
+            <input id=a20>
+            <iframe id=a21></iframe>
+          </template>
+          <input id=a22>
         </div>
       </body>)");
+
+  auto find_element_by_id = [](const WebDocument& doc,
+                               std::string_view id) -> WebNode {
+    if (WebElement elem = GetElementById(doc, id, AllowNull(true))) {
+      return elem;
+    }
+    WebElement host = GetElementById(doc, "a2", AllowNull(true));
+    if (host && host.ShadowRoot()) {
+      return GetElementById(host.ShadowRoot(), id, AllowNull(true));
+    }
+    return WebNode();
+  };
 
   // The parameter type of IsDomPredecessorTest. The attributes are the IDs of
   // the left and right hand side DOM nodes that are to be compared, and some
@@ -1760,25 +1801,30 @@ TEST_F(FormAutofillUtilsTest, IsDomPredecessorTest) {
   struct IsDomPredecessorTestParam {
     std::string lhs_id;
     std::string rhs_id;
-    std::vector<std::string> ancestor_hint_ids = {"",    "0",   "00",
-                                                  "002", "003", "01"};
+    std::vector<std::string> ancestor_hint_ids = {"",    "a",  "a0", "a02",
+                                                  "a03", "a1", "a2"};
   };
   std::vector<IsDomPredecessorTestParam> test_cases = {
-      IsDomPredecessorTestParam{"000", "000"},
-      IsDomPredecessorTestParam{"001", "001"},
-      IsDomPredecessorTestParam{"000", "001"},
-      IsDomPredecessorTestParam{"000", "001"},
-      IsDomPredecessorTestParam{"000", "0020"},
-      IsDomPredecessorTestParam{"000", "0020"},
-      IsDomPredecessorTestParam{"000", "004"},
-      IsDomPredecessorTestParam{"000", "004"},
-      IsDomPredecessorTestParam{"0020", "0030"},
-      IsDomPredecessorTestParam{"0020", "0030"},
-      IsDomPredecessorTestParam{"0030", "004"},
-      IsDomPredecessorTestParam{"000", "010"},
-      IsDomPredecessorTestParam{"0030", "010"},
-      IsDomPredecessorTestParam{"0030", "011"},
-      IsDomPredecessorTestParam{"010", "011"}};
+      IsDomPredecessorTestParam{"a00", "a00"},
+      IsDomPredecessorTestParam{"a01", "a01"},
+      IsDomPredecessorTestParam{"a00", "a01"},
+      IsDomPredecessorTestParam{"a00", "a01"},
+      IsDomPredecessorTestParam{"a00", "a020"},
+      IsDomPredecessorTestParam{"a00", "a020"},
+      IsDomPredecessorTestParam{"a00", "a04"},
+      IsDomPredecessorTestParam{"a00", "a04"},
+      IsDomPredecessorTestParam{"a020", "a030"},
+      IsDomPredecessorTestParam{"a020", "a030"},
+      IsDomPredecessorTestParam{"a030", "a04"},
+      IsDomPredecessorTestParam{"a00", "a10"},
+      IsDomPredecessorTestParam{"a030", "a10"},
+      IsDomPredecessorTestParam{"a030", "a11"},
+      IsDomPredecessorTestParam{"a10", "a11"},
+      IsDomPredecessorTestParam{"a00", "a20"},
+      IsDomPredecessorTestParam{"a11", "a20"},
+      IsDomPredecessorTestParam{"a20", "a21"},
+      IsDomPredecessorTestParam{"a20", "a22"},
+      IsDomPredecessorTestParam{"a21", "a22"}};
 
   for (const auto& test : test_cases) {
     for (const auto& ancestor_hint_id : test.ancestor_hint_ids) {
@@ -1788,11 +1834,13 @@ TEST_F(FormAutofillUtilsTest, IsDomPredecessorTest) {
       ASSERT_NE(test.lhs_id, ancestor_hint_id);
       ASSERT_NE(test.rhs_id, ancestor_hint_id);
       WebDocument doc = GetDocument();
-      WebNode lhs = GetElementById(doc, test.lhs_id);
-      WebNode rhs = GetElementById(doc, test.rhs_id);
+      WebNode lhs = find_element_by_id(doc, test.lhs_id);
+      WebNode rhs = find_element_by_id(doc, test.rhs_id);
       WebNode ancestor_hint = ancestor_hint_id.empty()
                                   ? WebNode()
-                                  : GetElementById(doc, ancestor_hint_id);
+                                  : find_element_by_id(doc, ancestor_hint_id);
+      ASSERT_TRUE(lhs);
+      ASSERT_TRUE(rhs);
       EXPECT_EQ(test.lhs_id < test.rhs_id,
                 IsDOMPredecessorForTesting(lhs, rhs, ancestor_hint));
       EXPECT_EQ(test.rhs_id < test.lhs_id,
@@ -1967,10 +2015,10 @@ INSTANTIATE_TEST_SUITE_P(
       // <input><iframe><iframe><input>.
       auto MakeTestCase = [](std::bitset<5> bitset) {
         std::vector<FieldOrFrame> fields_and_frames{
-            {.is_frame = bitset.test(0), .id = "0"},
-            {.is_frame = bitset.test(1), .id = "1"},
-            {.is_frame = bitset.test(2), .id = "2"},
-            {.is_frame = bitset.test(3), .id = "3"},
+            {.is_frame = bitset.test(0), .id = "a0"},
+            {.is_frame = bitset.test(1), .id = "a1"},
+            {.is_frame = bitset.test(2), .id = "a2"},
+            {.is_frame = bitset.test(3), .id = "a3"},
         };
         bool is_synthetic_form = bitset.test(4);
         const char* form_id = is_synthetic_form ? nullptr : "MY_FORM_ID";
@@ -2018,6 +2066,124 @@ INSTANTIATE_TEST_SUITE_P(
       }));
       return cases;
     }()));
+
+// Tests that `ExtractFormData` correctly extracts iframes inside shadow DOM
+// (both inside a <form> and unowned outside a <form>, interleaved with <input>
+// elements in both light DOM and shadow DOM), verifying `form_data->fields()`
+// and `form_data->child_frames()` (both `.token` and `.predecessor`).
+TEST_F(FormAutofillUtilsTest, ExtractFormData_IframesInShadowDom) {
+  LoadHTML(R"(
+    <iframe id="unowned_light_iframe_1"></iframe>
+    <input id="unowned_light_input_1">
+    <div id="unowned_shadow_host">
+      <template shadowrootmode="open">
+        <iframe id="unowned_shadow_iframe_1"></iframe>
+        <input id="unowned_shadow_input_1">
+        <iframe id="unowned_shadow_iframe_2"></iframe>
+      </template>
+      <input id="unowned_light_input_2">
+      <iframe id="unowned_light_iframe_2"></iframe>
+    </div>
+
+    <form id="my_form">
+      <iframe id="owned_light_iframe_1"></iframe>
+      <input id="owned_light_input_1">
+      <div id="owned_shadow_host">
+        <template shadowrootmode="open">
+          <input id="owned_shadow_input_1">
+          <iframe id="owned_shadow_iframe_2"></iframe>
+        </template>
+        <input id="owned_light_input_2">
+        <iframe id="owned_light_iframe_2"></iframe>
+      </div>
+    </form>
+  )");
+  // Dynamically prepend `owned_shadow_iframe_1` so that its FrameTree creation
+  // order differs from its shadow-including DOM order.
+  ExecuteJavaScriptForTests(R"(
+    const iframe = document.createElement('iframe');
+    iframe.id = 'owned_shadow_iframe_1';
+    document.getElementById('owned_shadow_host').shadowRoot.prepend(iframe);
+  )");
+
+  WebDocument doc = GetDocument();
+
+  auto get_iframe_token = [](const WebElement& iframe) -> FrameToken {
+    CHECK(iframe.HasHTMLTagName("iframe"));
+    WebFrame* frame = WebFrame::FromFrameOwnerElement(iframe);
+    if (frame && frame->IsWebLocalFrame()) {
+      return LocalFrameToken(
+          frame->ToWebLocalFrame()->GetLocalFrameToken().value());
+    } else if (frame && frame->IsWebRemoteFrame()) {
+      return RemoteFrameToken(
+          frame->ToWebRemoteFrame()->GetRemoteFrameToken().value());
+    }
+    return FrameToken();
+  };
+
+  auto is_child_frame = [&](const WebElement& iframe, int predecessor) {
+    return AllOf(Field("token", &FrameTokenWithPredecessor::token,
+                       get_iframe_token(iframe)),
+                 Field("predecessor", &FrameTokenWithPredecessor::predecessor,
+                       predecessor));
+  };
+
+  WebElement unowned_shadow_host = GetElementById(doc, "unowned_shadow_host");
+  ASSERT_TRUE(unowned_shadow_host && unowned_shadow_host.ShadowRoot());
+  WebNode unowned_shadow_root = unowned_shadow_host.ShadowRoot();
+
+  WebElement owned_shadow_host = GetElementById(doc, "owned_shadow_host");
+  ASSERT_TRUE(owned_shadow_host && owned_shadow_host.ShadowRoot());
+  WebNode owned_shadow_root = owned_shadow_host.ShadowRoot();
+
+  // 1. Test unowned form (synthetic form).
+  {
+    std::optional<FormData> form_data = ExtractFormData(WebFormElement());
+    ASSERT_TRUE(form_data);
+    EXPECT_THAT(form_data->fields(),
+                ElementsAre(HasRendererIdOf(GetFormControlElementById(
+                                doc, "unowned_light_input_1")),
+                            HasRendererIdOf(GetFormControlElementById(
+                                unowned_shadow_root, "unowned_shadow_input_1")),
+                            HasRendererIdOf(GetFormControlElementById(
+                                doc, "unowned_light_input_2"))));
+    EXPECT_THAT(
+        form_data->child_frames(),
+        ElementsAre(
+            is_child_frame(GetElementById(doc, "unowned_light_iframe_1"), -1),
+            is_child_frame(
+                GetElementById(unowned_shadow_root, "unowned_shadow_iframe_1"),
+                0),
+            is_child_frame(
+                GetElementById(unowned_shadow_root, "unowned_shadow_iframe_2"),
+                1),
+            is_child_frame(GetElementById(doc, "unowned_light_iframe_2"), 2)));
+  }
+
+  // 2. Test owned form (<form id="my_form">).
+  {
+    WebFormElement form_element = GetFormElementById(doc, "my_form");
+    ASSERT_TRUE(form_element);
+    std::optional<FormData> form_data = ExtractFormData(form_element);
+    ASSERT_TRUE(form_data);
+    EXPECT_THAT(form_data->fields(),
+                ElementsAre(HasRendererIdOf(GetFormControlElementById(
+                                doc, "owned_light_input_1")),
+                            HasRendererIdOf(GetFormControlElementById(
+                                owned_shadow_root, "owned_shadow_input_1")),
+                            HasRendererIdOf(GetFormControlElementById(
+                                doc, "owned_light_input_2"))));
+    EXPECT_THAT(
+        form_data->child_frames(),
+        ElementsAre(
+            is_child_frame(GetElementById(doc, "owned_light_iframe_1"), -1),
+            is_child_frame(
+                GetElementById(owned_shadow_root, "owned_shadow_iframe_1"), 0),
+            is_child_frame(
+                GetElementById(owned_shadow_root, "owned_shadow_iframe_2"), 1),
+            is_child_frame(GetElementById(doc, "owned_light_iframe_2"), 2)));
+  }
+}
 
 TEST_F(FormAutofillUtilsTest, ExtractFormData_WebFormElementToFormData) {
   LoadHTML(R"(
@@ -2600,7 +2766,6 @@ TEST_F(FormAutofillUtilsTest, GetOwnedFormControlsRequiresConnectedness) {
 // final-checkout-amount if the label node is in the subtree that is only one
 // ancestor up.
 TEST_F(FormAutofillUtilsTest, ExtractFinalCheckoutAmountFromDom_OneAncestorUp) {
-  std::vector<std::string> matches;
   LoadHTML(R"(
     <body>
       <div>
@@ -2954,16 +3119,13 @@ INSTANTIATE_TEST_SUITE_P(
                     std::pair("http://foo.com", true),
                     std::pair("about:srcdoc", true),
                     std::pair("data:text/html,blabla", true),
-                    std::pair("about:blank", false),
+                    std::pair("about:blank", true),
                     std::pair("chrome:new-tab-page", false),
                     std::pair("chrome://autofill-internals", false)));
 
-// Tests that <div contenteditable> can be extracted from admissible URLs.
+// Tests that <form> can be extracted from admissible URLs.
 TEST_P(FormAutofillUtilsTest_AdmissibleUrls, ExtractFormData) {
-  LoadHTMLWithUrlOverride(R"(
-    "<form id=f><input></form>"
-  )",
-                          Url());
+  LoadHTMLWithUrlOverride(R"(<form id=f><input></form>)", Url());
   std::optional<FormData> form =
       ExtractFormData(GetFormElementById(GetDocument(), "f"));
   if (extractable()) {
@@ -2973,12 +3135,24 @@ TEST_P(FormAutofillUtilsTest_AdmissibleUrls, ExtractFormData) {
   }
 }
 
+// Tests that a form control element and its form can be extracted from
+// admissible URLs.
+TEST_P(FormAutofillUtilsTest_AdmissibleUrls,
+       FindFormAndFieldForFormControlElement) {
+  LoadHTMLWithUrlOverride(R"(<form id=f><input id=i></form>)", Url());
+  std::optional<FormAndField> form_and_field =
+      FindFormAndFieldForFormControlElement(
+          GetFormControlElementById(GetDocument(), "i"));
+  if (extractable()) {
+    EXPECT_NE(form_and_field, std::nullopt);
+  } else {
+    EXPECT_EQ(form_and_field, std::nullopt);
+  }
+}
+
 // Tests that <div contenteditable> can be extracted from admissible URLs.
 TEST_P(FormAutofillUtilsTest_AdmissibleUrls, FindFormForContentEditable) {
-  LoadHTMLWithUrlOverride(R"(
-    "<div id=ce contenteditable></div>"
-  )",
-                          Url());
+  LoadHTMLWithUrlOverride(R"(<div id=ce contenteditable></div>)", Url());
   std::optional<FormData> form =
       FindFormForContentEditable(GetDocument().GetElementById("ce"));
   if (extractable()) {

@@ -15,11 +15,13 @@ import {TestUserEducationMixedTrustHandler} from 'chrome-untrusted://webui-test/
 import {eventToPromise, microtasksFinished, whenAttributeIs} from 'chrome-untrusted://webui-test/test_util.js';
 
 import {setupTestEnvironment} from './common.js';
+import type {TestContentBrowserProxy} from './test_content_browser_proxy.js';
 import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 import type {TestVisualBrowserProxy} from './test_visual_browser_proxy.js';
 
 suite('SettingsMenuElement', () => {
   let settingsMenu: SettingsMenuElement;
+  let contentBrowserProxy: TestContentBrowserProxy;
   let metrics: TestMetricsBrowserProxy;
   let userEducationHandler: TestUserEducationMixedTrustHandler;
   let visualBrowserProxy: TestVisualBrowserProxy;
@@ -47,7 +49,8 @@ suite('SettingsMenuElement', () => {
   }
 
   setup(async () => {
-    const result = setupTestEnvironment({lineFocusEnabled: true});
+    const result = setupTestEnvironment();
+    contentBrowserProxy = result.contentBrowserProxy;
     metrics = result.metrics;
     visualBrowserProxy = result.visualBrowserProxy;
     userEducationHandler = new TestUserEducationMixedTrustHandler();
@@ -679,7 +682,7 @@ suite('SettingsMenuElement', () => {
   });
 
   test('send feedback action fires event when clicked', async () => {
-    visualBrowserProxy.sendFeedbackEnabled = true;
+    contentBrowserProxy.sendFeedbackEnabled = true;
     settingsMenu.remove();
     await createSettingsMenu();
 
@@ -701,7 +704,7 @@ suite('SettingsMenuElement', () => {
 
   test('clicking send feedback closes open submenu', async () => {
     visualBrowserProxy.readAnythingImprovedUiEnabled = true;
-    visualBrowserProxy.sendFeedbackEnabled = true;
+    contentBrowserProxy.sendFeedbackEnabled = true;
     settingsMenu.remove();
     await createSettingsMenu();
 
@@ -734,7 +737,7 @@ suite('SettingsMenuElement', () => {
   test(
       'send feedback action does not show when sendFeedbackEnabled is false',
       async () => {
-        visualBrowserProxy.sendFeedbackEnabled = false;
+        contentBrowserProxy.sendFeedbackEnabled = false;
         settingsMenu.remove();
         await createSettingsMenu();
 
@@ -753,6 +756,33 @@ suite('SettingsMenuElement', () => {
             actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
         assertFalse(
             menuItems.some(item => item.id === SettingsOption.SEND_FEEDBACK));
+      });
+
+  test(
+      'send feedback action does not show when canShowFeedback is false',
+      async () => {
+        contentBrowserProxy.sendFeedbackEnabled = true;
+        loadTimeData.overrideValues({canShowFeedback: false});
+        settingsMenu.remove();
+        await createSettingsMenu();
+
+        let actionMenu = settingsMenu.$.lazyMenu.get();
+        let menuItems = Array.from(
+            actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+        assertFalse(
+            menuItems.some(item => item.id === SettingsOption.SEND_FEEDBACK));
+
+        visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+        settingsMenu.remove();
+        await createSettingsMenu();
+
+        actionMenu = settingsMenu.$.lazyMenu.get();
+        menuItems = Array.from(
+            actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+        assertFalse(
+            menuItems.some(item => item.id === SettingsOption.SEND_FEEDBACK));
+
+        loadTimeData.overrideValues({canShowFeedback: true});
       });
 
   test(

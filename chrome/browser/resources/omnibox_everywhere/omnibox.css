@@ -310,17 +310,6 @@ cr-composebox-contextual-entrypoint-and-menu,
   color: var(--color-sys-on-surface);
 }
 
-#composeButton::part(hoverBackground) {
-  background-color: var(--color-sys-state-hover-dim-blend-protection);
-  display: block;
-  opacity: 0;
-  transition: opacity 250ms linear;
-}
-
-#composeButton:hover::part(hoverBackground) {
-  opacity: 1;
-}
-
 :host([is-fusebox-enabled]) #composeButton {
   --cr-button-height: 28px;
   margin-inline-end: 36px;
@@ -360,6 +349,10 @@ cr-composebox-contextual-entrypoint-and-menu,
 #bottomControls .searchbox-icon-button-container {
   inset-inline-end: unset;
   top: 0;
+}
+
+#overflowMenuButton {
+  -webkit-mask-image: url(//resources/images/icon_more_vert.svg);
 }
 
 /* TODO(crbug.com/532200145): Refine the selectors. New interactive elements
@@ -410,13 +403,14 @@ cr-searchbox-input::part(icon),
   padding-top: 0;
 }
 
+/* 48px profile offset + 3x28px buttons + 2x4px gaps + 8px clearance. */
 :host(:not([dropdown-is-visible]):not([has-user-input])) cr-searchbox-input {
-  padding-inline-end: 116px;
+  padding-inline-end: 148px;
 }
 
 :host(:not([dropdown-is-visible]):not([has-user-input]))
     #inputWrapper:has(#profileIcon[is-enterprise-profile]) cr-searchbox-input {
-  padding-inline-end: calc(116px + var(--enterprise-profile-clearance));
+  padding-inline-end: calc(148px + var(--enterprise-profile-clearance));
 }
 
 :host(:not([dropdown-is-visible]):not([has-user-input]))
@@ -430,6 +424,12 @@ cr-searchbox-input::part(icon),
 :host(:not([dropdown-is-visible]):not([has-user-input])) #composeButton,
 :host(:not([dropdown-is-visible]):not([has-user-input]))
     .contextualEntrypointContainer {
+  display: none;
+}
+
+/* Pill-only; a focused button stays so ArrowDown on it doesn't drop focus. */
+:host(:is([dropdown-is-visible], [has-user-input]))
+    .searchbox-icon-button-container.overflow:not(:focus-within) {
   display: none;
 }
 

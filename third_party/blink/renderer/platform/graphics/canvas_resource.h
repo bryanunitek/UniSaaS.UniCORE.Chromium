@@ -44,8 +44,6 @@ class RasterInterface;
 
 namespace blink {
 
-class StaticBitmapImage;
-
 // Generic resource interface, used for locking (RAII) and recycling pixel
 // buffers of any type.
 // Note that this object may be accessed across multiple threads but not
@@ -58,10 +56,6 @@ class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
       const gpu::SyncToken& sync_token,
       bool is_lost)>;
 
-  // Returns true if this instance creates TransferableResources for usage with
-  // GPU compositing.
-  virtual bool CreatesAcceleratedTransferableResources() const = 0;
-
   virtual void OnRefReturned(scoped_refptr<CanvasResource>&& resource) {}
 
   static void DropRefOnOwningThread(scoped_refptr<CanvasResource> resource);
@@ -69,13 +63,6 @@ class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
   // Issues a wait for this sync token on the context used by this resource for
   // rendering.
   virtual void WaitSyncToken(const gpu::SyncToken&) = 0;
-
-  bool OriginClean() const { return is_origin_clean_; }
-  void SetOriginClean(bool flag) { is_origin_clean_ = flag; }
-
-  // Provides a StaticBitmapImage wrapping this resource. Commonly used for
-  // snapshots not used in compositing (for instance to draw to another canvas).
-  virtual scoped_refptr<StaticBitmapImage> Bitmap() = 0;
 
   // Called when the resource is marked lost. Losing a resource does not mean
   // that the backing memory has been destroyed, since the resource itself keeps
@@ -109,8 +96,6 @@ class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
 
   // Returns true if the resource is rastered via the GPU.
   virtual bool UsesAcceleratedRaster() const = 0;
-
-  bool is_origin_clean_ = true;
 };
 
 // Resource type for SharedImage
@@ -150,11 +135,7 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
                   bool is_accelerated);
   bool IsInitialized() const { return is_initialized_; }
 
-  bool CreatesAcceleratedTransferableResources() const override {
-    return !GetSharedImage()->is_software();
-  }
   void OnRefReturned(scoped_refptr<CanvasResource>&& resource) final;
-  scoped_refptr<StaticBitmapImage> Bitmap() final;
   const gfx::HDRMetadata& GetHdrMetadata() const final { return hdr_metadata_; }
 
   // Save (and wait on) this sync token on the context used by this resource for
@@ -176,12 +157,6 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
 
   void OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
                     const std::string& parent_path) const override;
-
-  // Signals that an external write has completed, passing the token that should
-  // be waited on to ensure that the service-side operations of the external
-  // write have completed. Ensures that the next read of this resource (whether
-  // via raster or the compositor) waits on this token.
-  void EndExternalWrite(const gpu::SyncToken& external_write_sync_token);
 
   // Uploads the contents of |sk_surface| to the resource's backing memory.
   // Should be called only if the resource is using software raster.

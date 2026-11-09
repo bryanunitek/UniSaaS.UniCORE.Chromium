@@ -23,8 +23,6 @@
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
-#include "third_party/blink/public/common/manifest/manifest_invariants.h"
-#include "third_party/blink/public/common/manifest/manifest_util.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest_manager.mojom.h"
 #include "url/gurl.h"
@@ -109,7 +107,7 @@ base::CallbackListSubscription ManifestManagerHost::GetAllSpecifiedManifests(
     AllManifestsCallbackList::CallbackType callback) {
   auto result = all_manifests_callback_list_.Add(callback);
   if (last_manifest_success_result_.has_value()) {
-    callback.Run(base::ok(last_manifest_success_result_->Clone()));
+    callback.Run(base::ok(*last_manifest_success_result_));
   } else {
     MaybeFetchManifestForSubscriptions();
   }
@@ -126,29 +124,8 @@ void ManifestManagerHost::RequestManifestDebugInfo(
     return;
   }
   GetManifestManager().RequestManifestDebugInfo(
-      base::BindOnce(&ManifestManagerHost::OnRequestManifestDebugInfoResponse,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void ManifestManagerHost::OnRequestManifestDebugInfoResponse(
-    RequestManifestDebugInfoCallback callback,
-    const GURL& url,
-    blink::mojom::ManifestPtr parsed_manifest,
-    blink::mojom::ManifestDebugInfoPtr debug_info) {
-  std::optional<blink::Manifest> manifest;
-  if (parsed_manifest && !blink::IsEmptyManifest(*parsed_manifest)) {
-    base::expected<blink::Manifest, blink::ManifestInvariantError> converted =
-        blink::ManifestFromMojom(*parsed_manifest);
-    if (!converted.has_value()) {
-      base::UmaHistogramEnumeration("WebApp.Manifest.InvariantViolation",
-                                    converted.error());
-      mojo::ReportBadMessage(
-          blink::ManifestInvariantErrorToString(converted.error()));
-    } else {
-      manifest = std::move(*converted);
-    }
-  }
-  std::move(callback).Run(url, manifest, std::move(debug_info));
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), GURL(),
+                                                  std::nullopt, nullptr));
 }
 
 blink::mojom::ManifestManager& ManifestManagerHost::GetManifestManager() {
@@ -165,7 +142,7 @@ base::expected<blink::Manifest, blink::mojom::ManifestRequestResult>
 ManifestManagerHost::ValidateAndMaybeOverrideManifest(
     blink::mojom::ManifestRequestResult result,
     std::optional<blink::Manifest> manifest) {
-  // Intrinsic invariants already hold (enforced in ManifestFromMojom).
+  // Intrinsic invariants already hold (enforced in `StructTraits::Read()`).
   if (!manifest) {
     if (result == blink::mojom::ManifestRequestResult::kSuccess) {
       mojo::ReportBadMessage(
@@ -202,23 +179,9 @@ ManifestManagerHost::ValidateAndMaybeOverrideManifest(
 void ManifestManagerHost::
     ValidateAndMaybeOverrideManifestForTesting(  // IN-TEST
         blink::mojom::ManifestRequestResult result,
-        blink::mojom::ManifestPtr manifest) {
+        std::optional<blink::Manifest> manifest) {
   CHECK_IS_TEST();
-  std::optional<blink::Manifest> parsed_manifest;
-  if (manifest && !blink::IsEmptyManifest(*manifest)) {
-    base::expected<blink::Manifest, blink::ManifestInvariantError> converted =
-        blink::ManifestFromMojom(*manifest);
-    if (!converted.has_value()) {
-      base::UmaHistogramEnumeration("WebApp.Manifest.InvariantViolation",
-                                    converted.error());
-      mojo::ReportBadMessage(
-          blink::ManifestInvariantErrorToString(converted.error()));
-      return;
-    }
-    parsed_manifest = std::move(*converted);
-  }
-  std::ignore =
-      ValidateAndMaybeOverrideManifest(result, std::move(parsed_manifest));
+  std::ignore = ValidateAndMaybeOverrideManifest(result, std::move(manifest));
 }
 
 void ManifestManagerHost::ParseManifestFromString(
@@ -229,8 +192,7 @@ void ManifestManagerHost::ParseManifestFromString(
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (!document_url.is_valid() || url::Origin::Create(document_url).opaque()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(callback), blink::mojom::Manifest::New()));
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
   GetManifestManager().ParseManifestFromString(
@@ -240,62 +202,53 @@ void ManifestManagerHost::ParseManifestFromString(
               &ManifestManagerHost::OnParseManifestFromStringResponse,
               weak_factory_.GetWeakPtr(), document_url, manifest_url,
               std::move(callback)),
-          blink::mojom::ManifestPtr()));
+          std::nullopt));
 }
 
 void ManifestManagerHost::OnParseManifestFromStringResponse(
     const GURL& document_url,
     const GURL& manifest_url,
     ParseManifestCallback callback,
-    blink::mojom::ManifestPtr manifest) {
+    const std::optional<blink::Manifest>& manifest) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
-  manifest = ValidateParsedManifestFromString(document_url, manifest_url,
-                                              std::move(manifest));
-  std::move(callback).Run(std::move(manifest));
+  std::optional<blink::Manifest> parsed_manifest =
+      ValidateParsedManifestFromString(document_url, manifest_url, manifest);
+  std::move(callback).Run(std::move(parsed_manifest));
 }
 
-blink::mojom::ManifestPtr ManifestManagerHost::ValidateParsedManifestFromString(
+std::optional<blink::Manifest>
+ManifestManagerHost::ValidateParsedManifestFromString(
     const GURL& document_url,
     const GURL& manifest_url,
-    blink::mojom::ManifestPtr manifest) {
-  if (!manifest || blink::IsEmptyManifest(manifest)) {
-    return blink::mojom::Manifest::New();
+    std::optional<blink::Manifest> manifest) {
+  if (!manifest) {
+    return std::nullopt;
   }
 
-  base::expected<blink::Manifest, blink::ManifestInvariantError> converted =
-      blink::ManifestFromMojom(*manifest);
-  if (!converted.has_value()) {
-    base::UmaHistogramEnumeration("WebApp.Manifest.InvariantViolation",
-                                  converted.error());
-    mojo::ReportBadMessage(
-        blink::ManifestInvariantErrorToString(converted.error()));
-    return blink::mojom::Manifest::New();
-  }
-
-  // The returned manifest URL must match the requested manifest_url.
-  if (converted->manifest_url() != manifest_url) {
+  // The returned manifest URL must match the requested `manifest_url`.
+  if (manifest->manifest_url() != manifest_url) {
     mojo::ReportBadMessage("Returned manifest has incorrect manifest URL");
-    return blink::mojom::Manifest::New();
+    return std::nullopt;
   }
 
-  // document_url was verified valid and non-opaque before sending the IPC.
+  // `document_url` was verified valid and non-opaque before sending the IPC.
   url::Origin document_origin = url::Origin::Create(document_url);
   CHECK(!document_origin.opaque());
 
   // The manifest origin must match the document origin.
-  if (!document_origin.IsSameOriginWith(converted->GetOrigin())) {
+  if (!document_origin.IsSameOriginWith(manifest->GetOrigin())) {
     mojo::ReportBadMessage("Manifest origin must match the document origin.");
-    return blink::mojom::Manifest::New();
+    return std::nullopt;
   }
 
-  return blink::ManifestToMojom(*converted);
+  return std::move(*manifest);
 }
 
-blink::mojom::ManifestPtr
+std::optional<blink::Manifest>
 ManifestManagerHost::ValidateParsedManifestFromStringForTesting(  // IN-TEST
     const GURL& document_url,
     const GURL& manifest_url,
-    blink::mojom::ManifestPtr manifest) {
+    std::optional<blink::Manifest> manifest) {
   CHECK_IS_TEST();
   return ValidateParsedManifestFromString(document_url, manifest_url,
                                           std::move(manifest));
@@ -337,26 +290,10 @@ void ManifestManagerHost::OnRequestManifestResponse(
     int request_id,
     blink::mojom::ManifestRequestResult result,
     const GURL& url,
-    blink::mojom::ManifestPtr manifest) {
+    const std::optional<blink::Manifest>& manifest) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
-  std::optional<blink::Manifest> parsed_manifest;
-  if (manifest && !blink::IsEmptyManifest(*manifest)) {
-    base::expected<blink::Manifest, blink::ManifestInvariantError> converted =
-        blink::ManifestFromMojom(*manifest);
-    if (!converted.has_value()) {
-      base::UmaHistogramEnumeration("WebApp.Manifest.InvariantViolation",
-                                    converted.error());
-      mojo::ReportBadMessage(
-          blink::ManifestInvariantErrorToString(converted.error()));
-      result = blink::mojom::ManifestRequestResult::kUnexpectedFailure;
-    } else {
-      parsed_manifest = std::move(*converted);
-    }
-  }
-
   base::expected<blink::Manifest, blink::mojom::ManifestRequestResult>
-      validated_manifest =
-          ValidateAndMaybeOverrideManifest(result, std::move(parsed_manifest));
+      validated_manifest = ValidateAndMaybeOverrideManifest(result, manifest);
 
   std::optional<blink::Manifest> response_manifest;
   if (validated_manifest.has_value()) {
@@ -372,8 +309,8 @@ void ManifestManagerHost::OnRequestManifestResponse(
 
 void ManifestManagerHost::OnRequestManifestAndErrors(
     const GURL& manifest_url_for_fetch,
-    base::expected<blink::mojom::ManifestPtr,
-                   blink::mojom::RequestManifestErrorPtr> result) {
+    base::expected<blink::Manifest, blink::mojom::RequestManifestErrorPtr>
+        result) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   // Reset the information for the current manifest url being fetched if it
   // matches the request that was sent to the ManifestManager, and only process
@@ -385,41 +322,33 @@ void ManifestManagerHost::OnRequestManifestAndErrors(
   }
 
   current_fetching_manifest_url_.reset();
+  ManifestResult manifest_result =
+      base::unexpected(blink::mojom::RequestManifestError::New(
+          blink::mojom::ManifestRequestResult::kUnexpectedFailure,
+          std::vector<blink::mojom::ManifestErrorPtr>()));
+
   if (result.has_value()) {
-    std::optional<blink::Manifest> parsed_manifest;
-    if (*result && !blink::IsEmptyManifest(**result)) {
-      base::expected<blink::Manifest, blink::ManifestInvariantError> converted =
-          blink::ManifestFromMojom(**result);
-      if (!converted.has_value()) {
-        base::UmaHistogramEnumeration("WebApp.Manifest.InvariantViolation",
-                                      converted.error());
-        mojo::ReportBadMessage(
-            blink::ManifestInvariantErrorToString(converted.error()));
-        result = base::unexpected(blink::mojom::RequestManifestError::New(
-            blink::mojom::ManifestRequestResult::kUnexpectedFailure,
-            std::vector<blink::mojom::ManifestErrorPtr>()));
-      } else {
-        parsed_manifest = std::move(*converted);
-      }
-    }
-    if (result.has_value()) {
-      base::expected<blink::Manifest, blink::mojom::ManifestRequestResult>
-          validated = ValidateAndMaybeOverrideManifest(
-              blink::mojom::ManifestRequestResult::kSuccess,
-              std::move(parsed_manifest));
-      if (!validated.has_value()) {
-        result = base::unexpected(blink::mojom::RequestManifestError::New(
-            blink::mojom::ManifestRequestResult::kUnexpectedFailure,
-            std::vector<blink::mojom::ManifestErrorPtr>()));
-      } else if (validated->manifest_url().is_empty()) {
-        // If a manifest URL clearing raced with the request, then a default
-        // manifest can be returned. In this case, do not call observers and
-        // instead wait for the next manifest URL change to request the manifest
-        // again.
-        return;
-      } else {
-        *result = blink::ManifestToMojom(*validated);
-      }
+    base::expected<blink::Manifest, blink::mojom::ManifestRequestResult>
+        validated = ValidateAndMaybeOverrideManifest(
+            blink::mojom::ManifestRequestResult::kSuccess, std::move(*result));
+    if (!validated.has_value()) {
+      manifest_result =
+          base::unexpected(blink::mojom::RequestManifestError::New(
+              blink::mojom::ManifestRequestResult::kUnexpectedFailure,
+              std::vector<blink::mojom::ManifestErrorPtr>()));
+    } else if (validated->manifest_url().is_empty()) {
+      // If a manifest URL clearing raced with the request, then a default
+      // manifest can be returned. In this case, do not call observers and
+      // instead wait for the next manifest URL change to request the manifest
+      // again.
+      return;
+    } else {
+      // This copy COULD be avoided if we cached the full expected result.
+      // However - that gets really confusing if we also have it be optional.
+      // Since we only care about caching success, it is simpler to copy here,
+      // and just cache the success results as an optional.
+      last_manifest_success_result_ = *validated;
+      manifest_result = base::ok(std::move(*validated));
     }
   } else {
     blink::mojom::ManifestRequestResult error_result = result.error()->error;
@@ -431,16 +360,11 @@ void ManifestManagerHost::OnRequestManifestAndErrors(
       result.error()->error =
           blink::mojom::ManifestRequestResult::kUnexpectedFailure;
     }
+    manifest_result = base::unexpected(std::move(result.error()));
   }
-  if (result.has_value()) {
-    // This Clone COULD be avoided if we cached the full expected result.
-    // However - that gets really confusing if we also have it be optional.
-    // Since we only care about caching success, it is simpler to clone here,
-    // and just cache the success results as an optional.
-    last_manifest_success_result_ = result->Clone();
-  }
-  developer_manifest_callback_list_.Notify(result);
-  all_manifests_callback_list_.Notify(result);
+
+  developer_manifest_callback_list_.Notify(manifest_result);
+  all_manifests_callback_list_.Notify(manifest_result);
 }
 
 void ManifestManagerHost::ManifestUrlChanged(const GURL& manifest_url) {
@@ -472,14 +396,12 @@ void ManifestManagerHost::MaybeFetchManifestForSubscriptions() {
 
 void ManifestManagerHost::NotifyOnceSubscriptionsIfSuccessCached() {
   if (last_manifest_success_result_.has_value()) {
-    // This Clone COULD be avoided if we cached the full expected result.
+    // This copy COULD be avoided if we cached the full expected result.
     // However - that gets really confusing if we also have it be optional.
-    // Since we only care about caching success, it is simpler to clone here,
+    // Since we only care about caching success, it is simpler to copy here,
     // and just cache the success results as an optional.
-    base::expected<blink::mojom::ManifestPtr,
-                   blink::mojom::RequestManifestErrorPtr>
-        result = base::ok(last_manifest_success_result_->Clone());
-    developer_manifest_callback_list_.Notify(result);
+    developer_manifest_callback_list_.Notify(
+        base::ok(*last_manifest_success_result_));
   }
 }
 

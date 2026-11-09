@@ -28,6 +28,7 @@
 #include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_provider.h"
+#include "chrome/browser/glic/public/glic_provider_change.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -286,6 +287,9 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // available only to adult users.
   static bool CanUseAdultFeatures(const AccountCapabilities& capabilities);
 
+  // Returns whether `profile` is eligible for the Android native FRE.
+  static bool IsProfileEligibleForNativeFre(Profile* profile);
+
   // Returns whether the OS version is supported.
   static bool IsOsVersionSupported();
   // Returns whether system requirements (like RAM and Chromebook hardware) are
@@ -294,6 +298,13 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // Checks whether this client is likely a dogfooder, taking the ignore dogfood
   // feature into account.
   static bool IsLikelyDogfoodClient();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns whether `profile` belongs to a ChromeOS regular or child user
+  // session. Returns false if `profile` is null, belongs to a guest, managed
+  // guest or kiosk session, or has no signed-in user.
+  static bool IsChromeOSProfileEligible(Profile* profile);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Returns true if a profile is eligible for Glic. Some profiles - such as
   // incognito, guest, system profile, etc. - are never eligible. An eligible
@@ -368,6 +379,17 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // Same as IsReadyForProfile, but returns a more detailed state.
   static mojom::ProfileReadyState GetProfileReadyState(Profile* profile);
 
+  // Returns the provider change that a relaunch would apply to `profile`. Can
+  // change at runtime. Always `kNone` unless `kGeicProviderChangePrompt` is
+  // enabled.
+  //
+  // Doesn't consider whether `profile` is eligible for Glic, before or after
+  // the relaunch: the provider is latched regardless of eligibility, and
+  // enablement is computed for the latched provider, so it can't tell whether
+  // the profile would be eligible under the new one. Callers decide whether to
+  // act on the change.
+  static GlicProviderChange GetPendingProviderChange(Profile* profile);
+
   // If Glic has recovered to a ready state since the last check, logs the
   // previous unhealthy state as a recovery outcome on user interaction.
   void MaybeRecordRecoveryOnInteraction();
@@ -393,6 +415,10 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // Whether the auto open for pdf flow is enabled.
   static bool IsAutoOpenForPdfEnabled(Profile* profile);
 
+  // Whether the PDF viewer's summarize button and its API are enabled for the
+  // profile. This includes the kPdfGlicSummarize flag.
+  static bool IsPdfSummarizeEnabled(Profile* profile);
+
   // Whether the tab web contents contextual menu item is enabled.
   static bool IsContextualMenuItemEnabled(Profile* profile,
                                           const std::u16string& selection_text);
@@ -403,6 +429,13 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // Returns true if Glic is enabled for the profile, the feature is enabled,
   // and the account is non-enterprise (or for Glic dev).
   static bool IsShareImageEnabledForProfile(Profile* profile);
+
+  // Returns true if the profile can be launched from OS-level entry points
+  // (the OS launcher and the OS-global hotkey): Glic is enabled and consented
+  // for the profile (see IsEnabledAndConsentForProfile()), and its provider
+  // supports `GlicFeature::kOsEntryPoints` (e.g. not Gemini Enterprise). This
+  // value can change at runtime.
+  static bool IsOsEntryPointEnabledForProfile(Profile* profile);
 
   // Whether the live mode and floaty window are enabled by flags.
   static bool IsLiveAndFloatyEnabledByFlags();
@@ -772,10 +805,6 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
       EnablementMetricsPhase phase,
       const ProfileEnablement& enablement);
 
-#if BUILDFLAG(IS_CHROMEOS)
-  static bool IsChromeOSProfileEligible(Profile* profile);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
   bool recorded_startup_metrics_ = false;
 
   raw_ptr<Profile> profile_;
@@ -826,7 +855,8 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   mojom::ProfileReadyState last_profile_ready_state_;
 #if BUILDFLAG(IS_ANDROID)
   // Tracks the "background_actuation" capability. Only created while
-  // `kGlicExperimentalTriggering` and `kGlicBackgroundActuation` are enabled.
+  // `GlicFeature::kExperimentalTriggering` is supported and
+  // `kGlicBackgroundActuation` is enabled.
   std::unique_ptr<BackgroundActuationCapability>
       background_actuation_capability_;
 #endif  // BUILDFLAG(IS_ANDROID)

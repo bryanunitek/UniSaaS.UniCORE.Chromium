@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '//resources/cr_components/searchbox/searchbox_input.js';
+import 'chrome://resources/cr_components/searchbox/searchbox_input.js';
 
-import {html, nothing} from '//resources/lit/v3_0/lit.rollup.js';
+import {html, nothing} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {NtpSearchboxElement} from './ntp_searchbox.js';
 import {getHtml as getContextualEntrypointHtml} from './ntp_searchbox_contextual_entrypoint.html.js';
@@ -72,6 +72,8 @@ export function getHtml(this: NtpSearchboxElement) {
     ${this.showComposeButton_ ? html`
       <cr-searchbox-compose-button id="composeButton" slot="compose-button"
           ?dynamic="${this.ntpRealboxDynamicAiModeButtonEnabled_}"
+          ?inherit-visibility="${
+              this.ntpRealboxDynamicAiModeButtonPreventEarlyPaint_}"
           ?has-user-input="${this.hasUserInput_}"
           ?virtual-focus-enabled="${this.virtualFocusEnabled}"
           ?has-virtual-focus="${this.isAiModeVirtualFocused()}"

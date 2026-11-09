@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.contextmenu;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
@@ -89,15 +90,18 @@ import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.ShareDelegate.ShareOrigin;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabContextMenuItemDelegate;
+import org.chromium.chrome.browser.tab.TabCreationState;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
+import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
+import org.chromium.components.browser_ui.modaldialog.ModalDialogView;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.browser_ui.widget.ContextMenuDialog;
 import org.chromium.components.embedder_support.contextmenu.ContextMenuParams;
@@ -115,6 +119,7 @@ import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.base.UiAndroidFeatures;
 import org.chromium.ui.hierarchicalmenu.FlyoutController;
 import org.chromium.ui.listmenu.MenuModelBridge;
+import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.mojom.MenuSourceType;
 import org.chromium.url.GURL;
@@ -128,10 +133,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Instrumentation tests for the context menu. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({
-    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-    ChromeSwitches.GOOGLE_BASE_URL + "=http://example.com/"
-})
+@CommandLineFlags.Add({ChromeSwitches.GOOGLE_BASE_URL + "=http://example.com/"})
 @DisableFeatures({
     ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING,
     // Keep the exhaustive menu-structure assertions deterministic. The "Ask Gemini"
@@ -173,7 +175,7 @@ public class ContextMenuTest {
     private String mTestUrl;
 
     private ContextMenuCoordinator mMenuCoordinator;
-    private TabModelSelectorObserver mTabModelSelectorObserver;
+    private TabModelSelectorTabModelObserver mTabModelSelectorObserver;
 
     private static final String FILENAME_GIF = "download.gif";
     private static final String FILENAME_PNG = "test_image.png";
@@ -205,6 +207,7 @@ public class ContextMenuTest {
 
         mActivityTestRule.startOnBlankPage();
         mDownloadTestRule.attach(mActivityTestRule.getActivity());
+        ModalDialogView.disableButtonTapProtectionForTesting();
 
         mTestServer = mActivityTestRule.getTestServer();
         mTestUrl = mTestServer.getURL(TEST_PATH);
@@ -224,15 +227,18 @@ public class ContextMenuTest {
         ThreadUtils.runOnUiThreadBlocking(() -> FirstRunStatus.setFirstRunFlowComplete(false));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    if (mActivityTestRule.getActivity() != null) {
+                        mActivityTestRule
+                                .getActivity()
+                                .getModalDialogManager()
+                                .dismissAllDialogs(DialogDismissalCause.UNKNOWN);
+                    }
                     if (mMenuCoordinator != null) {
                         mMenuCoordinator.dismiss();
                         mMenuCoordinator = null;
                     }
                     if (mTabModelSelectorObserver != null) {
-                        mActivityTestRule
-                                .getActivity()
-                                .getTabModelSelector()
-                                .removeObserver(mTabModelSelectorObserver);
+                        mTabModelSelectorObserver.destroy();
                         mTabModelSelectorObserver = null;
                     }
                 });
@@ -344,19 +350,20 @@ public class ContextMenuTest {
                 .when(mDataProtectionBridgeMock)
                 .verifyGenericCopyImageActionIsAllowedByPolicy(anyString(), any(), any());
 
-        mTabModelSelectorObserver =
-                new TabModelSelectorObserver() {
-                    @Override
-                    public void onNewTabCreated(Tab tab) {
-                        Assert.fail();
-                    }
-                };
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .addObserver(mTabModelSelectorObserver);
+                    mTabModelSelectorObserver =
+                            new TabModelSelectorTabModelObserver(
+                                    mActivityTestRule.getActivity().getTabModelSelector()) {
+                                @Override
+                                public void didAddTab(
+                                        Tab tab,
+                                        @TabLaunchType int type,
+                                        @TabCreationState int creationState,
+                                        boolean markedForSelection) {
+                                    Assert.fail();
+                                }
+                            };
                 });
 
         ContextMenuUtils.selectContextMenuItem(
@@ -378,19 +385,20 @@ public class ContextMenuTest {
                 .when(mDataProtectionBridgeMock)
                 .verifyGenericCopyImageActionIsAllowedByPolicy(anyString(), any(), any());
 
-        mTabModelSelectorObserver =
-                new TabModelSelectorObserver() {
-                    @Override
-                    public void onNewTabCreated(Tab tab) {
-                        Assert.fail();
-                    }
-                };
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .addObserver(mTabModelSelectorObserver);
+                    mTabModelSelectorObserver =
+                            new TabModelSelectorTabModelObserver(
+                                    mActivityTestRule.getActivity().getTabModelSelector()) {
+                                @Override
+                                public void didAddTab(
+                                        Tab tab,
+                                        @TabLaunchType int type,
+                                        @TabCreationState int creationState,
+                                        boolean markedForSelection) {
+                                    Assert.fail();
+                                }
+                            };
                 });
 
         ContextMenuUtils.selectContextMenuItem(
@@ -422,25 +430,26 @@ public class ContextMenuTest {
 
         final CallbackHelper newTabCallback = new CallbackHelper();
         final AtomicReference<Tab> newTab = new AtomicReference<>();
-        mTabModelSelectorObserver =
-                new TabModelSelectorObserver() {
-                    @Override
-                    public void onNewTabCreated(Tab tab) {
-                        if (tab.getParentId() != activityTab.getId()) {
-                            return;
-                        }
-                        newTab.set(tab);
-                        newTabCallback.notifyCalled();
-
-                        mActivityTestRule.getActivity().getTabModelSelector().removeObserver(this);
-                    }
-                };
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .addObserver(mTabModelSelectorObserver);
+                    mTabModelSelectorObserver =
+                            new TabModelSelectorTabModelObserver(
+                                    mActivityTestRule.getActivity().getTabModelSelector()) {
+                                @Override
+                                public void didAddTab(
+                                        Tab tab,
+                                        @TabLaunchType int type,
+                                        @TabCreationState int creationState,
+                                        boolean markedForSelection) {
+                                    if (tab.getParentId() != activityTab.getId()) {
+                                        return;
+                                    }
+                                    newTab.set(tab);
+                                    newTabCallback.notifyCalled();
+
+                                    destroy();
+                                }
+                            };
                 });
 
         int callbackCount = newTabCallback.getCallCount();
@@ -585,7 +594,7 @@ public class ContextMenuTest {
         int callCount = mDownloadTestRule.getChromeDownloadCallCount();
         boolean isSaveAsEnabled =
                 ChromeFeatureList.isEnabled(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
-                        && DeviceInfo.isDesktop();
+                        || DeviceInfo.isDesktop();
         ContextMenuUtils.selectContextMenuItem(
                 InstrumentationRegistry.getInstrumentation(),
                 isSaveAsEnabled ? null : mActivityTestRule.getActivity(),
@@ -596,7 +605,7 @@ public class ContextMenuTest {
         if (isSaveAsEnabled) {
             CriteriaHelper.pollUiThread(
                     () -> mActivityTestRule.getActivity().getModalDialogManager().isShowing());
-            onView(withId(R.id.positive_button)).perform(click());
+            onView(withId(R.id.positive_button)).inRoot(isDialog()).perform(click());
         }
 
         // Wait for the download to complete and see if we got the right file
@@ -615,7 +624,7 @@ public class ContextMenuTest {
         int callCount = mDownloadTestRule.getChromeDownloadCallCount();
         boolean isSaveAsEnabled =
                 ChromeFeatureList.isEnabled(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
-                        && DeviceInfo.isDesktop();
+                        || DeviceInfo.isDesktop();
         ContextMenuUtils.selectContextMenuItemFromRightClick(
                 InstrumentationRegistry.getInstrumentation(),
                 isSaveAsEnabled ? null : mActivityTestRule.getActivity(),
@@ -626,7 +635,7 @@ public class ContextMenuTest {
         if (isSaveAsEnabled) {
             CriteriaHelper.pollUiThread(
                     () -> mActivityTestRule.getActivity().getModalDialogManager().isShowing());
-            onView(withId(R.id.positive_button)).perform(click());
+            onView(withId(R.id.positive_button)).inRoot(isDialog()).perform(click());
         }
 
         // Wait for the download to complete and see if we got the right file
@@ -1091,7 +1100,6 @@ public class ContextMenuTest {
                         MenuSourceType.TOUCH,
                         /* openedFromHighlight= */ true,
                         /* openedFromInterestFor= */ false,
-                        /* interestForNodeID= */ 0,
                         /* additionalNavigationParams= */ null);
         ContextMenuPopulatorFactory populatorFactory =
                 new ChromeContextMenuPopulatorFactory(
@@ -1474,7 +1482,7 @@ public class ContextMenuTest {
         int callCount = mDownloadTestRule.getChromeDownloadCallCount();
         boolean isSaveAsEnabled =
                 ChromeFeatureList.isEnabled(ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU)
-                        && DeviceInfo.isDesktop();
+                        || DeviceInfo.isDesktop();
         ContextMenuUtils.selectContextMenuItem(
                 InstrumentationRegistry.getInstrumentation(),
                 isSaveAsEnabled ? null : mActivityTestRule.getActivity(),
@@ -1485,7 +1493,7 @@ public class ContextMenuTest {
         if (isSaveAsEnabled) {
             CriteriaHelper.pollUiThread(
                     () -> mActivityTestRule.getActivity().getModalDialogManager().isShowing());
-            onView(withId(R.id.positive_button)).perform(click());
+            onView(withId(R.id.positive_button)).inRoot(isDialog()).perform(click());
         }
 
         // Wait for the download to complete and see if we got the right file

@@ -276,7 +276,7 @@ void DataProtectionTabHelper::OnRealTimeLookupResult(
   bool protection_enabled = true;
   std::string watermark_text;
   std::string identifier;
-  base::UmaHistogramBoolean(kScreenshotBlockLookupSuccessHistogram,
+  base::UmaHistogramBoolean(kRealTimeURLLookupSuccessHistogram,
                             response != nullptr);
 
   enterprise_connectors::ConnectorsService* connectors_service =
@@ -364,6 +364,12 @@ void DataProtectionTabHelper::SetCommittedProtectionState(
       observer.WatermarkTextDidChange(web_state_, watermark_text);
     }
   }
+}
+
+void DataProtectionTabHelper::SetWatermarkTextForTesting(
+    const std::string& watermark_text) {
+  SetCommittedProtectionState(committed_navigation_.protection_state,
+                              watermark_text);
 }
 
 void DataProtectionTabHelper::DidStopLoading(web::WebState* web_state) {

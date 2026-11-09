@@ -36,9 +36,10 @@
 #include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/one_time_tokens/core/browser/fake_gmail_otp_backend.h"
+#include "components/one_time_tokens/core/browser/fake_gmail_otp_service.h"
 #include "components/one_time_tokens/core/browser/fake_sms_otp_service.h"
+#include "components/one_time_tokens/core/browser/gmail_otp_retriever.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
-#include "components/one_time_tokens/core/browser/one_time_token_backend_notification.h"
 #include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
 #include "components/one_time_tokens/core/common/one_time_token_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -116,7 +117,10 @@ class OtpManagerImplTest
     test_field_.set_origin(url::Origin::Create(GURL("https://example.test")));
   }
 
-  const FormStructure* AddForm(const FormDescription& form_description) {
+  const FormStructure* AddForm(FormDescription form_description) {
+    if (!form_description.host_frame) {
+      form_description.host_frame = autofill_driver().GetFrameToken();
+    }
     FormData form = test::GetFormData(form_description);
     FormGlobalId form_id = form.global_id();
     auto form_structure = std::make_unique<FormStructure>(form);
@@ -182,18 +186,23 @@ class OtpManagerImplTest
     autofill_client().set_otp_field_detector(std::move(detector));
   }
 
-  void SetUpGmailOtpRetrieval() {
+  one_time_tokens::FakeGmailOtpService& SetUpGmailOtpRetrieval() {
     prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(),
                                              true);
     SetUpOtpFieldDetector();
     autofill_client().set_affiliation_service(&mock_affiliation_service_);
-    autofill_client().set_gmail_otp_backend(
-        std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+    auto service = std::make_unique<one_time_tokens::FakeGmailOtpService>();
+    one_time_tokens::FakeGmailOtpService& service_ref = *service;
+    autofill_client().set_gmail_otp_service(std::move(service));
+    return service_ref;
   }
 
   void TearDown() override {
     task_environment_.RunUntilIdle();
+    detector_observation_.reset();
     autofill_client().set_affiliation_service(nullptr);
+    DestroyAutofillClient();
+    task_environment_.RunUntilIdle();
   }
 
   one_time_tokens::GmailOtpRetriever::Result CreateSampleGmailOtpResult(
@@ -829,6 +838,8 @@ TEST_F(OtpManagerImplTest,
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   autofill_client().set_gmail_otp_backend(
       std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
 
@@ -1344,20 +1355,22 @@ TEST_F(OtpManagerImplTest, GmailOtpBackendTickleStartsGmailOtpRetriever) {
   auto backend = std::make_unique<one_time_tokens::FakeGmailOtpBackend>();
   one_time_tokens::FakeGmailOtpBackend* backend_ptr = backend.get();
   autofill_client().set_gmail_otp_backend(std::move(backend));
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   // As the user has not opted into Gmail OTP filling yet, parsing an OTP form
   // subscribes to tickles but does not start `GmailOtpRetriever`.
   AddFormWithOtpField();
   ASSERT_TRUE(test_api(otp_manager).gmail_otp_tickle_subscription().IsAlive());
-  ASSERT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  ASSERT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   // Once the user opted in, a tickle notified by the backend starts
   // `GmailOtpRetriever`.
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   backend_ptr->OnIncomingOneTimeTokenBackendNotification(
       one_time_tokens::OneTimeTokenBackendNotification());
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -2360,8 +2373,10 @@ TEST_F(
   const FormStructure* form = AddForm(form_description);
   ASSERT_TRUE(form);
 
+  CreateAutofillDriver();
+  autofill_driver(1).SetLocalFrameToken(test::MakeLocalFrameToken());
   LocalFrameToken frame_a = form->field(0)->host_frame();
-  LocalFrameToken frame_b = test::MakeLocalFrameToken();
+  LocalFrameToken frame_b = autofill_driver(1).GetFrameToken();
   test_api(autofill_manager())
       .FindCachedFormById(form->global_id())
       ->field(1)
@@ -2412,8 +2427,8 @@ TEST_F(OtpManagerImplTest,
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -2422,7 +2437,7 @@ TEST_F(OtpManagerImplTest,
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, test_field_, future.GetCallback());
 
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that GetOtpSuggestions does not start GmailOtpRetriever when
@@ -2432,8 +2447,8 @@ TEST_F(
     GetOtpSuggestions_DoesNotStartGmailOtpRetrieverWhenAffiliationServiceMissing) {
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   autofill_client().set_affiliation_service(nullptr);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -2442,7 +2457,7 @@ TEST_F(
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, test_field_, future.GetCallback());
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that GetOtpSuggestions does not start GmailOtpRetriever when
@@ -2453,7 +2468,7 @@ TEST_F(
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(nullptr);
+  autofill_client().set_gmail_otp_service(nullptr);
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -2462,7 +2477,7 @@ TEST_F(
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, test_field_, future.GetCallback());
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that GetOtpSuggestions does not start GmailOtpRetriever when the user
@@ -2472,8 +2487,8 @@ TEST_F(OtpManagerImplTest,
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), false);
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -2482,7 +2497,7 @@ TEST_F(OtpManagerImplTest,
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, test_field_, future.GetCallback());
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that when a domain-verified cached Gmail token is present,
@@ -2493,8 +2508,8 @@ TEST_F(OtpManagerImplTest,
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2516,7 +2531,7 @@ TEST_F(OtpManagerImplTest,
   EXPECT_THAT(
       future.Get(),
       ElementsAre(Property(&one_time_tokens::OneTimeToken::value, "654321")));
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
   autofill_client().set_affiliation_service(nullptr);
 }
 
@@ -2550,7 +2565,7 @@ TEST_F(OtpManagerImplTest, OnGmailOtpRetrieved_DeliversSuggestionsOnSuccess) {
   EXPECT_TRUE(autofill_manager()
                   .GetOtpFormEventLogger()
                   .HasLoggedDataToFillAvailableForTesting());
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnGmailOtpRetrieved does not invoke the pending callback when
@@ -2571,7 +2586,7 @@ TEST_F(OtpManagerImplTest, OnGmailOtpRetrieved_DoesNotInvokeCallbackOnFailure) {
                                kGmailOtpBackendNetworkError));
 
   EXPECT_FALSE(future.IsReady());
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnGmailOtpRetrieved does not invoke the pending callback when
@@ -2596,7 +2611,7 @@ TEST_F(OtpManagerImplTest,
       });
 
   EXPECT_FALSE(future.IsReady());
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that Gmail OTPs returned by `SmsOtpService` are ignored, even if
@@ -2636,8 +2651,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2649,7 +2664,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not restart retrieval if GmailOtpRetriever
@@ -2660,8 +2675,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2692,8 +2707,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   // Do NOT call SetUpOtpFieldDetector(), so IsOtpFieldDetected() is false.
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2705,7 +2720,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived starts GmailOtpRetriever even when no field is
@@ -2716,8 +2731,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2726,7 +2741,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not start GmailOtpRetriever when a non-OTP
@@ -2737,8 +2752,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddForm({
       .fields =
@@ -2758,7 +2773,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not start GmailOtpRetriever when the OTP
@@ -2769,8 +2784,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2787,7 +2802,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not start GmailOtpRetriever when the user
@@ -2798,8 +2813,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2811,7 +2826,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not start GmailOtpRetriever when
@@ -2821,8 +2836,8 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   SetUpOtpFieldDetector();
   autofill_client().set_affiliation_service(nullptr);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2834,7 +2849,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnTickleReceived does not start GmailOtpRetriever when
@@ -2845,7 +2860,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(nullptr);
+  autofill_client().set_gmail_otp_service(nullptr);
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
@@ -2857,7 +2872,7 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
 
   test_api(otp_manager).OnTickleReceived();
 
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that `OnTickleReceived` passes the target OTP field's frame origin
@@ -2870,11 +2885,11 @@ TEST_F(OtpManagerImplOnTickleReceivedTest,
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
 
-  auto backend = std::make_unique<one_time_tokens::FakeGmailOtpBackend>();
+  auto backend = std::make_unique<one_time_tokens::FakeGmailOtpService>();
   backend->ProcessCallbacks(one_time_tokens::OneTimeToken(
       one_time_tokens::OneTimeTokenType::kGmail, "654321",
       base::TimeTicks::Now(), "otp@sub.example.test"));
-  autofill_client().set_gmail_otp_backend(std::move(backend));
+  autofill_client().set_gmail_otp_service(std::move(backend));
 
   const FormStructure* form = AddFormWithOtpField(
       /*field_origin=*/url::Origin::Create(GURL("https://sub.example.test")),
@@ -2929,7 +2944,7 @@ TEST_F(OtpManagerImplTest,
   test_api(otp_manager).OnGmailOtpRetrieved(CreateSampleGmailOtpResult());
 
   EXPECT_EQ(test_api(otp_manager).last_triggered_otp_value(), "987654");
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 }
 
 // Tests that OnGmailOtpRetrieved suppresses proactive suggestions when
@@ -2964,8 +2979,8 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -2977,12 +2992,12 @@ TEST_F(OtpManagerImplTest,
 
   // Tickle arrives, starting GmailOtpRetriever.
   test_api(otp_manager).OnTickleReceived();
-  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  ASSERT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   // User unfocuses the OTP field (focuses a non-form field) while retrieval is
   // in flight.
   otp_manager.OnBeforeFocusOnNonFormField(autofill_manager());
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   EXPECT_CALL(otp_phish_guard_delegate(),
               StartOtpPhishGuardCheck(form->field(0)->host_frame(), _))
@@ -2997,7 +3012,7 @@ TEST_F(OtpManagerImplTest,
 
   EXPECT_TRUE(base::test::RunUntil([&]() {
     return test_api(otp_manager).last_triggered_otp_value() == "987654" &&
-           test_api(otp_manager).gmail_otp_retriever() == nullptr;
+           !test_api(otp_manager).has_gmail_otp_retrieval_subscription();
   }));
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3098,8 +3113,8 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3138,7 +3153,7 @@ TEST_F(OtpManagerImplTest,
   EXPECT_EQ(future.Get()[0].value(), "123456");
 
   EXPECT_TRUE(base::test::RunUntil([&]() {
-    return test_api(otp_manager).gmail_otp_retriever() == nullptr;
+    return !test_api(otp_manager).has_gmail_otp_retrieval_subscription();
   }));
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3158,8 +3173,8 @@ TEST_F(
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3190,7 +3205,7 @@ TEST_F(
 
   // Now a Gmail tickle arrives while the OTP field is still focused.
   test_api(otp_manager).OnTickleReceived();
-  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  ASSERT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   EXPECT_CALL(otp_phish_guard_delegate(),
               StartOtpPhishGuardCheck(form->field(0)->host_frame(), _))
@@ -3225,7 +3240,7 @@ TEST_F(
                            Optional(std::string("sender@example.com"))))));
 
   EXPECT_TRUE(base::test::RunUntil([&]() {
-    return test_api(otp_manager).gmail_otp_retriever() == nullptr;
+    return !test_api(otp_manager).has_gmail_otp_retrieval_subscription();
   }));
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3242,8 +3257,8 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3286,7 +3301,7 @@ TEST_F(OtpManagerImplTest,
   // 2. Second tickle arrives later and retrieves a newer OTP "222222".
   task_environment_.FastForwardBy(base::Seconds(5));
   test_api(otp_manager).OnTickleReceived();
-  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  ASSERT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   EXPECT_CALL(
       autofill_driver(),
@@ -3315,7 +3330,7 @@ TEST_F(OtpManagerImplTest,
                            Optional(std::string("second@example.com"))))));
 
   EXPECT_TRUE(base::test::RunUntil([&]() {
-    return test_api(otp_manager).gmail_otp_retriever() == nullptr;
+    return !test_api(otp_manager).has_gmail_otp_retrieval_subscription();
   }));
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3329,8 +3344,8 @@ TEST_F(
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   one_time_tokens::OneTimeToken gmail_otp(
@@ -3347,7 +3362,7 @@ TEST_F(
 
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3364,11 +3379,11 @@ TEST_F(
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
 
-  auto backend = std::make_unique<one_time_tokens::FakeGmailOtpBackend>();
+  auto backend = std::make_unique<one_time_tokens::FakeGmailOtpService>();
   backend->ProcessCallbacks(one_time_tokens::OneTimeToken(
       one_time_tokens::OneTimeTokenType::kGmail, "999888",
       base::TimeTicks::Now(), "otp@bank.test"));
-  autofill_client().set_gmail_otp_backend(std::move(backend));
+  autofill_client().set_gmail_otp_service(std::move(backend));
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
 
@@ -3378,7 +3393,7 @@ TEST_F(
   // Unverified token in backend cache must not be returned by
   // SelectMostRecentToken or suppress starting GmailOtpRetriever.
   EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3394,8 +3409,8 @@ TEST_F(
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   // Simulate a platform without SMS OTP support (as on Desktop).
   sms_otp_service_.set_platform_supported(false);
@@ -3455,8 +3470,8 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3499,8 +3514,8 @@ TEST_F(
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3517,7 +3532,7 @@ TEST_F(
           .source = one_time_tokens::GmailOtpRetriever::Source::kReceived,
       });
   ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
-  ASSERT_FALSE(test_api(otp_manager).gmail_otp_retriever());
+  ASSERT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   // Fast-forward past `kCacheDurationForOldTokens` so the cached Gmail OTP
   // expires.
@@ -3529,7 +3544,7 @@ TEST_F(
   // of returning the expired token.
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, *form->field(0), future.GetCallback());
-  EXPECT_TRUE(test_api(otp_manager).gmail_otp_retriever());
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   autofill_client().set_affiliation_service(nullptr);
 }
@@ -3543,17 +3558,17 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
   ASSERT_TRUE(form);
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
 
   // Enabling the pref reactive-fetches the Gmail OTP.
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
-  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_TRUE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
   autofill_client().set_affiliation_service(nullptr);
 }
 
@@ -3565,8 +3580,8 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3578,7 +3593,7 @@ TEST_F(OtpManagerImplTest,
   cached_form->field(0)->AddFieldModifier(FieldModifier::kUser);
 
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), true);
-  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).has_gmail_otp_retrieval_subscription());
   autofill_client().set_affiliation_service(nullptr);
 }
 
@@ -3594,8 +3609,8 @@ TEST_F(
   SetUpOtpFieldDetector();
   NiceMock<affiliations::MockAffiliationService> mock_affiliation_service;
   autofill_client().set_affiliation_service(&mock_affiliation_service);
-  autofill_client().set_gmail_otp_backend(
-      std::make_unique<one_time_tokens::FakeGmailOtpBackend>());
+  autofill_client().set_gmail_otp_service(
+      std::make_unique<one_time_tokens::FakeGmailOtpService>());
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddForm({
@@ -3652,7 +3667,7 @@ TEST_F(
                   Property(&one_time_tokens::OneTimeToken::sender_address,
                            Optional(std::string("sender@example.com"))))));
   EXPECT_TRUE(base::test::RunUntil([&]() {
-    return test_api(otp_manager).gmail_otp_retriever() == nullptr;
+    return !test_api(otp_manager).has_gmail_otp_retrieval_subscription();
   }));
 
   autofill_client().set_affiliation_service(nullptr);
@@ -3666,9 +3681,9 @@ TEST_F(OtpManagerImplTest,
   SetUpOtpFieldDetector();
   affiliations::FakeAffiliationService affiliation_service;
   autofill_client().set_affiliation_service(&affiliation_service);
-  auto backend = std::make_unique<one_time_tokens::FakeGmailOtpBackend>();
-  one_time_tokens::FakeGmailOtpBackend* backend_ptr = backend.get();
-  autofill_client().set_gmail_otp_backend(std::move(backend));
+  auto service = std::make_unique<one_time_tokens::FakeGmailOtpService>();
+  one_time_tokens::FakeGmailOtpService* service_ptr = service.get();
+  autofill_client().set_gmail_otp_service(std::move(service));
 
   OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
   const FormStructure* form = AddFormWithOtpField();
@@ -3680,7 +3695,7 @@ TEST_F(OtpManagerImplTest,
   base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
   otp_manager.GetOtpSuggestions(*form, *form->field(0), future.GetCallback());
 
-  backend_ptr->ProcessCallbacks(one_time_tokens::OneTimeToken(
+  service_ptr->ProcessCallbacks(one_time_tokens::OneTimeToken(
       one_time_tokens::OneTimeTokenType::kGmail, "654321",
       base::TimeTicks::Now(), "otp@mail.example.test"));
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -3739,6 +3754,7 @@ TEST_F(OtpManagerImplTest,
 
   prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), false);
   std::move(gmail_phish_guard_callback).Run(/*is_phishing=*/false);
+  task_environment_.RunUntilIdle();
 
   EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
   EXPECT_FALSE(future.IsReady());
@@ -3754,4 +3770,773 @@ TEST_F(OtpManagerImplTest,
       ElementsAre(Property(&one_time_tokens::OneTimeToken::value, "123456")));
 }
 
+// Tests that `MaybeRetrieveGmailOtp()` matches the sender against the OTP
+// field's frame origin rather than the primary main frame origin when the OTP
+// field is in a same-TLD+1 subframe.
+TEST_F(
+    OtpManagerImplTest,
+    GetOtpSuggestions_SameTldPlusOneSubframe_UsesTargetFieldOriginForGmailOtpRetriever) {
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  const FormStructure* form = AddFormWithOtpField(
+      /*field_origin=*/url::Origin::Create(GURL("https://sub.example.test")),
+      /*main_frame_origin=*/url::Origin::Create(GURL("https://example.test")));
+  ASSERT_TRUE(form);
+  one_time_tokens::FakeGmailOtpService& service = SetUpGmailOtpRetrieval();
+
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(form->field(0)->host_frame(), _))
+      .WillOnce(RunOnceCallback<1>(/*is_phishing=*/false));
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
+  otp_manager.GetOtpSuggestions(*form, *form->field(0), future.GetCallback());
+
+  service.ProcessCallbacks(one_time_tokens::OneTimeToken(
+      one_time_tokens::OneTimeTokenType::kGmail, "654321",
+      base::TimeTicks::Now(), "otp@sub.example.test"));
+  EXPECT_THAT(
+      future.Get(),
+      ElementsAre(Property(&one_time_tokens::OneTimeToken::value, "654321")));
+}
+
+// Tests that submitting an OTP form stops any in-flight `GmailOtpRetriever`,
+// clears the cached Gmail OTP, and resets proactive trigger deduplication state
+// so stale tokens are not served in SPA flows.
+TEST_F(OtpManagerImplTest,
+       OnAfterFormSubmitted_OtpForm_ClearsCachedGmailOtpAndStopsRetriever) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  EXPECT_CALL(otp_phish_guard_delegate(), StartOtpPhishGuardCheck)
+      .WillRepeatedly(RunOnceCallbackRepeatedly<1>(/*is_phishing=*/false));
+
+  const FormStructure* otp_form = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form);
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("111222").token);
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
+  otp_manager.GetOtpSuggestions(*otp_form, *otp_form->field(0),
+                                future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+  ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  ASSERT_EQ(test_api(otp_manager).last_triggered_otp_value(), "111222");
+
+  autofill_manager().OnFormSubmitted(otp_form->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+}
+
+// Tests that submitting an unrelated non-OTP form (whether cached or uncached)
+// while an OTP form is present in the frame does not clear the cached Gmail OTP
+// or stop an in-flight `GmailOtpRetriever`.
+TEST_F(OtpManagerImplTest,
+       OnAfterFormSubmitted_NonOtpForm_PreservesCachedGmailOtpAndRetriever) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  const FormStructure* otp_form = AddFormWithOtpField();
+  const FormStructure* non_otp_form = AddFormWithFirstNameField();
+  ASSERT_TRUE(otp_form);
+  ASSERT_TRUE(non_otp_form);
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("111222").token);
+  ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // Submitting a cached non-OTP form must preserve the OTP form's state.
+  autofill_manager().OnFormSubmitted(non_otp_form->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "111222")));
+
+  // Submitting an uncached non-OTP form (e.g. a small search form) must also
+  // preserve the OTP form's state.
+  FormData uncached_form =
+      test::GetFormData({.fields = {{.label = u"Search", .name = u"q"}}});
+  ASSERT_EQ(autofill_manager().FindCachedFormById(uncached_form.global_id()),
+            nullptr);
+  autofill_manager().OnFormSubmitted(uncached_form,
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "111222")));
+}
+
+// Tests that `OnAfterFormsSeen` keeps the cached Gmail OTP when an unrelated
+// non-OTP form is removed while an OTP form remains, and clears the cached
+// Gmail OTP once no OTP form remains in the frame.
+TEST_F(OtpManagerImplTest,
+       OnAfterFormsSeen_RemovedForms_ClearsOnlyWhenNoOtpFormRemains) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  EXPECT_CALL(otp_phish_guard_delegate(), StartOtpPhishGuardCheck)
+      .WillRepeatedly(RunOnceCallbackRepeatedly<1>(/*is_phishing=*/false));
+
+  const FormStructure* otp_form = AddFormWithOtpField();
+  const FormStructure* non_otp_form = AddFormWithFirstNameField();
+  ASSERT_TRUE(otp_form);
+  ASSERT_TRUE(non_otp_form);
+  FormGlobalId otp_form_id = otp_form->global_id();
+  FormGlobalId non_otp_form_id = non_otp_form->global_id();
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("333444").token);
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
+  otp_manager.GetOtpSuggestions(*otp_form, *otp_form->field(0),
+                                future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+  ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  ASSERT_EQ(test_api(otp_manager).last_triggered_otp_value(), "333444");
+
+  // Removing the non-OTP form leaves `otp_form` in the frame; state is kept.
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{non_otp_form_id},
+                                 AutofillManagerTestApi::pass_key());
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "333444")));
+  EXPECT_EQ(test_api(otp_manager).last_triggered_otp_value(), "333444");
+
+  // Removing the last OTP form clears the cached Gmail OTP, deduplication
+  // state, and in-flight retriever.
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_id},
+                                 AutofillManagerTestApi::pass_key());
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+}
+
+// Tests that submitting an OTP form while a Gmail PhishGuard check is in flight
+// cancels the stale PhishGuard callback so it cannot hijack a subsequent SPA
+// OTP form's pending suggestion callback on the same frame, and that the second
+// SPA OTP form can still retrieve and deliver a fresh Gmail OTP.
+TEST_F(
+    OtpManagerImplTest,
+    OnAfterFormSubmitted_DuringInFlightPhishGuard_SuppressesStaleDeliveryAndRetrievesFreshOtpOnNextSpaForm) {
+  one_time_tokens::FakeGmailOtpService& service = SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  FormGlobalId otp_form_1_id = otp_form_1->global_id();
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("111222").token);
+
+  base::OnceCallback<void(bool)> step1_phish_guard_cb;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(otp_form_1->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        step1_phish_guard_cb = std::move(callback);
+      });
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      step1_future;
+  otp_manager.GetOtpSuggestions(*otp_form_1, *otp_form_1->field(0),
+                                step1_future.GetCallback());
+  ASSERT_TRUE(step1_phish_guard_cb);
+
+  // Step 1 submits via XHR and transitions in-place on the same frame to Step 2
+  // (`otp_form_2`) while `step1_phish_guard_cb` is still in flight.
+  autofill_manager().OnFormSubmitted(otp_form_1->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  // Resolved via PostTask (not synchronously inside `OnAfterFormSubmitted`),
+  // even while an SMS OTP subscription is active.
+  EXPECT_FALSE(step1_future.IsReady());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(step1_future.IsReady());
+  EXPECT_TRUE(step1_future.Get().empty());
+
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_1_id},
+                                 AutofillManagerTestApi::pass_key());
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // Step 2 adds a new OTP form on the same frame and requests suggestions.
+  const FormStructure* otp_form_2 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_2);
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      step2_future;
+  otp_manager.GetOtpSuggestions(*otp_form_2, *otp_form_2->field(0),
+                                step2_future.GetCallback());
+
+  // When Step 1's stale PhishGuard check finishes, it must NOT resolve
+  // `step2_future` with `"111222"` or repopulate `last_triggered_otp_value_`.
+  std::move(step1_phish_guard_cb).Run(/*is_phishing=*/false);
+  EXPECT_FALSE(step2_future.IsReady());
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+
+  // Delivering a fresh Gmail OTP for Step 2 fulfills `step2_future`.
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(otp_form_2->field(0)->host_frame(), _))
+      .WillOnce(RunOnceCallback<1>(/*is_phishing=*/false));
+  service.ProcessCallbacks(one_time_tokens::OneTimeToken(
+      one_time_tokens::OneTimeTokenType::kGmail, "999888",
+      base::TimeTicks::Now(), "otp@example.test"));
+  EXPECT_THAT(
+      step2_future.Get(),
+      ElementsAre(Property(&one_time_tokens::OneTimeToken::value, "999888")));
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "999888")));
+}
+
+// Tests that `ClearGmailOtpState()` cancels an in-flight proactive Gmail
+// PhishGuard check (preventing stale `RendererShouldTriggerSuggestions` calls)
+// and asynchronously resolves a pending reactive callback with empty
+// suggestions on platforms without an active SMS OTP subscription (Desktop).
+TEST_F(
+    OtpManagerImplTest,
+    ClearGmailOtpState_CancelsProactiveAndDesktopReactiveInFlightPhishGuard) {
+  SetUpGmailOtpRetrieval();
+  sms_otp_service_.set_platform_supported(false);
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  FormGlobalId otp_form_1_id = otp_form_1->global_id();
+  otp_manager.OnBeforeFocusOnFormField(autofill_manager(), otp_form_1_id,
+                                       otp_form_1->field(0)->global_id());
+
+  // 1. Proactive path: Gmail OTP arrives and starts an async PhishGuard check,
+  // then `otp_form_1` is removed and replaced by `otp_form_2` before PhishGuard
+  // completes.
+  base::OnceCallback<void(bool)> proactive_phish_guard_cb;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(otp_form_1->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        proactive_phish_guard_cb = std::move(callback);
+      });
+  test_api(otp_manager)
+      .OnGmailOtpRetrieved(CreateSampleGmailOtpResult("111222"));
+  ASSERT_TRUE(proactive_phish_guard_cb);
+
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_1_id},
+                                 AutofillManagerTestApi::pass_key());
+  const FormStructure* otp_form_2 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_2);
+  otp_manager.OnBeforeFocusOnFormField(autofill_manager(),
+                                       otp_form_2->global_id(),
+                                       otp_form_2->field(0)->global_id());
+
+  EXPECT_CALL(autofill_driver(), RendererShouldTriggerSuggestions).Times(0);
+  std::move(proactive_phish_guard_cb).Run(/*is_phishing=*/false);
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+
+  // 2. Desktop reactive path (`!sms_otp_subscription_.IsAlive()`): revoking
+  // consent while PhishGuard is pending asynchronously resolves the pending UI
+  // callback with `{}` via `ClearGmailOtpState()` instead of leaving it
+  // stranded.
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("222333").token);
+  base::OnceCallback<void(bool)> reactive_phish_guard_cb;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(otp_form_2->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        reactive_phish_guard_cb = std::move(callback);
+      });
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      desktop_future;
+  otp_manager.GetOtpSuggestions(*otp_form_2, *otp_form_2->field(0),
+                                desktop_future.GetCallback());
+  ASSERT_TRUE(reactive_phish_guard_cb);
+  ASSERT_FALSE(desktop_future.IsReady());
+
+  prefs::SetAutofillGmailOtpFillingEnabled(autofill_client().GetPrefs(), false);
+  // Resolved via PostTask (not synchronously inside the pref change callback).
+  EXPECT_FALSE(desktop_future.IsReady());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(desktop_future.IsReady());
+  EXPECT_TRUE(desktop_future.Get().empty());
+
+  // Late PhishGuard completion is a safe no-op and does not record `Latency` or
+  // `Verdict` histograms for cancelled checks.
+  std::move(reactive_phish_guard_cb).Run(/*is_phishing=*/false);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+  histogram_tester_.ExpectTotalCount(kPhishGuardLatencyHistogram, 0);
+  histogram_tester_.ExpectTotalCount(kPhishGuardVerdictHistogram, 0);
+}
+
+// Tests that when an OTP form is submitted, removed, or disabled so no OTP form
+// remains in the frame, any pending `GetOtpSuggestions` callback is answered
+// asynchronously with `{}` even while an SMS OTP subscription is active, any
+// in-flight SMS PhishGuard check is cancelled so it cannot hijack a subsequent
+// same-frame SPA OTP form, and late SMS arrivals are ignored.
+TEST_F(
+    OtpManagerImplTest,
+    ClearStateOnOtpFormExit_ActiveSmsSubscription_ResolvesPendingCallbackAndIgnoresLateSms) {
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  EXPECT_CALL(otp_phish_guard_delegate(), StartOtpPhishGuardCheck).Times(0);
+
+  // 1. Form submission (`OnAfterFormSubmitted`) while waiting for SMS OTP.
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  FormGlobalId otp_form_1_id = otp_form_1->global_id();
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      submit_future;
+  otp_manager.GetOtpSuggestions(*otp_form_1, *otp_form_1->field(0),
+                                submit_future.GetCallback());
+  ASSERT_FALSE(submit_future.IsReady());
+
+  autofill_manager().OnFormSubmitted(otp_form_1->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_FALSE(submit_future.IsReady());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(submit_future.IsReady());
+  EXPECT_TRUE(submit_future.Get().empty());
+  ASSERT_EQ(sms_otp_service_.num_subscribers(), 1u);
+
+  sms_otp_service_.SimulateOtpArrived(
+      one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
+                                    "111111", base::TimeTicks::Now()));
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_1_id},
+                                 AutofillManagerTestApi::pass_key());
+  task_environment_.FastForwardBy(one_time_tokens::kCacheDurationForOldTokens +
+                                  base::Seconds(1));
+
+  // 2. DOM removal (`OnBeforeFormsSeen`) when no OTP form remains.
+  // `TestAutofillManagerTemplate::OnFormsSeen()` pumps async parsing via
+  // `waiter_.Wait(0)` without advancing `MOCK_TIME`, executing the cancellation
+  // task posted by `OnBeforeFormsSeen`.
+  const FormStructure* otp_form_2 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_2);
+  FormGlobalId otp_form_2_id = otp_form_2->global_id();
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      remove_future;
+  otp_manager.GetOtpSuggestions(*otp_form_2, *otp_form_2->field(0),
+                                remove_future.GetCallback());
+  ASSERT_FALSE(remove_future.IsReady());
+
+  const base::TimeTicks time_before_remove = base::TimeTicks::Now();
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_2_id},
+                                 AutofillManagerTestApi::pass_key());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(remove_future.IsReady());
+  EXPECT_TRUE(remove_future.Get().empty());
+  EXPECT_EQ(base::TimeTicks::Now(), time_before_remove);
+  ASSERT_EQ(sms_otp_service_.num_subscribers(), 1u);
+
+  sms_otp_service_.SimulateOtpArrived(
+      one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
+                                    "222222", base::TimeTicks::Now()));
+
+  // 3. Field transition out of `IsOtpForm` (`OnFieldTypesDetermined`) when no
+  // OTP form remains. Skip `GetRecentOtpsAndRenewSubscription()` cached SMS
+  // delivery by clearing the SMS cache via advancing past cache expiration.
+  task_environment_.FastForwardBy(one_time_tokens::kCacheDurationForOldTokens +
+                                  base::Seconds(1));
+  const FormStructure* otp_form_3 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_3);
+  FormGlobalId otp_form_3_id = otp_form_3->global_id();
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      disable_future;
+  otp_manager.GetOtpSuggestions(*otp_form_3, *otp_form_3->field(0),
+                                disable_future.GetCallback());
+  ASSERT_FALSE(disable_future.IsReady());
+
+  FormData disabled_form = otp_form_3->ToFormData();
+  std::vector<FormFieldData> fields = disabled_form.ExtractFields();
+  fields[0].set_value(u"333333");
+  fields[0].set_is_focusable(false);
+  FieldGlobalId field_id = fields[0].global_id();
+  disabled_form.set_fields(std::move(fields));
+  autofill_manager().OnTextFieldValueChanged(
+      disabled_form, field_id, base::TimeTicks::Now(),
+      AutofillManagerTestApi::pass_key());
+  EXPECT_FALSE(disable_future.IsReady());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(disable_future.IsReady());
+  EXPECT_TRUE(disable_future.Get().empty());
+  ASSERT_EQ(sms_otp_service_.num_subscribers(), 1u);
+
+  sms_otp_service_.SimulateOtpArrived(
+      one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
+                                    "333333", base::TimeTicks::Now()));
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_3_id},
+                                 AutofillManagerTestApi::pass_key());
+  task_environment_.FastForwardBy(one_time_tokens::kCacheDurationForOldTokens +
+                                  base::Seconds(1));
+
+  // 4. In-flight SMS PhishGuard check at submission time is cancelled by
+  // `ClearStateOnOtpFormExit()` so it cannot hijack a subsequent same-frame SPA
+  // OTP form or emit stale histograms.
+  const FormStructure* otp_form_4 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_4);
+  FormGlobalId otp_form_4_id = otp_form_4->global_id();
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      sms_step1_future;
+  otp_manager.GetOtpSuggestions(*otp_form_4, *otp_form_4->field(0),
+                                sms_step1_future.GetCallback());
+
+  base::OnceCallback<void(bool)> sms_step1_phish_guard_cb;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(otp_form_4->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        sms_step1_phish_guard_cb = std::move(callback);
+      });
+  sms_otp_service_.SimulateOtpArrived(
+      one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
+                                    "444444", base::TimeTicks::Now()));
+  ASSERT_TRUE(sms_step1_phish_guard_cb);
+
+  autofill_manager().OnFormSubmitted(otp_form_4->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{},
+                                 /*removed_forms=*/{otp_form_4_id},
+                                 AutofillManagerTestApi::pass_key());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(sms_step1_future.IsReady());
+  EXPECT_TRUE(sms_step1_future.Get().empty());
+
+  task_environment_.FastForwardBy(one_time_tokens::kCacheDurationForOldTokens +
+                                  base::Seconds(1));
+  const FormStructure* otp_form_5 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_5);
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      sms_step2_future;
+  otp_manager.GetOtpSuggestions(*otp_form_5, *otp_form_5->field(0),
+                                sms_step2_future.GetCallback());
+
+  std::move(sms_step1_phish_guard_cb).Run(/*is_phishing=*/false);
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(sms_step2_future.IsReady());
+  histogram_tester_.ExpectTotalCount(kPhishGuardLatencyHistogram, 0);
+  histogram_tester_.ExpectTotalCount(kPhishGuardVerdictHistogram, 0);
+}
+
+// Tests that `OnFieldTypesDetermined` clears cached Gmail OTP state when the
+// last OTP form transitions out of `IsOtpForm` without `OnAfterFormsSeen`
+// firing — both when an SPA auto-submit handler disables the OTP field during
+// `OnTextFieldValueChanged` before `XHR_SUCCEEDED`, and when server predictions
+// reclassify an in-place mutated field (with preserved `FieldRendererId`) to a
+// non-OTP type.
+TEST_F(
+    OtpManagerImplTest,
+    OnFieldTypesDetermined_TransitionOutOfOtpForm_ClearsOnlyWhenNoOtpFormRemains) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  // Part 1: Auto-submit disabling OTP field (`is_focusable = false`) via
+  // `OnTextFieldValueChanged` (`ParseFormAsync` -> `OnFieldTypesDetermined`).
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  const FormStructure* otp_form_2 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  ASSERT_TRUE(otp_form_2);
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("777888").token);
+
+  auto disable_otp_field_on_value_change = [&](const FormStructure& form) {
+    FormData disabled_form = form.ToFormData();
+    std::vector<FormFieldData> fields = disabled_form.ExtractFields();
+    fields[0].set_value(u"777888");
+    fields[0].set_is_focusable(false);
+    FieldGlobalId field_id = fields[0].global_id();
+    disabled_form.set_fields(std::move(fields));
+    autofill_manager().OnTextFieldValueChanged(
+        disabled_form, field_id, base::TimeTicks::Now(),
+        AutofillManagerTestApi::pass_key());
+  };
+
+  // Disabling `otp_form_1` while `otp_form_2` remains eligible preserves state
+  // until `otp_form_1`'s XHR submission completes.
+  disable_otp_field_on_value_change(*otp_form_1);
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "777888")));
+
+  // When `otp_form_1` then submits via `XHR_SUCCEEDED` (even though its cached
+  // field is now unfocusable and `otp_form_2` is present),
+  // `OnAfterFormSubmitted` still clears the stale OTP via `otp_form_ids_`.
+  autofill_manager().OnFormSubmitted(otp_form_1->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // If `otp_form_1` remains mounted after a failed XHR attempt and submits a
+  // retry while still unfocusable (with `otp_form_2` still present),
+  // `otp_form_ids_` retains `otp_form_1` and clears the retry OTP as well.
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("777889").token);
+  autofill_manager().OnFormSubmitted(otp_form_1->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // Re-populate cached state for `otp_form_2`; disabling `otp_form_2` leaves no
+  // eligible OTP form, so `OnFieldTypesDetermined` clears state immediately
+  // even before `XHR_SUCCEEDED` fires.
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("777999").token);
+  disable_otp_field_on_value_change(*otp_form_2);
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // Part 2: In-place attribute mutation preserving `FieldRendererId` keeps
+  // `server_type = ONE_TIME_CODE` across `OnAfterFormsSeen`, then clears state
+  // when server predictions reclassify the field via `OnFieldTypesDetermined`.
+  const FormStructure* otp_form_3 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_3);
+  FormGlobalId otp_form_3_id = otp_form_3->global_id();
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("888999").token);
+
+  FormData mutated_same_id = otp_form_3->ToFormData();
+  std::vector<FormFieldData> fields = mutated_same_id.ExtractFields();
+  fields[0].set_label(u"Username");
+  fields[0].set_name(u"username");
+  mutated_same_id.set_fields(std::move(fields));
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{mutated_same_id},
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
+  // `server_type = ONE_TIME_CODE` is still preserved until server predictions
+  // arrive.
+  ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  FormStructure* mutable_form_3 =
+      test_api(autofill_manager()).FindCachedFormById(otp_form_3_id);
+  ASSERT_TRUE(mutable_form_3);
+  test_api(*mutable_form_3).SetFieldTypes({USERNAME});
+  autofill_manager().NotifyObservers(
+      &TestBrowserAutofillManager::Observer::OnFieldTypesDetermined,
+      otp_form_3_id,
+      TestBrowserAutofillManager::Observer::FieldTypeSource::kAutofillServer,
+      /*small_forms_were_parsed=*/false);
+
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  // Because `otp_form_3` was reclassified to `USERNAME` (erased from
+  // `otp_form_ids_`), submitting it later must NOT clear state for a newly
+  // added OTP form `otp_form_4`.
+  const FormStructure* otp_form_4 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_4);
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("999000").token);
+  autofill_manager().OnFormSubmitted(mutable_form_3->ToFormData(),
+                                     mojom::SubmissionSource::XHR_SUCCEEDED,
+                                     AutofillManagerTestApi::pass_key());
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "999000")));
+}
+
+// Tests that when an SPA unmounts the only OTP form and mounts a replacement
+// OTP form in a single batched `OnFormsSeen(updated_forms, removed_forms)`
+// call, `OnBeforeFormsSeen` clears stale state from the removed form before
+// `OnFieldTypesDetermined` runs for the new form.
+TEST_F(OtpManagerImplTest,
+       OnFormsSeen_BatchedOtpFormReplacement_ClearsStaleStateBeforeNewForm) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  FormGlobalId otp_form_1_id = otp_form_1->global_id();
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>>
+      pending_future;
+  otp_manager.GetOtpSuggestions(*otp_form_1, *otp_form_1->field(0),
+                                pending_future.GetCallback());
+  ASSERT_FALSE(pending_future.IsReady());
+
+  // Finish the initial retriever without delivering a token, then populate a
+  // stale cached token for `otp_form_1` so `gmail_otp_retriever_` is null right
+  // before the batched replacement.
+  test_api(otp_manager)
+      .OnGmailOtpRetrieved(base::unexpected(
+          one_time_tokens::OneTimeTokenRetrievalError::kUnknown));
+  ASSERT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("111222").token);
+
+  FormData otp_form_2 = test::GetFormData({
+      .fields =
+          {
+              {.host_frame = autofill_driver().GetFrameToken(),
+               .label = u"Verification code",
+               .name = u"otp_step_2",
+               .autocomplete_attribute = "one-time-code"},
+          },
+      .host_frame = autofill_driver().GetFrameToken(),
+  });
+
+  const base::TimeTicks time_before = base::TimeTicks::Now();
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{otp_form_2},
+                                 /*removed_forms=*/{otp_form_1_id},
+                                 AutofillManagerTestApi::pass_key());
+  task_environment_.RunUntilIdle();
+
+  // `otp_form_1`'s pending callback resolved empty rather than receiving
+  // `otp_form_1`'s stale token, the stale cached token was cleared, and a fresh
+  // `GmailOtpRetriever` was started for `otp_form_2`.
+  ASSERT_TRUE(pending_future.IsReady());
+  EXPECT_TRUE(pending_future.Get().empty());
+  EXPECT_EQ(base::TimeTicks::Now(), time_before);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+}
+
+// Tests that `OnAfterFormsSeen` clears the cached Gmail OTP and stops any
+// in-flight `GmailOtpRetriever` when a cached OTP form mutates in-place into a
+// non-OTP form (`updated_forms` non-empty, `removed_forms` empty) and no other
+// OTP forms remain in the frame.
+TEST_F(OtpManagerImplTest,
+       OnAfterFormsSeen_MutatedOtpForm_ClearsWhenNoOtpFormRemains) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+
+  const FormStructure* otp_form_1 = AddFormWithOtpField();
+  const FormStructure* otp_form_2 = AddFormWithOtpField();
+  ASSERT_TRUE(otp_form_1);
+  ASSERT_TRUE(otp_form_2);
+  ASSERT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("555666").token);
+  ASSERT_TRUE(test_api(otp_manager).SelectMostRecentToken().has_value());
+
+  auto make_non_otp_mutation = [&](const FormStructure& form) {
+    FormData mutated = form.ToFormData();
+    FormData non_otp_fields = test::GetFormData({
+        .fields =
+            {
+                {.label = u"First name", .name = u"firstname"},
+                {.label = u"Last name", .name = u"lastname"},
+                {.label = u"Email", .name = u"email"},
+            },
+        .host_frame = autofill_driver().GetFrameToken(),
+    });
+    mutated.set_fields(non_otp_fields.fields());
+    return mutated;
+  };
+
+  // Mutating `otp_form_1` into a non-OTP form while `otp_form_2` remains keeps
+  // the cached Gmail OTP and in-flight retriever.
+  autofill_manager().OnFormsSeen(
+      /*updated_forms=*/{make_non_otp_mutation(*otp_form_1)},
+      /*removed_forms=*/{}, AutofillManagerTestApi::pass_key());
+  EXPECT_NE(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_THAT(
+      test_api(otp_manager).SelectMostRecentToken(),
+      Optional(Property(&one_time_tokens::OneTimeToken::value, "555666")));
+
+  // Mutating `otp_form_2` into a non-OTP form leaves no OTP forms in the frame
+  // (`removed_forms` is empty), clearing the cached Gmail OTP and retriever.
+  autofill_manager().OnFormsSeen(
+      /*updated_forms=*/{make_non_otp_mutation(*otp_form_2)},
+      /*removed_forms=*/{}, AutofillManagerTestApi::pass_key());
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+  EXPECT_FALSE(test_api(otp_manager).SelectMostRecentToken().has_value());
+}
+
+// Tests that `OnFieldTypesDetermined`, `GetOtpSuggestions`, `OnTickleReceived`,
+// and `OnOneTimeTokenReceived` do not fetch or deliver OTPs when the frame is
+// inactive (e.g. in BFCache or prerender).
+TEST_F(OtpManagerImplTest, InactiveFrame_SuppressesFetchingAndSuggestions) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  autofill_driver().SetIsActive(false);
+
+  const FormStructure* form = AddFormWithOtpField();
+  ASSERT_TRUE(form);
+  EXPECT_EQ(sms_otp_service_.num_subscribers(), 0u);
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
+  otp_manager.GetOtpSuggestions(*form, *form->field(0), future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+  EXPECT_TRUE(future.Get().empty());
+
+  test_api(otp_manager).OnTickleReceived();
+  EXPECT_EQ(test_api(otp_manager).gmail_otp_retriever(), nullptr);
+
+  EXPECT_CALL(otp_phish_guard_delegate(), StartOtpPhishGuardCheck).Times(0);
+  EXPECT_CALL(autofill_driver(), RendererShouldTriggerSuggestions).Times(0);
+  test_api(otp_manager).OnGmailOtpRetrieved(CreateSampleGmailOtpResult());
+}
+
+// Tests that if the frame becomes inactive while an asynchronous PhishGuard
+// check is in flight, proactive suggestion triggering is suppressed.
+TEST_F(OtpManagerImplTest,
+       InactiveFrameDuringPhishGuard_SuppressesProactiveSuggestionTrigger) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  const FormStructure* form = AddFormWithOtpField();
+  ASSERT_TRUE(form);
+
+  base::OnceCallback<void(bool)> phish_guard_callback;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(form->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        phish_guard_callback = std::move(callback);
+      });
+  EXPECT_CALL(autofill_driver(), RendererShouldTriggerSuggestions).Times(0);
+
+  test_api(otp_manager)
+      .OnGmailOtpRetrieved(CreateSampleGmailOtpResult("654321"));
+  ASSERT_TRUE(phish_guard_callback);
+
+  autofill_driver().SetIsActive(false);
+  std::move(phish_guard_callback).Run(/*is_phishing=*/false);
+}
+
+// Tests that if the frame becomes inactive while an asynchronous PhishGuard
+// check is in flight for a pending `GetOtpSuggestions` request, reactive OTP
+// delivery is suppressed and the callback resolves with empty suggestions.
+TEST_F(OtpManagerImplTest,
+       InactiveFrameDuringPhishGuard_SuppressesReactiveDelivery) {
+  SetUpGmailOtpRetrieval();
+  OtpManagerImpl otp_manager(autofill_manager(), &sms_otp_service_);
+  const FormStructure* form = AddFormWithOtpField();
+  ASSERT_TRUE(form);
+
+  test_api(otp_manager)
+      .set_last_retrieved_gmail_otp(CreateSampleGmailOtpResult("654321").token);
+
+  base::OnceCallback<void(bool)> phish_guard_callback;
+  EXPECT_CALL(otp_phish_guard_delegate(),
+              StartOtpPhishGuardCheck(form->field(0)->host_frame(), _))
+      .WillOnce([&](LocalFrameToken, base::OnceCallback<void(bool)> callback) {
+        phish_guard_callback = std::move(callback);
+      });
+
+  base::test::TestFuture<std::vector<one_time_tokens::OneTimeToken>> future;
+  otp_manager.GetOtpSuggestions(*form, *form->field(0), future.GetCallback());
+  ASSERT_TRUE(phish_guard_callback);
+
+  autofill_driver().SetIsActive(false);
+  std::move(phish_guard_callback).Run(/*is_phishing=*/false);
+
+  EXPECT_TRUE(future.Get().empty());
+  EXPECT_TRUE(test_api(otp_manager).last_triggered_otp_value().empty());
+}
 }  // namespace autofill

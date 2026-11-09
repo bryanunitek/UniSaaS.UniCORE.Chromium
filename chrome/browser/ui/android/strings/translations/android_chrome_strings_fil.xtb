@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">Huwag mag-alok na isalin ang mga site na ito</translation>
 <translation id="1143193470214071120">Magsara ng window o pamahalaan ang mga window</translation>
 <translation id="1143486892058798649">I-save ang link bilang…</translation>
+<translation id="1149644372535087155">Mag-save ng mga password sa Chrome</translation>
 <translation id="1149725087019908252">Sina-scan ang <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504">Bubukas ang <ph name="APP_NAME" /> sa Chrome. Sa pamamagitan ng pagpapatuloy, sumasang-ayon ka sa <ph name="BEGIN_LINK1" />Mga Tuntunin ng Serbisyo ng Google<ph name="END_LINK1" />, at sa <ph name="BEGIN_LINK2" />Mga Karagdagang Tuntunin ng Serbisyo ng Google Chrome at ChromeOS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">Wala kang naka-save na password sa Google Password Manager.</translation>
@@ -188,6 +189,7 @@ Ang taong may passphrase mo lang ang makakabasa ng iyong naka-encrypt na data. H
 <translation id="1749561566933687563">I-sync ang iyong mga bookmark</translation>
 <translation id="1750238553597293878">Patuloy na gamitin ang mga password sa iyong Google Account</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">I-restore ang window na <ph name="TITLE_OF_WINDOW" />.</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{Mga Page, may 1 page sa listahan}one{Mga Page, may # page sa listahan}other{Mga Page, may # na page sa listahan}}</translation>
 <translation id="1771929606532798550">Magpapadala ng impormasyon sa Google tungkol sa paggamit mo ng Chrome, pero hindi ito iuugnay sa iyo\n\nKung magka-crash ang Chrome, posibleng may kasamang ilang personal na impormasyon sa mga detalye tungkol sa crash\n\nKung isi-sync mo ang iyong history sa Google Account mo, posibleng may kasama rin sa mga sukatan na impormasyon tungkol sa mga URL na binibisita mo</translation>
 <translation id="1778457539567749232">Markahan bilang hindi pa nababasa</translation>
@@ -299,6 +301,7 @@ Ang taong may passphrase mo lang ang makakabasa ng iyong naka-encrypt na data. H
 <translation id="2190355936436201913">(walang laman)</translation>
 <translation id="219283042927675668">Mga tab sa grupo</translation>
 <translation id="2194856509914051091">Mga bagay na dapat isaalang-alang</translation>
+<translation id="2195339740518523951">Kunin ang pinakamahusay na seguridad ng Chrome</translation>
 <translation id="2196695604589508993">Buksan ang history</translation>
 <translation id="2205701497928406883"><ph name="TAB_TITLE" />, Naka-pin at Nagshe-share na Tab</translation>
 <translation id="22091350895006575">Magdagdag ng username</translation>
@@ -1256,6 +1259,7 @@ Maaaring may ibang uri ng history ng pag-browse ang iyong Google account tulad n
 <translation id="6022659036123304283">Gawing iyo ang Chrome</translation>
 <translation id="6023820583797130428">Buksan ang menu para bumalik</translation>
 <translation id="6026538407078977628">I-expand sa full screen</translation>
+<translation id="6027619584715411062">Mag-sign in para makuha ang iyong mga bookmark, password, at higit pa sa lahat ng device mo.</translation>
 <translation id="6039379616847168523">Pumunta sa susunod na tab</translation>
 <translation id="6040143037577758943">Isara</translation>
 <translation id="604124094241169006">Awtomatiko</translation>
@@ -1600,6 +1604,7 @@ Para baguhin ang setting na ito, <ph name="BEGIN_LINK" />i-delete ang data sa Ch
 <translation id="7190921792980745354">I-block si <ph name="MEMBER_FULL_NAME" />?</translation>
 <translation id="7191430249889272776">Binuksan ang tab sa background.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{Dapat mo nang palitan ito ngayon}one{Dapat mo nang palitan ang mga ito ngayon}other{Dapat mo nang palitan ang mga ito ngayon}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{I-restore ang window ng <ph name="TAB_COUNT_ONE" /> tab.}one{I-restore ang window ng <ph name="TAB_COUNT_MANY" /> tab.}other{I-restore ang window ng <ph name="TAB_COUNT_MANY" /> na tab.}}</translation>
 <translation id="7196215469483532480">Nakabukas nang buo ang paliwanag sa gabay sa privacy</translation>
 <translation id="7196455519852483601">Puwede mong i-delete ang ilan sa o lahat ng iyong history, cookies, data ng site, at higit pa</translation>
 <translation id="7197682514647286393">Agad na i-delete, browsing data</translation>
@@ -1853,6 +1858,7 @@ Para baguhin ang setting na ito, <ph name="BEGIN_LINK" />i-delete ang data sa Ch
 <translation id="8135406045838672858">Awtomatikong magbubukas ang mga na-download na PDF gamit ang <ph name="APP_NAME" /></translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{Natanggap ang link}one{# link ang natanggap}other{# na link ang natanggap}}</translation>
 <translation id="8137562778192957619">Hindi mo kailangang tandaan ang password na ito. Mase-save ito sa Google Password Manager.</translation>
+<translation id="8149825829235553327">I-secure ang iyong mga tab na Incognito</translation>
 <translation id="8151185429379586178">Mga tool ng developer</translation>
 <translation id="8152331954420209374">Pumunta sa Lens</translation>
 <translation id="8153206878708357851">I-toggle ang caret browsing</translation>

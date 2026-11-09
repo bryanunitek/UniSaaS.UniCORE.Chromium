@@ -51,6 +51,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/popup_test_utils.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -1547,6 +1548,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   TestWebContentsViewDelegate* delegate =
       PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/true);
   SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  view->end_drag_runner_session_id_ = view->drag_session_id_;
   // `drag_in_progress_` should still be true before `CompleteDrop()` is called.
   ASSERT_TRUE(view->drag_in_progress_);
 
@@ -1583,6 +1585,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   TestWebContentsViewDelegate* delegate =
       PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/false);
   SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  view->end_drag_runner_session_id_ = view->drag_session_id_;
   // `drag_in_progress_` should still be true before `CompleteDrop()` is called.
   ASSERT_TRUE(view->drag_in_progress_);
 

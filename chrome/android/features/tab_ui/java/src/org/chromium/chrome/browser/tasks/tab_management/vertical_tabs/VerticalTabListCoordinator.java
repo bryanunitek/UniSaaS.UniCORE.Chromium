@@ -72,6 +72,7 @@ import org.chromium.chrome.browser.tab_ui.MultiThumbnailCardProvider;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
 import org.chromium.chrome.browser.tab_ui.TabListMode;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.browser.tabmodel.NextTabSelectionUtil;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabCreatorUtil;
@@ -111,7 +112,6 @@ import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTa
 import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabListProperties.RailCollapseState;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -1787,22 +1787,16 @@ public class VerticalTabListCoordinator {
 
                     maybeUngroupTab(tab, (ChromeTabDropDataAndroid) globalState.getData());
 
-                    int destGroupTabId = dropTarget.destGroupTabId;
+                    Token destGroupId = dropTarget.destGroupId;
                     int destTabIndex = dropTarget.destTabIndex;
-                    int indexInGroup = TabList.INVALID_TAB_INDEX;
+                    int indexInGroup = 0;
 
-                    if (destGroupTabId != TabList.INVALID_TAB_INDEX) {
-                        Tab destGroupTab = tabModel.getTabById(destGroupTabId);
-                        if (destGroupTab != null) {
-                            Token groupId = destGroupTab.getTabGroupId();
-                            List<Tab> groupTabs =
-                                    groupId != null
-                                            ? tabModel.getTabsInGroup(groupId)
-                                            : Collections.emptyList();
-                            int firstGroupModelIndex =
-                                    !groupTabs.isEmpty()
-                                            ? tabModel.indexOf(groupTabs.get(0))
-                                            : destTabIndex;
+                    if (destGroupId != null) {
+                        List<Tab> groupTabs = tabModel.getTabsInGroup(destGroupId);
+                        if (groupTabs.isEmpty()) {
+                            destGroupId = null;
+                        } else {
+                            int firstGroupModelIndex = tabModel.indexOf(groupTabs.get(0));
                             indexInGroup =
                                     MathUtils.clamp(
                                             destTabIndex - firstGroupModelIndex,
@@ -1819,15 +1813,12 @@ public class VerticalTabListCoordinator {
                                     /* destGroupTabId= */ TabList.INVALID_TAB_INDEX,
                                     /* bringToFront= */ true);
 
-                    if (destGroupTabId != TabList.INVALID_TAB_INDEX) {
-                        Tab destGroupTab = tabModel.getTabById(destGroupTabId);
-                        if (destGroupTab != null && indexInGroup != TabList.INVALID_TAB_INDEX) {
-                            tabModel.mergeListOfTabsToGroup(
-                                    Collections.singletonList(tab),
-                                    destGroupTab,
-                                    indexInGroup,
-                                    TabGroupMergeNotificationType.DONT_NOTIFY);
-                        }
+                    if (destGroupId != null) {
+                        tabModel.mergeListOfTabsToExistingGroup(
+                                Collections.singletonList(tab),
+                                destGroupId,
+                                indexInGroup,
+                                TabGroupMergeNotificationType.DONT_NOTIFY);
                     }
 
                     DragDropMetricUtils.recordDragDropType(

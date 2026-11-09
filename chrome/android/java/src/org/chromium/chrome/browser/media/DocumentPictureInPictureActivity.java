@@ -593,7 +593,10 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
                 /* listenToActivityState= */ true,
                 getIntentRequestTracker(),
                 getInsetObserver(),
-                /* occlusionTrackingAllowed= */ true);
+                // The pinned window stays above the browser window, but WindowOcclusionTracker
+                // ranks windows by top resumed state and would report it as occluded once the
+                // browser window is focused.
+                /* occlusionTrackingAllowed= */ false);
     }
 
     @Override
@@ -900,10 +903,9 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
         if (!initialOpenerOriginStr.equals(currentOpenerOriginStr)) {
             Log.e(
                     TAG,
-                    "Opener origin mismatch! Initial: "
-                            + initialOpenerOriginStr
-                            + ", Current: "
-                            + currentOpenerOriginStr);
+                    "Opener origin mismatch! Initial: %s, Current: %s",
+                    initialOpenerOriginStr,
+                    currentOpenerOriginStr);
             return false;
         }
         return true;

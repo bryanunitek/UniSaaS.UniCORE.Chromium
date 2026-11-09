@@ -1398,9 +1398,9 @@ CSSIdentifierValue* ComputedStyleUtils::ValueForFontOpticalSizing(
     const ComputedStyle& style) {
   OpticalSizing optical_sizing = style.GetFontDescription().FontOpticalSizing();
   switch (optical_sizing) {
-    case kAutoOpticalSizing:
+    case OpticalSizing::kAuto:
       return CSSIdentifierValue::Create(CSSValueID::kAuto);
-    case kNoneOpticalSizing:
+    case OpticalSizing::kNone:
       return CSSIdentifierValue::Create(CSSValueID::kNone);
     default:
       return CSSIdentifierValue::Create(CSSValueID::kAuto);
@@ -1617,11 +1617,11 @@ CSSValue* ComputedStyleUtils::ValueForFont(const ComputedStyle& style) {
   OpticalSizing optical_sizing = style.GetFontDescription().FontOpticalSizing();
 
   if (kerning != FontDescription::kAutoKerning ||
-      optical_sizing != kAutoOpticalSizing ||
+      optical_sizing != OpticalSizing::kAuto ||
       (RuntimeEnabledFeatures::CSSFontSizeAdjustEnabled() &&
        style.GetFontDescription().HasSizeAdjust()) ||
       variant_position != FontDescription::kNormalVariantPosition ||
-      (variant_emoji != kNormalVariantEmoji)) {
+      (variant_emoji != FontVariantEmoji::kNormal)) {
     return nullptr;
   }
 
@@ -2310,11 +2310,11 @@ CSSValue* ComputedStyleUtils::ValueForGridPosition(
     // Do not include the numeric value of 1 if followed by a line name.
     if (position.SpanPosition() != 1 || !has_named_line) {
       list->Append(*CSSNumericLiteralValue::Create(
-          position.SpanPosition(), CSSPrimitiveValue::UnitType::kNumber));
+          position.SpanPosition(), CSSPrimitiveValue::UnitType::kInteger));
     }
   } else {
     list->Append(*CSSNumericLiteralValue::Create(
-        position.IntegerPosition(), CSSPrimitiveValue::UnitType::kNumber));
+        position.IntegerPosition(), CSSPrimitiveValue::UnitType::kInteger));
   }
 
   if (has_named_line) {
@@ -2946,17 +2946,6 @@ CSSValue* ComputedStyleUtils::SingleValueForTimelineShorthand(
     list->Append(*ValueForTimelineInset(inset.value(), style));
   }
   return list;
-}
-
-CSSValue* ComputedStyleUtils::ValueForAnimationTriggerBehavior(
-    const EAnimationTriggerBehavior trigger_behavior) {
-  return CSSIdentifierValue::Create(PlatformEnumToCSSValueID(trigger_behavior));
-}
-
-CSSValue* ComputedStyleUtils::ValueForAnimationTriggerBehaviorList(
-    const Vector<EAnimationTriggerBehavior>& behavior_list) {
-  return CreateAnimationValueList(behavior_list,
-                                  &ValueForAnimationTriggerBehavior);
 }
 
 CSSValue* ComputedStyleUtils::ValueForTimelineTriggerActivationRangeStartList(

@@ -833,7 +833,6 @@
     'chrome_intelligence': {
       'filepath': 'contextual_cueing'\
                   '|history_clusters'\
-                  '|history_embeddings'\
                   '|image_service'\
                   '|ios/chrome/browser/text_selection'\
                   '|model_execution'\
@@ -1102,7 +1101,6 @@
                   '|chrome/test/data/webui/settings/cups_printer_page_tests.js'\
                   '|chrome/browser/ui/webui/settings/ash/cups_printers_handler'\
                   '|chrome/browser/ash/printing/'\
-                  '|chrome/browser/chromeos/printing/'\
                   '|printing/',
     },
     'cursor': {
@@ -1279,6 +1277,10 @@
       'filepath': 'chrome/android/feed|' \
                   'chrome/browser/feed/|' \
                   'components/feed/'
+    },
+    'fet_policy': {
+      'filepath': 'components/feature_engagement/.*/' \
+                  'EnterprisePolicyBypassAllowlist\\.java',
     },
     'fileapi': {
       'filepath': 'file_system/|' \
@@ -2045,8 +2047,6 @@
     },
     'related_website_sets': {
       'filepath': 'first_party_sets|' \
-                  'top_level_storage_access_api|' \
-                  'top-level-storage-access-api|' \
                   'storage_access_api|' \
                   'storage-access-api'
     },
@@ -3082,6 +3082,8 @@
     'feed': ['harringtond+watch@chromium.org',
              'petewil+watch@chromium.org',
              'iwells+watch@chromium.org'],
+    'fet_policy': ['jhimawan@google.com',
+                   'mschillaci+watchfet@google.com'],
     'fileapi': ['kinuko+fileapi@chromium.org'],
     'filebrowse': ['rginda+watch@chromium.org'],
     'filesapp': ['filesapp-reviews@chromium.org'],
@@ -3460,7 +3462,8 @@
     'ui_display_win': ['robliao+watch@chromium.org'],
     'ui_resources': ['oshima+watch@chromium.org'],
     'ui_strings': ['srahim+watch@chromium.org'],
-    'ui_views': ['robliao+watch@chromium.org',
+    'ui_views': ['chromium-views-reviews-monitor@chromium.org',
+                 'robliao+watch@chromium.org',
                  'sky+watch@chromium.org'],
     'unified_consent': ['wfh+watch@chromuium.org'],
     'url_constant_resolver': ['mfiaz+watch@google.com'],

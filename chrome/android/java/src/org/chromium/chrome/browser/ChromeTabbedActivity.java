@@ -42,6 +42,9 @@ import android.view.ViewGroup;
 import android.view.ViewStub;
 import android.view.Window;
 import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+import android.window.SystemOnBackInvokedCallbacks;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.RequiresApi;
@@ -128,6 +131,7 @@ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChromePhone;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChromeTablet;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager.TabModelStartupInfo;
+import org.chromium.chrome.browser.compositor.overlays.strip.WebUiPreloadManager;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulatorFactory;
 import org.chromium.chrome.browser.cookies.CookiesFetcher;
@@ -294,6 +298,10 @@ import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager;
 import org.chromium.chrome.browser.tab_ui.TabGridIphDialogCoordinator;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
+import org.chromium.chrome.browser.tab_ui.close_all_tabs.CloseAllTabsDialog;
+import org.chromium.chrome.browser.tab_ui.close_all_tabs.CloseAllTabsHelper;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.TabUndoBarController;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.UndoBarController;
 import org.chromium.chrome.browser.tabbed_mode.TabbedAppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.tabbed_mode.TabbedRootUiCoordinator;
 import org.chromium.chrome.browser.tabmodel.AsyncTabParamsManager;
@@ -305,6 +313,7 @@ import org.chromium.chrome.browser.tabmodel.MismatchedIndicesHandler;
 import org.chromium.chrome.browser.tabmodel.MultiTabMetadata;
 import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
 import org.chromium.chrome.browser.tabmodel.RedirectTabCreator;
+import org.chromium.chrome.browser.tabmodel.StubTabModel;
 import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
@@ -327,8 +336,6 @@ import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.tabwindow.WindowId;
 import org.chromium.chrome.browser.tasks.HomeSurfaceTracker;
 import org.chromium.chrome.browser.tasks.ReturnToChromeUtil;
-import org.chromium.chrome.browser.tasks.tab_management.CloseAllTabsDialog;
-import org.chromium.chrome.browser.tasks.tab_management.CloseAllTabsHelper;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupCreationDialogManager;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupMenuActionHandler;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupUi;
@@ -355,6 +362,8 @@ import org.chromium.chrome.browser.ui.RootUiCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager;
+import org.chromium.chrome.browser.ui.browser_instant_controller.BrowserInstantControllerBridge;
+import org.chromium.chrome.browser.ui.browser_instant_controller.BrowserInstantControllerBridgeFactory;
 import org.chromium.chrome.browser.ui.browser_window.BrowserWindowType;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskFeatureKey;
@@ -371,8 +380,6 @@ import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomS
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils.LayoutSwitchEntryPoint;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.TabUndoBarController;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarController;
 import org.chromium.chrome.browser.url_constants.ExtensionsUrlOverrideRegistry;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolverFactory;
@@ -710,6 +717,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
     private @Nullable SendTabToSelfBackPressHandler mSendTabToSelfBackPressHandler;
     private @Nullable MinimizeAppAndCloseTabBackPressHandler
             mMinimizeAppAndCloseTabBackPressHandler;
+    private @Nullable OnBackInvokedCallback mMoveTaskToBackCallback;
     private @Nullable HomeSurfaceTracker mHomeSurfaceTracker;
     private final TabSwitcherBackPressHandlerManager mDragHandlerManager =
             new TabSwitcherBackPressHandlerManager();
@@ -811,6 +819,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
         if (!shouldUseDesktopBackConventions()) {
             mBackPressManager.setFallbackOnBackPressed(
                     () -> minimizeAppAndCloseTabOnBackPress(getActivityTab()));
+            maybeRegisterPredictiveBackToHomeCallback();
         }
 
         if (IncognitoUtils.shouldOpenIncognitoAsWindow() && !mHasIncognitoExtra) {
@@ -1051,6 +1060,20 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                         /* profile= */ null,
                         /* activityWindowAndroid= */ null),
                 () -> TabbedWindowStateTracker.create(mWindowId));
+
+        // Reloads this window's New Tab Pages when the default search engine changes. Keyed on
+        // the original profile: incognito NTPs don't depend on the default search engine, and the
+        // regular-profile browser window always exists for a tabbed activity. The native bridge
+        // decides whether the window actually needs a controller (WebUI NTP and third-party NTPs
+        // enabled); otherwise the feature stays inert. Added for Desktop Android devices only.
+        if (DeviceInfo.isDesktop()) {
+            chromeAndroidTask.addFeature(
+                    new ChromeAndroidTaskFeatureKey(
+                            BrowserInstantControllerBridge.class,
+                            profile.getOriginalProfile(),
+                            activityWindowAndroid),
+                    BrowserInstantControllerBridgeFactory::create);
+        }
     }
 
     boolean shouldRemoveWindowWithZeroTabs(@TabClosingSource int closingSource) {
@@ -1721,7 +1744,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             assumeNonNull(mInactivityTrackerSupplier.get())
                     .setLastVisibleTimeMsAndRecord(System.currentTimeMillis());
             initializeSuggestionMetricsTracker();
-            if (ChromeFeatureList.isEnabled(ChromeFeatureList.GROUP_SUGGESTION_SERVICE)) {
+            if (!(mTabModelSelector.getModel(false) instanceof StubTabModel)
+                    && ChromeFeatureList.isEnabled(ChromeFeatureList.GROUP_SUGGESTION_SERVICE)) {
                 mSuggestionEventObserver =
                         new SuggestionEventObserver(mTabModelSelector, mHubManagerSupplier);
                 // Deferring only the promotion coordinator splits the suggestion producer (the
@@ -2434,8 +2458,12 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
 
     private void handleDebugIntent(Intent intent) {
         if (ACTION_CLOSE_TABS.equals(intent.getAction())) {
+            TabModelSelector tabModelSelector = assertNonNull(getTabModelSelectorSupplier().get());
             CloseAllTabsHelper.closeAllTabsHidingTabGroups(
-                    assertNonNull(getTabModelSelectorSupplier().get()),
+                    tabModelSelector,
+                    () ->
+                            ArchivedTabModelOrchestrator.unarchiveTabsAndGetUndoRunnable(
+                                    tabModelSelector),
                     /* allowUndo= */ true,
                     TabClosingSource.UNKNOWN,
                     /* closePinnedTabs= */ true);
@@ -3502,7 +3530,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             StartupPaintPreviewHelper.enableShowOnRestore();
         }
 
-        IncognitoTabHostRegistry.getInstance().register(mIncognitoTabHost);
+        maybeRegisterIncognitoTabHost();
         StartupPaintPreviewHelperSupplier.attach(
                 assumeNonNull(getWindowAndroid()).getUnownedUserDataHost(),
                 mStartupPaintPreviewHelperSupplier);
@@ -3691,6 +3719,13 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
         mStartupPaintPreviewHelperSupplier.set(paintPreviewHelper);
         assumeNonNull(getStartupMetricsTracker()).registerPaintPreviewObserver(paintPreviewHelper);
         maybeRegisterHomeModules();
+        WebUiPreloadManager.maybePreload(
+                getLifecycleDispatcher(),
+                getWindowAndroid(),
+                getProfileProviderSupplier(),
+                getSupportedProfileType(),
+                isTablet(),
+                assumeNonNull(getStartupMetricsTracker()).getActivityStartTimeMs());
     }
 
     private void maybeRegisterHomeModules() {
@@ -3952,7 +3987,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                         getLifecycleDispatcher(),
                         CipherLazyHolder.sCipherInstance,
                         () -> mIsRecreating,
-                        isFromRecreating());
+                        isFromRecreating(),
+                        getDeferredStartupPostedSupplier());
         mTabModelStartupInfoSupplier = ObservableSuppliers.createMonotonic();
         mTabModelOrchestrator.setStartupInfoObservableSupplier(mTabModelStartupInfoSupplier);
         return mTabModelOrchestrator;
@@ -4249,6 +4285,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
 
     private void initGroupSuggestionsPromotionCoordinator() {
         if (mGroupSuggestionsPromotionCoordinator != null) return;
+        TabModel regularModel = mTabModelSelector.getModel(/* incognito= */ false);
+        if (regularModel instanceof StubTabModel) return;
         if (ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
                 ChromeFeatureList.GROUP_SUGGESTION_SERVICE,
                 GroupSuggestionsPromotionCoordinator.CREATE_SUGGESTIONS_PROMOTION_UI_PARAM,
@@ -4257,7 +4295,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                     new GroupSuggestionsPromotionCoordinator(
                             this,
                             assertNonNull(mRootUiCoordinator.getBottomSheetController()),
-                            mTabModelSelector.getModel(/* incognito= */ false));
+                            regularModel);
         }
     }
 
@@ -4817,7 +4855,11 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             TabModelSelector tabModelSelector = assertNonNull(getTabModelSelectorSupplier().get());
             Callback<Boolean> closeAllTabsCallback =
                     CloseAllTabsHelper.buildCloseAllTabsCallback(
-                            tabModelSelector, /* isIncognitoOnly= */ false, allowUndo);
+                            tabModelSelector,
+                            () ->
+                                    ArchivedTabModelOrchestrator.unarchiveTabsAndGetUndoRunnable(
+                                            tabModelSelector),
+                            allowUndo);
             CloseAllTabsDialog.show(
                     this,
                     getModalDialogManagerSupplier().asNonNull(),
@@ -4831,8 +4873,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             // Close only incognito tabs
             TabModelSelector tabModelSelector = assertNonNull(getTabModelSelectorSupplier().get());
             Callback<Boolean> closeAllTabsCallback =
-                    CloseAllTabsHelper.buildCloseAllTabsCallback(
-                            tabModelSelector, /* isIncognitoOnly= */ true, allowUndo);
+                    CloseAllTabsHelper.buildCloseAllIncognitoTabsCallback(
+                            tabModelSelector, allowUndo);
             CloseAllTabsDialog.show(
                     this,
                     getModalDialogManagerSupplier().asNonNull(),
@@ -5170,10 +5212,9 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
 
         // Minimize the app if either:
         // - we decided not to close the tab
-        // - we decided to close the tab, but it was opened by an external app, so we will go
-        //   exit Chrome on top of closing the tab
-        final boolean minimizeApp =
-                !shouldCloseTab || TabAssociatedApp.isOpenedFromExternalApp(currentTab);
+        // - we decided to close the tab, but it was opened by an external app or launcher
+        //   shortcut, so we will exit Chrome on top of closing the tab
+        final boolean minimizeApp = !shouldCloseTab || minimizationShouldCloseTab(currentTab);
 
         BackPressManager.record(BackPressHandler.Type.MINIMIZE_APP_AND_CLOSE_TAB);
 
@@ -5232,7 +5273,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                     new MinimizeAppAndCloseTabBackPressHandler(
                             getActivityTabProvider().asObservable(),
                             this::backShouldCloseTab,
-                            TabAssociatedApp::isOpenedFromExternalApp,
+                            this::minimizationShouldCloseTab,
                             this::closeTabUponMinimization,
                             this::sendToBackground);
             mBackPressManager.addHandler(
@@ -5242,6 +5283,39 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                 mBackPressManager.addOnSystemNavigationObserver(
                         mMinimizeAppAndCloseTabBackPressHandler);
             }
+        }
+    }
+
+    /**
+     * On Android 16+ (Baklava), registers {@link
+     * SystemOnBackInvokedCallbacks#moveTaskToBackCallback} at {@link
+     * OnBackInvokedDispatcher#PRIORITY_DEFAULT} during {@link #onPreCreate()} before any {@link
+     * androidx.activity.OnBackPressedCallback} is enabled. This ensures that when {@link
+     * BackPressManager} has enabled handlers, AndroidX's {@link
+     * androidx.activity.OnBackPressedDispatcher} callback is registered on top of {@code
+     * mMoveTaskToBackCallback}, and when no handler is enabled (e.g. on a root NTP without back
+     * stack history), {@code mMoveTaskToBackCallback} is the top callback so the activity is
+     * minimized (moveTaskToBack) with the system back-to-home animation rather than finished,
+     * preserving Incognito sessions when opened via launcher shortcuts (crbug.com/579576444).
+     */
+    @VisibleForTesting
+    void maybeRegisterPredictiveBackToHomeCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
+                && !shouldUseDesktopBackConventions()
+                && mMoveTaskToBackCallback == null) {
+            mMoveTaskToBackCallback = SystemOnBackInvokedCallbacks.moveTaskToBackCallback(this);
+            getOnBackInvokedDispatcher()
+                    .registerOnBackInvokedCallback(
+                            OnBackInvokedDispatcher.PRIORITY_DEFAULT, mMoveTaskToBackCallback);
+        }
+    }
+
+    @VisibleForTesting
+    void maybeUnregisterPredictiveBackToHomeCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
+                && mMoveTaskToBackCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(mMoveTaskToBackCallback);
+            mMoveTaskToBackCallback = null;
         }
     }
 
@@ -5280,12 +5354,24 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
     }
 
     /**
+     * Returns whether the provided {@link Tab} should be closed when Chrome is minimized to the
+     * background via system back press (e.g. tabs opened from an external app or launcher
+     * shortcut).
+     */
+    @VisibleForTesting
+    boolean minimizationShouldCloseTab(Tab tab) {
+        if (!backShouldCloseTab(tab)) return false;
+        return tab.getLaunchType() == TabLaunchType.FROM_LAUNCHER_SHORTCUT
+                || TabAssociatedApp.isOpenedFromExternalApp(tab);
+    }
+
+    /**
      * Sends this Activity to the background.
      *
      * @param tabToClose Tab that will be closed once the app is not visible.
      */
     private void sendToBackground(@Nullable final Tab tabToClose) {
-        Log.i(TAG, "sendToBackground(): " + tabToClose);
+        Log.i(TAG, "sendToBackground(): %s", tabToClose);
         moveTaskToBack(true);
         if (tabToClose != null) closeTabUponMinimization(tabToClose);
     }
@@ -5562,6 +5648,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             mMinimizeAppAndCloseTabBackPressHandler.destroy();
             mMinimizeAppAndCloseTabBackPressHandler = null;
         }
+        maybeUnregisterPredictiveBackToHomeCallback();
 
         if (mCallbackController != null) {
             mCallbackController.destroy();
@@ -5695,6 +5782,33 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
     }
 
     @Override
+    protected void onPostDestroy() {
+        super.onPostDestroy();
+        // In an OFF_THE_RECORD window with a StubTabModel for the regular model, closing the last
+        // incognito tab no longer switches to the regular model, so the incognito model remains
+        // active until mIncognitoTabHost is unregistered in destroyTabModels(). Destroy the OTR
+        // profile here after DestroyObservers have cleaned up.
+        if (mSupportedProfileType == SupportedProfileType.OFF_THE_RECORD
+                && isFinishing()
+                && didFinishNativeInitialization()
+                && ChromeFeatureList.sEnforceIncognitoIsolation.isEnabled()) {
+            maybeDestroyOtrProfile();
+        }
+    }
+
+    private void maybeDestroyOtrProfile() {
+        ProfileProvider profileProvider = getProfileProviderSupplier().get();
+        Profile otrProfile =
+                profileProvider != null ? profileProvider.getOffTheRecordProfile() : null;
+        if (otrProfile != null
+                && !otrProfile.shutdownStarted()
+                && !IncognitoTabHostUtils.doIncognitoTabsExist()
+                && !IncognitoTabHostUtils.isIncognitoTabModelActive()) {
+            ProfileManager.destroyWhenAppropriate(otrProfile);
+        }
+    }
+
+    @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
         if (ChromeApplicationImpl.isSevereMemorySignal(level)) {
@@ -5813,12 +5927,24 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
         return mTabSwitcherSupplier;
     }
 
+    @VisibleForTesting
+    void maybeRegisterIncognitoTabHost() {
+        if (mSupportedProfileType != SupportedProfileType.REGULAR
+                || !ChromeFeatureList.sEnforceIncognitoIsolation.isEnabled()) {
+            IncognitoTabHostRegistry.getInstance().register(mIncognitoTabHost);
+        }
+    }
+
     public IncognitoTabHost getIncognitoTabHostForTesting() {
         return mIncognitoTabHost;
     }
 
     public void setTabModelSelectorForTesting(TabModelSelectorBase tabModelSelector) {
         mTabModelSelector = tabModelSelector;
+    }
+
+    public @Nullable OnBackInvokedCallback getMoveTaskToBackCallbackForTesting() {
+        return mMoveTaskToBackCallback;
     }
 
     @Override

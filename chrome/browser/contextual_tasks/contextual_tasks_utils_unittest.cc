@@ -19,6 +19,7 @@
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
@@ -30,9 +31,12 @@
 #include "components/contextual_tasks/public/features.h"
 #include "components/omnibox/browser/mock_aim_eligibility_service.h"
 #include "components/omnibox/common/composebox_features.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -73,6 +77,7 @@ class ContextualTasksUtilsTest : public testing::Test {
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<testing::NiceMock<MockBrowserWindowInterface>> browser_window_;
   std::unique_ptr<BrowserActions> browser_actions_;
@@ -202,6 +207,42 @@ TEST_F(ContextualTasksUtilsTest, UpdatePinButtonVisibilityState_Ineligible_Unpin
   // Should NOT hide the action item because it is unpinned.
   UpdatePinButtonVisibilityState(browser_window_.get());
 
+  EXPECT_TRUE(action_item->GetVisible());
+  EXPECT_FALSE(model->Contains(kActionSidePanelShowContextualTasks));
+}
+
+TEST_F(
+    ContextualTasksUtilsTest,
+    UpdatePinButtonVisibilityState_Ineligible_Unpinned_EphemeralPinButtonRefactor) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{contextual_tasks::
+                                kEnableContextualTasksPinButtonInToolbar,
+                            contextual_tasks::
+                                kContextualTasksEphemeralPinButtonRefactor},
+      /*disabled_features=*/{});
+
+  root_action_ = actions::ActionItem::Builder().Build();
+  actions::ActionItem* action_item = root_action_->AddChild(
+      actions::ActionItem::Builder()
+          .SetActionId(kActionSidePanelShowContextualTasks)
+          .SetVisible(true)
+          .SetEnabled(true)
+          .Build());
+
+  browser_actions_->set_root_action_item_for_testing(root_action_.get());
+
+  auto* model = PinnedToolbarActionsModel::Get(profile_.get());
+  ASSERT_FALSE(model->Contains(kActionSidePanelShowContextualTasks));
+
+  // Should mark the action item not pinnable, but NOT hide it when unpinned so
+  // `ShowActionEphemerallyInToolbar` can fade out popped-out buttons cleanly.
+  UpdatePinButtonVisibilityState(browser_window_.get());
+
+  EXPECT_EQ(
+      static_cast<actions::ActionPinnableState>(
+          action_item->GetProperty(actions::kActionItemPinnableKey)),
+      actions::ActionPinnableState::kNotPinnable);
   EXPECT_TRUE(action_item->GetVisible());
   EXPECT_FALSE(model->Contains(kActionSidePanelShowContextualTasks));
 }
@@ -523,27 +564,35 @@ TEST_F(ContextualTasksUtilsTest, RemoveTabUnderline_ClosedTabDoesNotCrash) {
 }
 #endif
 
-TEST_F(ContextualTasksUtilsTest, ShouldUseDarkMode_NullProfile) {
-  EXPECT_FALSE(ShouldUseDarkMode(nullptr));
-  EXPECT_FALSE(ShouldUseDarkMode(nullptr, GURL()));
+TEST_F(ContextualTasksUtilsTest, ShouldUseDarkModeForProfile_NullProfile) {
+  EXPECT_FALSE(ShouldUseDarkModeForProfile(nullptr));
 }
 
 TEST_F(ContextualTasksUtilsTest, ShouldUseDarkMode_UrlParamOverridesProfile) {
   GURL dark_url("https://example.com/search?cs=1");
   GURL light_url("https://example.com/search?cs=0");
 
-  EXPECT_TRUE(ShouldUseDarkMode(profile_.get(), dark_url));
-  EXPECT_FALSE(ShouldUseDarkMode(profile_.get(), light_url));
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContentsTester::CreateTestWebContents(profile_.get(),
+                                                        nullptr);
+  EXPECT_TRUE(ShouldUseDarkMode(web_contents.get(), dark_url));
+  EXPECT_FALSE(ShouldUseDarkMode(web_contents.get(), light_url));
 
   Profile* otr_profile = profile_->GetPrimaryOTRProfile(true);
-  EXPECT_TRUE(ShouldUseDarkMode(otr_profile, dark_url));
-  EXPECT_FALSE(ShouldUseDarkMode(otr_profile, light_url));
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+  EXPECT_TRUE(ShouldUseDarkMode(otr_web_contents.get(), dark_url));
+  EXPECT_FALSE(ShouldUseDarkMode(otr_web_contents.get(), light_url));
 }
 
 TEST_F(ContextualTasksUtilsTest, ShouldUseDarkMode_IncognitoProfile) {
   Profile* otr_profile = profile_->GetPrimaryOTRProfile(true);
-  EXPECT_TRUE(ShouldUseDarkMode(otr_profile));
-  EXPECT_TRUE(ShouldUseDarkMode(otr_profile, GURL("https://example.com")));
+  EXPECT_TRUE(ShouldUseDarkModeForProfile(otr_profile));
+
+  std::unique_ptr<content::WebContents> otr_web_contents =
+      content::WebContentsTester::CreateTestWebContents(otr_profile, nullptr);
+  EXPECT_TRUE(
+      ShouldUseDarkMode(otr_web_contents.get(), GURL("https://example.com")));
 }
 
 class MockAimMessagePoster : public AimMessagePoster {
@@ -1009,6 +1058,150 @@ TEST_F(ContextualTasksUtilsTest, ToRestoredTabInfos_FromContextualTaskContext) {
   EXPECT_EQ(restored[0].url, GURL("https://example.com/1"));
   EXPECT_EQ(restored[0].title, "Valid Tab");
   EXPECT_TRUE(restored[0].submitted);
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       GetContextualTasksPinningStringId_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(kContextualTasksPinningStringVariants);
+
+  EXPECT_EQ(IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL,
+            GetContextualTasksPinningStringId(
+                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL));
+  EXPECT_EQ(IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP,
+            GetContextualTasksPinningStringId(
+                IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP));
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       GetContextualTasksPinningStringId_DefaultParam) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kContextualTasksPinningStringVariants);
+
+  EXPECT_EQ(IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL,
+            GetContextualTasksPinningStringId(
+                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL));
+  EXPECT_EQ(IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP,
+            GetContextualTasksPinningStringId(
+                IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP));
+}
+
+TEST_F(ContextualTasksUtilsTest, GetContextualTasksPinningStringId_Variants) {
+  struct ExpectedVariantIds {
+    int base_id;
+    int ai_mode;
+    int side_panel;
+    int in_side_panel;
+    int in_chrome;
+    int panel;
+  };
+#define CONTEXTUAL_TASKS_TEST_VARIANTS(base_id)                    \
+  {                                                                \
+    base_id, base_id, base_id##_SIDE_PANEL, base_id##_IN_SIDE_PANEL, \
+        base_id##_IN_CHROME, base_id##_PANEL                       \
+  }
+  constexpr ExpectedVariantIds kExpectedVariants[] = {
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CLOSE_TOOL_TIP),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_SIDE_PANEL_REOPEN_TOOL_TIP),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_SIDE_PANEL_CONTEXTUAL_TASKS_PINNABLE_IPH),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_EPHEMERAL_TOOLBAR_BUTTON_IPH),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_EPHEMERAL_TOOLBAR_BUTTON_IPH_SCREENREADER),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_PINNED_ICON_CHANGED_IPH),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(
+          IDS_CONTEXTUAL_TASKS_PINNED_ICON_CHANGED_IPH_SCREENREADER),
+      CONTEXTUAL_TASKS_TEST_VARIANTS(IDS_TUTORIAL_CONTEXTUAL_TASKS_STEP3),
+  };
+#undef CONTEXTUAL_TASKS_TEST_VARIANTS
+
+  for (const auto& entry : kExpectedVariants) {
+    {
+      base::test::ScopedFeatureList feature_list;
+      feature_list.InitAndEnableFeatureWithParameters(
+          kContextualTasksPinningStringVariants,
+          {{"ContextualTasksPinningStringVariant", "ai-mode"}});
+      EXPECT_EQ(entry.ai_mode, GetContextualTasksPinningStringId(entry.base_id));
+    }
+    {
+      base::test::ScopedFeatureList feature_list;
+      feature_list.InitAndEnableFeatureWithParameters(
+          kContextualTasksPinningStringVariants,
+          {{"ContextualTasksPinningStringVariant", "side-panel"}});
+      EXPECT_EQ(entry.side_panel,
+                GetContextualTasksPinningStringId(entry.base_id));
+    }
+    {
+      base::test::ScopedFeatureList feature_list;
+      feature_list.InitAndEnableFeatureWithParameters(
+          kContextualTasksPinningStringVariants,
+          {{"ContextualTasksPinningStringVariant", "in-side-panel"}});
+      EXPECT_EQ(entry.in_side_panel,
+                GetContextualTasksPinningStringId(entry.base_id));
+    }
+    {
+      base::test::ScopedFeatureList feature_list;
+      feature_list.InitAndEnableFeatureWithParameters(
+          kContextualTasksPinningStringVariants,
+          {{"ContextualTasksPinningStringVariant", "in-chrome"}});
+      EXPECT_EQ(entry.in_chrome,
+                GetContextualTasksPinningStringId(entry.base_id));
+    }
+    {
+      base::test::ScopedFeatureList feature_list;
+      feature_list.InitAndEnableFeatureWithParameters(
+          kContextualTasksPinningStringVariants,
+          {{"ContextualTasksPinningStringVariant", "panel"}});
+      EXPECT_EQ(entry.panel, GetContextualTasksPinningStringId(entry.base_id));
+    }
+  }
+}
+
+TEST_F(ContextualTasksUtilsTest, GetContextualTasksPinningStringId_UnmappedId) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      kContextualTasksPinningStringVariants,
+      {{"ContextualTasksPinningStringVariant", "side-panel"}});
+
+  constexpr int kUnmappedResourceId = -1;
+  EXPECT_EQ(kUnmappedResourceId,
+            GetContextualTasksPinningStringId(kUnmappedResourceId));
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       GetContextualTasksEphemeralButtonContextMenuCloseTextId) {
+  struct TestCase {
+    const char* param_value;
+    int expected_id;
+  };
+  constexpr TestCase kTestCases[] = {
+      {"hide-side-panel",
+       IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_REMOVE},
+      {"close-side-panel",
+       IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_CLOSE},
+      {"dismiss-active-search",
+       IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_DISMISS_ACTIVE_SEARCH},
+      {"dismiss-active-search-in-tab",
+       IDS_CONTEXTUAL_TASKS_EPHEMERAL_BUTTON_CONTEXT_MENU_DISMISS_ACTIVE_SEARCH_IN_TAB},
+  };
+
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.param_value);
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeatureWithParameters(
+        kContextualTasksEphemeralButtonContextMenu,
+        {{"ContextualTasksEphemeralButtonContextMenuOption",
+          test_case.param_value}});
+
+    EXPECT_EQ(test_case.expected_id,
+              GetContextualTasksEphemeralButtonContextMenuCloseTextId());
+  }
 }
 
 }  // namespace

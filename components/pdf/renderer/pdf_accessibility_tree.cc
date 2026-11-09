@@ -29,6 +29,7 @@
 #include "base/strings/utf_string_conversion_utils.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "components/pdf/renderer/pdf_accessibility_metrics.h"
 #include "components/pdf/renderer/pdf_accessibility_tree_builder.h"
 #include "components/pdf/renderer/pdf_ax_action_target.h"
 #include "components/strings/grit/components_strings.h"
@@ -740,6 +741,7 @@ void PdfAccessibilityTree::UnserializeNodes() {
 
   ui::AXTreeUpdate update;
   update.root_id = doc_node_->id;
+  update.nodes.reserve(nodes_.size() + 3);
   update.nodes.push_back(*doc_node_);
   update.nodes.push_back(*status_node_);
   update.nodes.push_back(*status_node_text_);
@@ -792,8 +794,7 @@ void PdfAccessibilityTree::ResetStatusNodeAttributes() {
   update.root_id = doc_node_->id;
   // `status_node_` has been either cleared out or set with a new message, so
   // add it to `ui::AXTreeUpdate`.
-  update.nodes.push_back(*status_node_);
-  update.nodes.push_back(*status_node_text_);
+  update.nodes = {*status_node_, *status_node_text_};
   if (!tree_.Unserialize(update)) {
     LOG(FATAL) << tree_.error();
   }

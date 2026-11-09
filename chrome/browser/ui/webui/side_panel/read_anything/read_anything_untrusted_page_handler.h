@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_helpers.h"
@@ -353,6 +354,15 @@ class ReadAnythingUntrustedPageHandler :
   // if the page is HTTP/HTTPS or a PDF.
   bool AreActionsAllowedInTree(const ui::AXTreeID& tree_id) const;
 
+  // Returns whether a renderer request (e.g. a link click or image download)
+  // targeting `tree_id` may be acted on, i.e. the tree is observed and actions
+  // are allowed in it. Records the result to `histogram_name`. `request_name`
+  // describes the request in logs.
+  bool CheckAndRecordRendererRequestAllowed(
+      const ui::AXTreeID& tree_id,
+      std::string_view histogram_name,
+      std::string_view request_name) const;
+
   // ui::AXActionHandlerObserver:
   void TreeRemoved(ui::AXTreeID ax_tree_id) override;
 
@@ -457,6 +467,11 @@ class ReadAnythingUntrustedPageHandler :
   // Readability distillation.
   void ProcessDistilledArticle(
       const dom_distiller::DistilledArticleProto* article_proto);
+
+  // Tells the page that Readability distillation produced no content, so it
+  // can update from showing loading to showing no content. No-op when
+  // IsReadAnythingDistillerRefactorEnabled is enabled.
+  void MaybeSendEmptyReadabilityContent();
 
   void EvaluateDistillationQuality(const std::string& distilled_html);
   void OnQualityMetricsEvaluated(

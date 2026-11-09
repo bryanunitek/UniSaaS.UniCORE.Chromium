@@ -9,7 +9,6 @@
 <translation id="1013952917065545813">ここでは、最近閉じたタブをもう一度開くことができます</translation>
 <translation id="1016495303386450659">更新済みのアイテム</translation>
 <translation id="1018804590490383958">スキャンして自動入力</translation>
-<translation id="1019990162050689579">Gemini アプリ アクティビティ</translation>
 <translation id="102471647093736603">長押しして移動</translation>
 <translation id="102645702181682900">タスクが開始されました</translation>
 <translation id="102916930470544692">パスキー</translation>
@@ -51,6 +50,7 @@
 <translation id="1122068467107743258">職場</translation>
 <translation id="1126696498560056882">このデバイスのアカウントを管理</translation>
 <translation id="1126809382673880764">危険なウェブサイト、ダウンロード、拡張機能から保護されていません。セーフ ブラウジングによる保護は、Gmail や Google 検索など他の Google サービスで利用可能な場合は、引き続き有効です。</translation>
+<translation id="112943553659469376">「<ph name="PROMPT" />」</translation>
 <translation id="1133418583142946603">現在のタブを追加</translation>
 <translation id="1136104150802877429">商品レビューを表示</translation>
 <translation id="1142371195993008685">「<ph name="FEATURE_NAME" />」の通知をオフにする</translation>
@@ -386,6 +386,7 @@
 <translation id="2104436223719117661">急上昇ワード</translation>
 <translation id="21133533946938348">タブを固定</translation>
 <translation id="2117650889962717098">シークレット モードに切り替えることで、ブラウジングのプライバシーを保護できます</translation>
+<translation id="2119126821484134587">Gemini は、カスタマイズされたサポートを提供するため、ユーザーデータの一部（ユーザーとのチャットの一部、位置情報、その他の関連情報など）を他の Google サービス（Google マップ、Google フライトなど）と共有します。これらのサービスは、ユーザーが Gemini アプリの履歴を削除した後も、改善のためにその情報を使用する場合があります。詳しくは、<ph name="BEGIN_LINK" />Gemini アプリのプライバシー ハブ<ph name="END_LINK" />をご覧ください。</translation>
 <translation id="2119636449201577317">アプリで開く…</translation>
 <translation id="2119962645034852864">お使いのアカウントでは一部のサービスをご利用いただけません</translation>
 <translation id="2120553909046681540">シークレット ブラウジングは組織によって無効にされています。</translation>
@@ -507,6 +508,7 @@
 <translation id="2496180316473517155">閲覧履歴</translation>
 <translation id="2496626742194544812">最初のタブに移動</translation>
 <translation id="2499505845365628575"><ph name="HISTORY_BUTTON_ACCESSIBILITY_LABEL" /> からすべての閲覧履歴を確認できます。</translation>
+<translation id="2499948218922929716">セキュリティ アップデートやカスタムテーマなどに関する通知を受け取れます。</translation>
 <translation id="251033673027346551"><ph name="BEGIN_LINK" />データとプライバシーの設定<ph name="END_LINK" />を管理するには、Google ウォレットにアクセスしてください。</translation>
 <translation id="2511117522375201202">不正使用されたパスワード <ph name="NUMBER_OF_PASSWORDS" /> 件: セキュリティが危険にさらされる可能性があります。</translation>
 <translation id="2512709994717613803">レベル <ph name="LEVEL_NUMBER" /></translation>
@@ -670,6 +672,7 @@
 <translation id="3038136505713492417">このデバイスでパスキーを使用するには、本人確認を行ってください</translation>
 <translation id="3039671569659952257">フォルダを削除</translation>
 <translation id="3041835740069544003">Chrome でより高度なフォーム認識が可能になり、より多くのフォームを検出して入力できるようになりました。この機能では、ページのコンテンツと URL がクラウドのプライベート スペースで処理される場合があります。この機能は設定で管理できます。</translation>
+<translation id="3042118633250374317">Google は、サービスの提供、Google やユーザー、一般の人々の保護、およびサービスの開発と改善のため、人間のレビュアーによる確認を経て履歴を使用します。レビュアーに見られたくない内容や Google に使用されたくない情報は入力しないでください。</translation>
 <translation id="3050988301648974170">パスワード チェックアップを開きます</translation>
 <translation id="3053332585453689122">アクセスした URL と、ページのコンテンツ、ダウンロード、拡張機能のアクティビティ、システム情報の一部のサンプルを Google セーフ ブラウジングに送信して、有害かどうか確認します。</translation>
 <translation id="3055102495753300780">情報容量</translation>
@@ -954,6 +957,7 @@
 <translation id="3967822245660637423">ダウンロード完了</translation>
 <translation id="3973560090698854095">Google アカウント（<ph name="USER_EMAIL" />）に保存されている住所が削除されます。</translation>
 <translation id="398604237578616937"><ph name="USER_EMAIL" /> としてログインしています。アカウント メニューを開きます。</translation>
+<translation id="3986082989454912832">応答</translation>
 <translation id="3986739045730058129">タブに移動</translation>
 <translation id="3992684624889376114">このページについて</translation>
 <translation id="3993594519743675442">[リマインダーを設定] を非表示にする</translation>
@@ -1113,6 +1117,7 @@
 <translation id="4488754974567924717">パスワードが不正使用された場合はお知らせします</translation>
 <translation id="4489536976005181779">{count,plural, =1{アカウント「{email}」のリーディング リストにページを追加しました}other{アカウント「{email}」のリーディング リストにページを追加しました}}</translation>
 <translation id="4493604894403585654"><ph name="USER_EMAIL" /> でログインしています。同期は [設定] でいつでも停止できます。Google では、履歴に基づいて検索やその他のサービスをパーソナライズすることがあります。</translation>
+<translation id="4495251723189610737">チャットは Gemini の履歴に保存されます。履歴には、音声、Gemini Live の動画と画面共有、Gemini と共有した内容（プロンプト、<ph name="BEGIN_LINK" />アップロード<ph name="END_LINK" />、<ph name="BEGIN_LINK" />画面<ph name="END_LINK" />など）、Gemini の回答、タスクとツールの呼び出し、フィードバック、Gemini でアクセスしたウェブサイトの情報、サービスの使用状況データ、デバイスのおおよその現在地、IP アドレス、Google アカウントの自宅や職場の住所が含まれます。また、Gemini に接続したアプリのデータも含まれる場合があります。</translation>
 <translation id="4502423230170890588">このデバイスから削除</translation>
 <translation id="4508486880075514067">全画面に展開</translation>
 <translation id="4508750114462689118">ログイン プロモーションを閉じる</translation>
@@ -1217,6 +1222,7 @@
 <translation id="4808744395915275922">更新</translation>
 <translation id="4813345808229079766">接続</translation>
 <translation id="4821595350501541683">タブを閉じて閲覧データを削除しました</translation>
+<translation id="4821645169621230110">履歴の使用方法について</translation>
 <translation id="4823322556950229674">アドレスバーと戻るボタンを長押しすると、一番下に移動できます</translation>
 <translation id="4824480232751123840">数量</translation>
 <translation id="4824497107140370669">{count,plural, =0{{domain}}=1{{domain} とその他 1 タブ}other{{domain} とその他 {count} タブ}}</translation>
@@ -1244,6 +1250,7 @@
 <translation id="4877597489778380935">後で通知</translation>
 <translation id="4881695831933465202">開く</translation>
 <translation id="4883766694719903356">シークレット タブのグリッド</translation>
+<translation id="4884205780547482830">ユーザーのデータは生成 AI のトレーニングに役立てられます</translation>
 <translation id="4884937942297374058">保護強化機能がオフになっています</translation>
 <translation id="4887391901725877182">字幕</translation>
 <translation id="488785315393301722">詳細を表示</translation>
@@ -1695,7 +1702,6 @@
 <translation id="628251768213143684">Google アカウントに保存する情報はいつでも管理できます</translation>
 <translation id="6284652193729350524"><ph name="LANGUAGE" />を翻訳するか尋ねる</translation>
 <translation id="6293101329759844770">セーフ ブラウジングをオンにするには、[<ph name="BEGIN_LINK" />Google サービス<ph name="END_LINK" />] を開いて [セーフ ブラウジング] をタップします。</translation>
-<translation id="6295140892595702619">マイクを使用して Gemini と会話できます。Gemini に話しかけると、音声は Gemini アプリ アクティビティに保存されます（オンになっている場合）。ユーザーのデータが生成 AI モデルの改善に使用されることはありません。</translation>
 <translation id="6295751040240588413">無効なカード ニックネーム</translation>
 <translation id="629730747756840877">アカウント</translation>
 <translation id="6301104306974789820">価格トラッキングの通知を受け取る</translation>
@@ -1890,6 +1896,7 @@
 <translation id="6830728435402077660">保護されていません</translation>
 <translation id="6831043979455480757">翻訳</translation>
 <translation id="6842136130964845393">保存したパスワードに常にアクセスできるようにするには、本人確認を行ってください</translation>
+<translation id="6843744036364481304">保存されるチャット履歴</translation>
 <translation id="6844773122575789617">AI モードをオンにする</translation>
 <translation id="6851516051005285358">PC 版サイトを見る</translation>
 <translation id="6857446173140146664">背景を削除</translation>
@@ -1945,7 +1952,6 @@
 <translation id="6979737339423435258">全期間</translation>
 <translation id="6980507581230208647">ローズのテーマ</translation>
 <translation id="6983306615164277634">アドレスバーを長押しして位置を変更することもできます。</translation>
-<translation id="6987201788018524855">最近追加された便利な機能をご確認ください</translation>
 <translation id="6989636517316575338">ページについて質問</translation>
 <translation id="6990519590575500580">Facetime</translation>
 <translation id="6998236305642926573">すべてのタスク</translation>
@@ -2014,6 +2020,7 @@
 <translation id="7223134495231529579">"ダウンロード” に保存</translation>
 <translation id="722339453342442311">今すぐ確認</translation>
 <translation id="7227235818314667565">共有を管理</translation>
+<translation id="7232376892719594461">Gemini との会話や <ph name="BEGIN_LINK" />Google Workspace のデータ<ph name="END_LINK" />がレビューされたり、生成 AI モデルのトレーニングに使用されたりすることはありません。</translation>
 <translation id="7233006041370588369">入力するパスワードを選択してください。</translation>
 <translation id="7238074332967840767">安全性</translation>
 <translation id="723874023660911012">プロファイルを切り替える</translation>
@@ -2095,6 +2102,7 @@ Level Up はいつでも再開できます。</translation>
 <translation id="7486006552035434095">デバイスを同期する</translation>
 <translation id="7491131399623468277">[設定] に移動…</translation>
 <translation id="7491161827858509164">以前にダウンロードしたファイルを表示するには、<ph name="BEGIN_LINK" />ファイル<ph name="END_LINK" />を開きます</translation>
+<translation id="7496554840683586365">このサイトはアプリストアを開こうとしています。シークレット モードを終了します。</translation>
 <translation id="7498234416455752244">編集を続ける</translation>
 <translation id="7500244509706269886">フォームに自動入力</translation>
 <translation id="750493650310597496">選択されていません</translation>
@@ -2169,7 +2177,7 @@ Level Up はいつでも再開できます。</translation>
 <translation id="7719038820139380048">ログインすると、興味や関心に基づくコンテンツが表示されきます。</translation>
 <translation id="7720901330179380635"><ph name="SEARCH_ENGINE" /> で検索しています</translation>
 <translation id="7724085059277147439">{count,plural, =1{Google アカウント（{email}）にアイテムを保存しました}other{Google アカウント（{email}）にアイテムを保存しました}}</translation>
-<translation id="7729458878441927652">他のデバイスのタブを表示するには、タブと履歴を同期します。</translation>
+<translation id="7729458878441927652">他のデバイスのタブを表示するには、タブと履歴の同期をオンにしてください。</translation>
 <translation id="7730020510075123961">いいえ、データを結合します</translation>
 <translation id="7730937523779541003">フォーカス モードの新しいタブページを適用しました</translation>
 <translation id="7733646263819020771"><ph name="BOOKMRK_NAME" />、このデバイスのみ。</translation>
@@ -2524,6 +2532,7 @@ Level Up はいつでも再開できます。</translation>
 <translation id="8746155870861185046">選択箇所を共有</translation>
 <translation id="8748678031495824833">ページ上の AI ツールを開く</translation>
 <translation id="8750037785291841318">タブはここに表示されます</translation>
+<translation id="8751126814549746156">履歴は 18 か月後に自動的に削除されます。この期間は [設定] で変更できます。サービス プロバイダによってレビューされたチャットはアカウントから切り離され、最長 3 年間保存されます。履歴の設定はいつでも<ph name="BEGIN_LINK" />オフ<ph name="END_LINK" />にできます。</translation>
 <translation id="8756969031206844760">パスワードを更新しますか？</translation>
 <translation id="8763613688786959833">最後のタブに移動</translation>
 <translation id="8766790350274092814"><ph name="WEBSITE" /> と <ph name="SECOND_WEBSITE" /> のパスワードが削除されます。アカウントは削除されません。</translation>
@@ -2569,6 +2578,7 @@ Level Up はいつでも再開できます。</translation>
 <translation id="8893208530912252670">動画</translation>
 <translation id="890009681345348416">40 件以上のパスワードを自動入力しました</translation>
 <translation id="8900845556227858314">ブラウザアプリ</translation>
+<translation id="8903042868629070803">18 歳以上の場合、Google は<ph name="BEGIN_LINK" />生成 AI モデルのトレーニング<ph name="END_LINK" />にも履歴を使用します。今後のチャットでは、いつでも<ph name="BEGIN_LINK" />この設定をオフ<ph name="END_LINK" />にできます。</translation>
 <translation id="890565330728586731">戻る</translation>
 <translation id="8907722425137681851">ページ内を検索…</translation>
 <translation id="8909135823018751308">共有...</translation>
@@ -2597,7 +2607,7 @@ Level Up はいつでも再開できます。</translation>
 <translation id="8976414606286374109">カードは Google アカウントに保存されます。</translation>
 <translation id="8981454092730389528">Google アクティビティ管理</translation>
 <translation id="8988107725234939347"><ph name="WEBSITE_TITLE" />、固定されたサイト</translation>
-<translation id="8989779557457435460">デフォルトで現在のタブを共有する</translation>
+<translation id="8989779557457435460">デフォルトで現在のタブを共有</translation>
 <translation id="8990960056509724223">組織のポリシーにより、ファイルを保存できませんでした</translation>
 <translation id="8998289560386111590">お使いのデバイスではご利用いただけません</translation>
 <translation id="9003677638446136377">もう一度確認</translation>

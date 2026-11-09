@@ -102,7 +102,7 @@ suite('PasswordManagerAppTest', function() {
         assertTrue(!!passwordDetailsPage);
         assertEquals(app.shadowRoot!.activeElement, passwordDetailsPage);
         assertEquals(
-            passwordDetailsPage.shadowRoot!.activeElement,
+            passwordDetailsPage.shadowRoot.activeElement,
             passwordDetailsPage.$.backButton);
 
         passwordDetailsPage.$.backButton.click();
@@ -157,7 +157,7 @@ suite('PasswordManagerAppTest', function() {
                 assertTrue(!!checkupDetailsPage);
                 assertEquals(app.shadowRoot!.activeElement, checkupDetailsPage);
                 assertEquals(
-                    checkupDetailsPage.shadowRoot!.activeElement,
+                    checkupDetailsPage.shadowRoot.activeElement,
                     checkupDetailsPage.$.backButton);
 
                 checkupDetailsPage.$.backButton.click();

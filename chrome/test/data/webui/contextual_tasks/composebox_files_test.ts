@@ -694,6 +694,7 @@ suite('ContextualTasksComposeboxForkFilesTest', () => {
             showInCurrentTabChip: true,
             showInPreviousTabChip: false,
             isLoading: false,
+            recentTab: false,
           },
           null);
       await searchboxCallbackRouterRemote.$.flushForTesting();
@@ -758,6 +759,7 @@ suite('ContextualTasksComposeboxForkAutoTabTest', () => {
       showInCurrentTabChip: true,
       showInPreviousTabChip: false,
       isLoading: false,
+      recentTab: false,
     };
   }
 
@@ -1235,9 +1237,8 @@ suite('ContextualTasksComposeboxForkAutoTabTest', () => {
 
     for (const source
              of ['OmniboxPageAction',
-                 'ContentAreaContextMenuPage',
-                 'AppMenu',
-                 'HomeworkActionChip',
+                 'ContentAreaContextMenuPageAskGoogle',
+                 'AppMenuAskGoogle',
     ]) {
       test(
           `${source} with ask-G in the side panel uploads immediately ` +
@@ -1275,6 +1276,17 @@ suite('ContextualTasksComposeboxForkAutoTabTest', () => {
             assertEquals(1, innerComposebox.attachedContext.size);
           });
     }
+
+    test(
+        'HomeworkActionChip in the side panel keeps default semantics ' +
+            'with updated entry points enabled',
+        async () => {
+          loadTimeData.overrideValues({
+            webUIOmniboxAskGAboutThisPageEnabled: true,
+            contextualTasksUpdatedEntryPointsEnabled: true,
+          });
+          await assertDefaultAutoTabSemantics('HomeworkActionChip', true);
+        });
 
     test('delays the upload outside the side panel', async () => {
       await mountApp();

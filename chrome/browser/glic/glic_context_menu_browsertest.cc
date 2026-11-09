@@ -12,9 +12,11 @@
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/provider_features.h"
 #include "chrome/browser/glic/selection/selection_overlay_controller.h"
 #include "chrome/browser/glic/service/glic_instance_impl.h"
 #include "chrome/browser/glic/test_support/glic_browser_test.h"
+#include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_test_util.h"
@@ -23,6 +25,8 @@
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/user_education/user_education_service.h"
+#include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/search_test_utils.h"
@@ -30,8 +34,10 @@
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "printing/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -1106,7 +1112,8 @@ class GlicSmartSuggestionContextMenuBrowserTest
   GlicSmartSuggestionContextMenuBrowserTest() {
     feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kGlic, features::kGlicContextMenu,
-                              features::kGlicSuggestionContextMenu},
+                              features::kGlicSuggestionContextMenu,
+                              features::kGlicSelectionOverlayPromptBox},
         /*disabled_features=*/{features::kGlicSelectionPrompt});
   }
 
@@ -1128,6 +1135,7 @@ class GlicSmartSuggestionContextMenuBrowserTest
 
 IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
                        ItemPresentAndOpensOverlay) {
+  base::HistogramTester histogram_tester;
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetSimpleTestUrl()));
   auto* controller = SelectionOverlayController::FromTabWebContents(
       browser()->tab_strip_model()->GetActiveWebContents());
@@ -1137,6 +1145,9 @@ IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
   ASSERT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION));
   menu->ExecuteCommand(IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION,
                        /*event_flags=*/0);
+  histogram_tester.ExpectUniqueSample("SmartSelection.Invocation.ByEntryPoint",
+                                      ::selection::EntryPoint::kContextMenuPage,
+                                      1);
 
   ASSERT_OK(RunUntilEqual([&]() { return controller->state(); },
                           SelectionOverlayController::State::kOverlay,
@@ -1160,6 +1171,7 @@ IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
                        ExecWithTextSelectionPreselectsRegionAndSetsOptions) {
+  base::HistogramTester histogram_tester;
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetSimpleTestUrl()));
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1181,6 +1193,9 @@ IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
   ASSERT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION));
   menu->ExecuteCommand(IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION,
                        /*event_flags=*/0);
+  histogram_tester.ExpectUniqueSample("SmartSelection.Invocation.ByEntryPoint",
+                                      ::selection::EntryPoint::kContextMenuText,
+                                      1);
 
   ASSERT_OK(RunUntilEqual([&]() { return controller->state(); },
                           SelectionOverlayController::State::kOverlay,
@@ -1195,9 +1210,74 @@ IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
         const overlay =
             app?.shadowRoot?.querySelector('glic-selection-overlay');
         return !!app?.screenshot_ && !!overlay &&
-               overlay.hideHandles && overlay.disableMultiSelect;
+               overlay.hideHandles && overlay.disableMultiSelect &&
+               overlay.skipIntroAnimation;
       })();
     )")
+        .ExtractBool();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
+                       ExecWithImagePreselectsRegionAndSetsOptions) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetSimpleTestUrl()));
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  auto* controller =
+      SelectionOverlayController::FromTabWebContents(web_contents);
+  ASSERT_TRUE(controller);
+
+  ASSERT_TRUE(content::EvalJs(web_contents, R"(
+    new Promise((resolve) => {
+      const img = document.createElement('img');
+      img.style.cssText =
+          'position: fixed; left: 20px; top: 30px; width: 100px; height: 80px;';
+      img.onload = () => resolve(true);
+      img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      document.body.appendChild(img);
+    })
+  )")
+                  .ExtractBool());
+  content::WaitForCopyableViewInWebContents(web_contents);
+
+  ContextMenuNotificationObserver menu_observer(
+      IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION);
+  content::SimulateMouseClickAt(web_contents, 0,
+                                blink::WebMouseEvent::Button::kRight,
+                                gfx::Point(50, 50));
+
+  ASSERT_OK(RunUntilEqual([&]() { return controller->state(); },
+                          SelectionOverlayController::State::kOverlay,
+                          "Timed out waiting for the selection overlay."));
+  EXPECT_EQ(controller->GetSelectedRegionCount(), 1u);
+  content::RenderFrameHost* overlay_frame = controller->GetOverlayMainFrame();
+  ASSERT_TRUE(overlay_frame);
+  gfx::Rect view_bounds = web_contents->GetViewBounds();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(overlay_frame,
+                           content::JsReplace(
+                               R"(
+      (() => {
+        const app = document.querySelector('selection-overlay-app');
+        const overlay =
+            app?.shadowRoot?.querySelector('glic-selection-overlay');
+        const sel = overlay?.activeSelection;
+        if (!app?.screenshot_ || !overlay || !sel) {
+          return false;
+        }
+        const expectedLeft = 20 / $1;
+        const expectedTop = 30 / $2;
+        const expectedWidth = 100 / $1;
+        const expectedHeight = 80 / $2;
+        return !overlay.hideHandles && overlay.disableMultiSelect &&
+               overlay.skipIntroAnimation &&
+               Math.abs(sel.left - expectedLeft) < 0.01 &&
+               Math.abs(sel.top - expectedTop) < 0.01 &&
+               Math.abs(sel.width - expectedWidth) < 0.01 &&
+               Math.abs(sel.height - expectedHeight) < 0.01;
+      })();
+    )",
+                               view_bounds.width(), view_bounds.height()))
         .ExtractBool();
   }));
 }
@@ -1218,6 +1298,28 @@ IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
       index->first->GetLabelAt(index->second),
       l10n_util::GetStringFUTF16(IDS_GLIC_CONTEXT_MENU_ASK_ABOUT_SELECTION,
                                  u"line1 line2  line3"));
+}
+
+IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,
+                       ItemHasNewBadge) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetSimpleTestUrl()));
+  auto* user_education_service =
+      UserEducationServiceFactory::GetForBrowserContext(
+          browser()->GetProfile());
+  ASSERT_TRUE(user_education_service);
+  auto* new_badge_controller = user_education_service->new_badge_controller();
+  ASSERT_TRUE(new_badge_controller);
+  // New badges are not shown to brand-new profiles.
+  user_education_service->user_education_storage_service()
+      .set_profile_creation_time_for_testing(base::Time::Now() -
+                                             base::Days(100));
+  new_badge_controller->InitData();
+
+  auto menu = CreateContextMenu();
+  auto index =
+      menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_GLIC_SMART_SUGGESTION);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_TRUE(index->first->IsNewFeatureAt(index->second));
 }
 
 IN_PROC_BROWSER_TEST_F(GlicSmartSuggestionContextMenuBrowserTest,

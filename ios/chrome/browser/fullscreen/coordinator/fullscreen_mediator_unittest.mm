@@ -81,17 +81,37 @@ namespace {
 // Observer to track calls to WillUpdateObscuredInsetRange.
 class FullscreenMediatorTestObserver : public FullscreenBrowserAgentObserver {
  public:
+  void WillUpdateState(FullscreenBrowserAgent* agent) override {
+    if (top_obscured_inset_ > 0) {
+      agent->AddObscuredInset(UIRectEdgeTop, top_obscured_inset_);
+    }
+    if (max_bottom_inset_ > 0) {
+      agent->AddObscuredInset(UIRectEdgeBottom,
+                              max_bottom_inset_ * agent->bottom_progress());
+    }
+  }
+
   void WillUpdateObscuredInsetRange(FullscreenBrowserAgent* agent) override {
     agent->AddObscuredInsetRange(UIRectEdgeTop, 0, 50);
+    if (max_bottom_inset_ > 0) {
+      agent->AddObscuredInsetRange(UIRectEdgeBottom, 0, max_bottom_inset_);
+    }
     will_update_obscured_inset_range_count_++;
   }
 
+  void set_top_obscured_inset(CGFloat inset) { top_obscured_inset_ = inset; }
+
+  void set_max_bottom_inset(CGFloat max_bottom_inset) {
+    max_bottom_inset_ = max_bottom_inset;
+  }
   int will_update_obscured_inset_range_count() const {
     return will_update_obscured_inset_range_count_;
   }
 
  private:
+  CGFloat max_bottom_inset_ = 0;
   int will_update_obscured_inset_range_count_ = 0;
+  CGFloat top_obscured_inset_ = 0;
 };
 
 }  // namespace
@@ -539,4 +559,85 @@ TEST_F(FullscreenMediatorTest, ForcedFullscreenIgnoresScrollSnap) {
 
   [mediator_ forceFullscreen:NO feature:ForceFullscreenFeature::kKeyboard];
   EXPECT_EQ(agent_->State(), FullscreenState::kUIExpanded);
+}
+
+// Tests that `webState:didFinishNavigation:` forwards `obscuredInsets` to the
+// web view proxy even when `scrollViewProxy.contentInset` already matches the
+// unadjusted toolbar insets.
+TEST_F(FullscreenMediatorTest,
+       DidFinishNavigationForwardsObscuredInsetsWhenContentInsetMatches) {
+  const UIEdgeInsets expected_insets = UIEdgeInsetsMake(50, 0, 0, 0);
+  observer_.set_top_obscured_inset(expected_insets.top);
+  agent_->InvalidateInsetRange();
+  ASSERT_TRUE(UIEdgeInsetsEqualToEdgeInsets(agent_->insets(), expected_insets));
+
+  auto web_state = std::make_unique<web::FakeWebState>();
+  WebViewProxyTabHelper::CreateForWebState(web_state.get());
+
+  FullscreenTestScrollView* scroll_view = [[FullscreenTestScrollView alloc]
+      initWithFrame:CGRectMake(0, 0, 320, 480)];
+  scroll_view.contentInset = expected_insets;
+
+  CRWWebViewScrollViewProxy* scroll_view_proxy =
+      [[CRWWebViewScrollViewProxy alloc] init];
+  [scroll_view_proxy setScrollView:scroll_view];
+
+  id web_view_proxy_mock = OCMProtocolMock(@protocol(CRWWebViewProxy));
+  OCMStub([web_view_proxy_mock scrollViewProxy]).andReturn(scroll_view_proxy);
+  OCMStub([web_view_proxy_mock obscuredInsets]).andReturn(expected_insets);
+
+  WebViewProxyTabHelper::FromWebState(web_state.get())
+      ->SetOverridingWebViewProxy(web_view_proxy_mock);
+
+  web::FakeWebState* web_state_ptr = web_state.get();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(web_state),
+      WebStateList::InsertionParams::Automatic().Activate());
+
+  OCMExpect([web_view_proxy_mock setObscuredInsets:expected_insets
+                                   initialVelocity:0.0]);
+
+  id<CRWWebStateObserver> web_state_observer =
+      static_cast<id<CRWWebStateObserver>>(mediator_);
+  web::FakeNavigationContext context;
+  context.SetIsSameDocument(false);
+  [web_state_observer webState:web_state_ptr didFinishNavigation:&context];
+
+  [web_view_proxy_mock verify];
+}
+
+// Tests that setting the keyboard obscured inset updates the scroll view's
+// bottom content inset without modifying the web view's obscured insets or
+// viewport insets.
+TEST_F(FullscreenMediatorTest, KeyboardInsetUpdatesScrollViewContentInsetOnly) {
+  constexpr CGFloat kBottomToolbarHeight = 60.0;
+  constexpr CGFloat kKeyboardHeight = 300.0;
+
+  observer_.set_max_bottom_inset(kBottomToolbarHeight);
+  auto [scroll_view, scroll_view_proxy] = SetUpActiveWebStateWithScrollView();
+  agent_->InvalidateInsetRange();
+
+  CGFloat expected_resting_bottom_inset = 0.0;
+  CGFloat expected_keyboard_bottom_inset =
+      kKeyboardHeight - kBottomToolbarHeight;
+  if (@available(iOS 26, *)) {
+    expected_resting_bottom_inset = kBottomToolbarHeight;
+    expected_keyboard_bottom_inset = kKeyboardHeight;
+  }
+
+  // Initial toolbar bottom inset is `kBottomToolbarHeight`.
+  EXPECT_EQ(agent_->insets().bottom, kBottomToolbarHeight);
+  EXPECT_EQ(scroll_view.contentInset.bottom, expected_resting_bottom_inset);
+
+  // Set keyboard inset.
+  agent_->SetKeyboardObscuredInset(kKeyboardHeight);
+
+  // The scroll view's bottom content inset must expand for the keyboard.
+  EXPECT_EQ(scroll_view.contentInset.bottom, expected_keyboard_bottom_inset);
+  // Toolbar insets must not include the keyboard height.
+  EXPECT_EQ(agent_->insets().bottom, kBottomToolbarHeight);
+
+  // Hide the keyboard.
+  agent_->SetKeyboardObscuredInset(0.0);
+  EXPECT_EQ(scroll_view.contentInset.bottom, expected_resting_bottom_inset);
 }

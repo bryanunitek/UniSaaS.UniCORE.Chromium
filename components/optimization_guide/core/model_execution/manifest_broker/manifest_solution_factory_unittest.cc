@@ -49,6 +49,7 @@ class ManifestSolutionFactoryTest : public testing::Test {
   }
 
  protected:
+  ScopedModelBrokerFeatureList scoped_feature_list_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   FakeManifestBroker fake_;
@@ -131,7 +132,8 @@ TEST_F(ManifestSolutionFactoryTest, ExecuteTestFeature) {
   EXPECT_TRUE(response.GetFinalStatus());
 
   std::string expected_response =
-      ("Encoder cache weight: 1016"
+      ("Cache weight: 1015"
+       "Encoder cache weight: 1016"
        "Adapter cache weight: 1017"
        "hello max:1024"
        "TopK: 64, Temp: 1");
@@ -255,6 +257,7 @@ TEST_F(ManifestSolutionFactoryTest, ExecuteTestFeatureWithAdaptation) {
 
   std::string expected_response =
       ("Adaptation model: 1"
+       "Cache weight: 1015"
        "Encoder cache weight: 1016"
        "Adapter cache weight: 1017"
        "hello max:1024"

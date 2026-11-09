@@ -5,6 +5,7 @@
 #include "components/android_autofill/browser/android_autofill_provider.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/android/android_info.h"
 #include "base/containers/span.h"
@@ -12,12 +13,15 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "components/android_autofill/browser/android_autofill_bridge_factory.h"
 #include "components/android_autofill/browser/android_autofill_features.h"
 #include "components/android_autofill/browser/android_autofill_manager.h"
 #include "components/android_autofill/browser/android_autofill_provider_bridge.h"
 #include "components/android_autofill/browser/android_autofill_provider_test_api.h"
 #include "components/android_autofill/browser/autofill_provider.h"
+#include "components/android_autofill/browser/card_value_validation.h"
 #include "components/android_autofill/browser/form_data_android.h"
 #include "components/android_autofill/browser/form_data_android_test_api.h"
 #include "components/android_autofill/browser/mock_form_field_data_android_bridge.h"
@@ -51,7 +55,10 @@ namespace {
 
 using ::testing::_;
 using ::testing::AllOf;
+using ::testing::AnyOf;
 using ::testing::AtLeast;
+using ::testing::Contains;
+using ::testing::DoAll;
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Field;
@@ -60,6 +67,7 @@ using ::testing::Mock;
 using ::testing::MockFunction;
 using ::testing::NiceMock;
 using ::testing::Optional;
+using ::testing::Pair;
 using ::testing::Property;
 using ::testing::ResultOf;
 using ::testing::Return;
@@ -1418,6 +1426,78 @@ TEST_F(AndroidAutofillProviderTest,
   // With the feature disabled, the active session origin is preserved.
   EXPECT_EQ(test_api(autofill_provider()).last_focused_field_origin(),
             iframe_origin);
+}
+
+// Tests that a cross-origin `OnAskForValuesToFill()` call on a linked
+// multi-origin form starts a new Autofill session with a new SessionId so that
+// datasets from the previous origin's session are invalidated
+// (crbug.com/578317115).
+TEST_F(AndroidAutofillProviderTest,
+       CrossOriginAskForValuesToFillOnLinkedFormStartsNewSession) {
+  content::RenderFrameHost* cross_origin_frame =
+      content::RenderFrameHostTester::For(main_frame())
+          ->AppendChild(std::string("cross_origin"));
+  cross_origin_frame = NavigateAndCommitFrame(
+      cross_origin_frame, GURL("https://other-origin.example"));
+
+  url::Origin main_origin = url::Origin::Create(GURL("https://main.example"));
+  url::Origin other_origin =
+      url::Origin::Create(GURL("https://other-origin.example"));
+
+  FormData form = GetFormData({
+      .fields = {{
+                     .host_frame = main_frame_token(),
+                     .origin = main_origin,
+                 },
+                 {
+                     .host_frame = LocalFrameToken(
+                         cross_origin_frame->GetFrameToken().value()),
+                     .origin = other_origin,
+                 }},
+      .url = "https://main.example/form.html",
+      .main_frame_origin = main_origin,
+  });
+
+  android_autofill_manager().OnFormsSeen({form}, /*removed_forms=*/{},
+                                         AutofillManagerTestApi::pass_key());
+
+  // 1. User taps and focuses field 0 on main.example.
+  SessionId first_session_id = SessionId(0);
+  EXPECT_CALL(
+      provider_bridge(),
+      StartAutofillSession(EqualsFormData(form), EqualsFieldInfo(/*index=*/0),
+                           /*has_server_predictions=*/false))
+      .WillOnce(WithArg<0>(SaveSessionId(&first_session_id)));
+  android_autofill_manager().OnAskForValuesToFillTest(
+      form, form.fields()[0].global_id());
+  Mock::VerifyAndClearExpectations(&provider_bridge());
+
+  ASSERT_EQ(test_api(autofill_provider()).last_focused_field_id(),
+            form.fields()[0].global_id());
+  ASSERT_EQ(test_api(autofill_provider()).last_focused_field_origin(),
+            main_origin);
+  ASSERT_EQ(test_api(autofill_provider()).last_queried_field_rfh_id(),
+            main_frame()->GetGlobalId());
+
+  // 2. `OnAskForValuesToFill()` for cross-origin field 1 on the same linked
+  // form must start a new session with a different SessionId.
+  SessionId second_session_id = SessionId(0);
+  EXPECT_CALL(
+      provider_bridge(),
+      StartAutofillSession(EqualsFormData(form), EqualsFieldInfo(/*index=*/1),
+                           /*has_server_predictions=*/false))
+      .WillOnce(WithArg<0>(SaveSessionId(&second_session_id)));
+  android_autofill_manager().OnAskForValuesToFillTest(
+      form, form.fields()[1].global_id());
+  Mock::VerifyAndClearExpectations(&provider_bridge());
+
+  EXPECT_NE(first_session_id, second_session_id);
+  EXPECT_EQ(test_api(autofill_provider()).last_focused_field_id(),
+            form.fields()[1].global_id());
+  EXPECT_EQ(test_api(autofill_provider()).last_focused_field_origin(),
+            other_origin);
+  EXPECT_EQ(test_api(autofill_provider()).last_queried_field_rfh_id(),
+            cross_origin_frame->GetGlobalId());
 }
 
 class AndroidAutofillProviderWithCredManTest
@@ -2797,6 +2877,409 @@ TEST_F(AndroidAutofillProviderTestHidingLogic,
   AskForValuesToFill(sub_frame_);
   EXPECT_CALL(provider_bridge(), Reset);
   NavigateAndCommitFrame(sub_frame_, GURL("https://bar.com/"));
+}
+
+class MockContentAutofillDriver : public ContentAutofillDriver {
+ public:
+  using ContentAutofillDriver::ContentAutofillDriver;
+
+  MOCK_METHOD(
+      base::flat_set<FieldGlobalId>,
+      ApplyFormAction,
+      (mojom::FormActionType action_type,
+       mojom::ActionPersistence action_persistence,
+       base::span<const FormFieldData> data,
+       const FillId& fill_id,
+       bool supports_refill,
+       const url::Origin& triggered_origin,
+       (const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map)),
+      (override));
+};
+
+// Tests the types that FillOrPreviewForm passes to the iframe security policy
+// for a card form whose card number and CVC are in a payment service
+// provider's origin and whose cardholder name and expiration date are in the
+// merchant's main frame origin, when the user fills from the card number.
+//
+// Unlike `AndroidAutofillProviderTest`, this fixture injects a mock driver,
+// which requires the driver injector to be created before the manager
+// injector (`WithTestAutofillClientDriverManager` cannot be used because
+// `AndroidAutofillManager` casts `driver()` to `ContentAutofillDriver`).
+class AndroidAutofillManagerSecurityPolicyTypesTest
+    : public content::RenderViewHostTestHarness {
+ public:
+  static constexpr int kName = 0;
+  static constexpr int kNumber = 1;
+  static constexpr int kMonth = 2;
+  static constexpr int kYear = 3;
+  static constexpr int kCvc = 4;
+
+  AndroidAutofillManagerSecurityPolicyTypesTest()
+      : content::RenderViewHostTestHarness(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  void SetUp() override {
+    content::RenderViewHostTestHarness::SetUp();
+    NavigateAndCommit(GURL("https://merchant.test"));
+    // Pins the current year to 2026, so that the expiration year "30" is
+    // plausible.
+    base::Time now;
+    ASSERT_TRUE(base::Time::FromLocalExploded(
+        {.year = 2026, .month = 6, .day_of_month = 15, .hour = 12}, &now));
+    task_environment()->AdvanceClock(now - base::Time::Now());
+
+    FormData form;
+    form.set_renderer_id(test::MakeFormRendererId());
+    form.set_url(GURL("https://merchant.test/checkout.html"));
+    form.set_main_frame_origin(main_origin_);
+    form.set_fields(
+        {CreateTestFormField("Name on card", "name", "",
+                             FormControlType::kInputText, "cc-name"),
+         CreateTestFormField("Card number", "number", "",
+                             FormControlType::kInputText, "cc-number"),
+         CreateTestFormField("Expiration month", "month", "",
+                             FormControlType::kInputText, "cc-exp-month"),
+         CreateTestFormField("Expiration year", "year", "",
+                             FormControlType::kInputText, "cc-exp-year"),
+         CreateTestFormField("CVC", "cvc", "", FormControlType::kInputText,
+                             "cc-csc")});
+    form_ = CreateFormDataForFrame(
+        std::move(form), LocalFrameToken(main_rfh()->GetFrameToken().value()));
+    for (int i : {kName, kMonth, kYear}) {
+      test_api(form_).field(i).set_origin(main_origin_);
+    }
+    for (int i : {kNumber, kCvc}) {
+      test_api(form_).field(i).set_origin(iframe_origin_);
+    }
+    manager().OnFormsSeen({form_}, /*removed_forms=*/{},
+                          AutofillManagerTestApi::pass_key());
+  }
+
+  // Fills all fields with card values, with `name` as the cardholder name, as
+  // if by the Autofill service, and returns the types that FillOrPreviewForm
+  // passes to the security policy.
+  absl::flat_hash_map<FieldGlobalId, FieldType> FillAndGetTypes(
+      std::u16string_view name = u"Jane Doe",
+      std::optional<url::Origin> triggered_origin = std::nullopt) {
+    FormData filled_form = form_;
+    FillAllFields(filled_form, name);
+    return ApplyFillAndGetTypes(filled_form,
+                                triggered_origin.value_or(iframe_origin_));
+  }
+
+  void FillAllFields(FormData& filled_form,
+                     std::u16string_view name = u"Jane Doe") {
+    auto fill = [&](int i, std::u16string_view value) {
+      test_api(filled_form).field(i).set_value(std::u16string(value));
+      test_api(filled_form)
+          .field(i)
+          .set_is_autofilled_according_to_renderer(true);
+    };
+    fill(kName, name);
+    fill(kNumber, u"4111111111111111");
+    fill(kMonth, u"12");
+    fill(kYear, u"30");
+    fill(kCvc, u"123");
+  }
+
+  absl::flat_hash_map<FieldGlobalId, FieldType> ApplyFillAndGetTypes(
+      const FormData& filled_form,
+      const url::Origin& triggered_origin) {
+    absl::flat_hash_map<FieldGlobalId, FieldType> types;
+    EXPECT_CALL(driver(), ApplyFormAction)
+        .WillOnce(
+            DoAll(SaveArg<6>(&types), Return(base::flat_set<FieldGlobalId>())));
+    manager().FillOrPreviewForm(mojom::ActionPersistence::kFill, filled_form,
+                                triggered_origin);
+    return types;
+  }
+
+  FieldGlobalId field_id(int i) const { return form_.fields()[i].global_id(); }
+  const FormData& form() const { return form_; }
+  const url::Origin& main_origin() const { return main_origin_; }
+  const url::Origin& iframe_origin() const { return iframe_origin_; }
+  TestAndroidAutofillManager& manager() {
+    return *autofill_manager_injector_[main_rfh()];
+  }
+
+ private:
+  MockContentAutofillDriver& driver() {
+    return *autofill_driver_injector_[main_rfh()];
+  }
+
+  test::AutofillUnitTestEnvironment autofill_environment_;
+  TestAutofillClientInjector<TestContentAutofillClient>
+      autofill_client_injector_;
+  TestAutofillDriverInjector<NiceMock<MockContentAutofillDriver>>
+      autofill_driver_injector_;
+  TestAutofillManagerInjector<TestAndroidAutofillManager>
+      autofill_manager_injector_;
+  const url::Origin main_origin_ =
+      url::Origin::Create(GURL("https://merchant.test"));
+  const url::Origin iframe_origin_ =
+      url::Origin::Create(GURL("https://psp.test"));
+  FormData form_;
+};
+
+constexpr char kCrossOriginMainFrameValidationHistogram[] =
+    "Autofill.WebView.CrossOriginMainFrameCreditCardFieldValidation";
+
+// Tests that without kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame, the
+// security policy gets UNKNOWN_TYPE for all fields.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       UnknownTypesWithoutFeature) {
+  base::HistogramTester histogram_tester;
+  EXPECT_THAT(FillAndGetTypes(),
+              UnorderedElementsAre(Pair(field_id(kName), UNKNOWN_TYPE),
+                                   Pair(field_id(kNumber), UNKNOWN_TYPE),
+                                   Pair(field_id(kMonth), UNKNOWN_TYPE),
+                                   Pair(field_id(kYear), UNKNOWN_TYPE),
+                                   Pair(field_id(kCvc), UNKNOWN_TYPE)));
+  histogram_tester.ExpectTotalCount(kCrossOriginMainFrameValidationHistogram,
+                                    0);
+}
+
+// Tests that with kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame, the
+// security policy gets the predicted types of the cardholder name and
+// expiration date in the main frame, and UNKNOWN_TYPE for the other fields.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       PredictedTypesForMainFrameNameAndExpiryWithFeature) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  EXPECT_THAT(FillAndGetTypes(),
+              UnorderedElementsAre(
+                  Pair(field_id(kName), CREDIT_CARD_NAME_FULL),
+                  Pair(field_id(kNumber), UNKNOWN_TYPE),
+                  Pair(field_id(kMonth), CREDIT_CARD_EXP_MONTH),
+                  Pair(field_id(kYear), AnyOf(CREDIT_CARD_EXP_2_DIGIT_YEAR,
+                                              CREDIT_CARD_EXP_4_DIGIT_YEAR)),
+                  Pair(field_id(kCvc), UNKNOWN_TYPE)));
+  histogram_tester.ExpectUniqueSample(
+      kCrossOriginMainFrameValidationHistogram,
+      MainFrameCreditCardFieldValidationResult::kAllowed, 3);
+}
+
+// Tests that with kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame, a
+// value that doesn't look like a cardholder name, e.g. a card number, still
+// gets UNKNOWN_TYPE.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       UnknownTypeForImplausibleNameWithFeature) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  EXPECT_THAT(FillAndGetTypes(/*name=*/u"4111111111111111"),
+              Contains(Pair(field_id(kName), UNKNOWN_TYPE)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples(kCrossOriginMainFrameValidationHistogram),
+      base::BucketsAre(
+          base::Bucket(MainFrameCreditCardFieldValidationResult::kAllowed, 2),
+          base::Bucket(
+              MainFrameCreditCardFieldValidationResult::kImplausibleValue, 1)));
+}
+
+// Tests that FillOrPreviewForm drops unfocusable non-<select> fields before
+// passing them to the driver, while keeping unfocusable <select> elements.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       DropsUnfocusableNonSelectFields) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  FormData filled_form = form();
+  FillAllFields(filled_form);
+  test_api(filled_form).field(kName).set_is_focusable(false);
+  test_api(filled_form).field(kMonth).set_is_focusable(false);
+  test_api(filled_form)
+      .field(kMonth)
+      .set_form_control_type(FormControlType::kSelectOne);
+  test_api(filled_form)
+      .field(kMonth)
+      .set_options({{.value = u"12", .text = u"12"}});
+
+  EXPECT_THAT(ApplyFillAndGetTypes(filled_form, iframe_origin()),
+              UnorderedElementsAre(
+                  Pair(field_id(kNumber), UNKNOWN_TYPE),
+                  Pair(field_id(kMonth), CREDIT_CARD_EXP_MONTH),
+                  Pair(field_id(kYear), AnyOf(CREDIT_CARD_EXP_2_DIGIT_YEAR,
+                                              CREDIT_CARD_EXP_4_DIGIT_YEAR)),
+                  Pair(field_id(kCvc), UNKNOWN_TYPE)));
+  histogram_tester.ExpectUniqueSample(
+      kCrossOriginMainFrameValidationHistogram,
+      MainFrameCreditCardFieldValidationResult::kAllowed, 2);
+}
+
+// Tests that a fill triggered from the main frame itself leaves all field types
+// as UNKNOWN_TYPE and does not record the cross-origin validation histogram.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       SameOriginFillLeavesUnknownTypes) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  EXPECT_THAT(FillAndGetTypes(/*name=*/u"Jane Doe", main_origin()),
+              Contains(Pair(field_id(kName), UNKNOWN_TYPE)));
+  histogram_tester.ExpectTotalCount(kCrossOriginMainFrameValidationHistogram,
+                                    0);
+}
+
+// Tests that a cross-origin fill from a frame without credit card fields leaves
+// all field types as UNKNOWN_TYPE, even when the main frame declares
+// `autocomplete="cc-name"` and `autocomplete="cc-number"`.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       NonCardIframeLeavesUnknownTypes) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  const url::Origin login_origin =
+      url::Origin::Create(GURL("https://login.test"));
+
+  FormData mixed_form;
+  mixed_form.set_renderer_id(test::MakeFormRendererId());
+  mixed_form.set_url(GURL("https://merchant.test/page.html"));
+  mixed_form.set_main_frame_origin(main_origin());
+  mixed_form.set_fields(
+      {CreateTestFormField("Name", "ccname", "", FormControlType::kInputText,
+                           "cc-name"),
+       CreateTestFormField("Card", "ccnum", "", FormControlType::kInputText,
+                           "cc-number"),
+       CreateTestFormField("Username", "user", "", FormControlType::kInputText,
+                           "username"),
+       CreateTestFormField("Password", "pass", "",
+                           FormControlType::kInputPassword,
+                           "current-password")});
+  mixed_form = CreateFormDataForFrame(
+      std::move(mixed_form),
+      LocalFrameToken(main_rfh()->GetFrameToken().value()));
+  test_api(mixed_form).field(0).set_origin(main_origin());
+  test_api(mixed_form).field(1).set_origin(main_origin());
+  test_api(mixed_form).field(2).set_origin(login_origin);
+  test_api(mixed_form).field(3).set_origin(login_origin);
+  manager().OnFormsSeen({mixed_form}, /*removed_forms=*/{},
+                        AutofillManagerTestApi::pass_key());
+
+  FormData filled_form = mixed_form;
+  for (int i : {0, 2, 3}) {
+    test_api(filled_form)
+        .field(i)
+        .set_is_autofilled_according_to_renderer(true);
+  }
+  test_api(filled_form).field(0).set_value(u"SecretPassphrase");
+  test_api(filled_form).field(2).set_value(u"JaneDoe");
+  test_api(filled_form).field(3).set_value(u"SecretPassphrase");
+
+  EXPECT_THAT(ApplyFillAndGetTypes(filled_form, login_origin),
+              UnorderedElementsAre(
+                  Pair(mixed_form.fields()[0].global_id(), UNKNOWN_TYPE),
+                  Pair(mixed_form.fields()[2].global_id(), UNKNOWN_TYPE),
+                  Pair(mixed_form.fields()[3].global_id(), UNKNOWN_TYPE)));
+  histogram_tester.ExpectTotalCount(kCrossOriginMainFrameValidationHistogram,
+                                    0);
+}
+
+// Tests that a cross-origin fill leaves all field types as UNKNOWN_TYPE if
+// main-frame fields made Autofill classify a field of the triggering frame as a
+// card number, but the fill doesn't put a valid card number into it.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       MisclassifiedIframeFieldWithoutCardNumberLeavesUnknownTypes) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+  const url::Origin login_origin =
+      url::Origin::Create(GURL("https://login.test"));
+
+  FormData mixed_form;
+  mixed_form.set_renderer_id(test::MakeFormRendererId());
+  mixed_form.set_url(GURL("https://merchant.test/page.html"));
+  mixed_form.set_main_frame_origin(main_origin());
+  mixed_form.set_fields({CreateTestFormField("Name on card", "ccname", "",
+                                             FormControlType::kInputText),
+                         CreateTestFormField("Acct #", "acct_number", "",
+                                             FormControlType::kInputText),
+                         CreateTestFormField("Expiration date", "exp", "",
+                                             FormControlType::kInputText)});
+  mixed_form = CreateFormDataForFrame(
+      std::move(mixed_form),
+      LocalFrameToken(main_rfh()->GetFrameToken().value()));
+  test_api(mixed_form).field(0).set_origin(main_origin());
+  test_api(mixed_form).field(1).set_origin(login_origin);
+  test_api(mixed_form).field(2).set_origin(main_origin());
+  manager().OnFormsSeen({mixed_form}, /*removed_forms=*/{},
+                        AutofillManagerTestApi::pass_key());
+  // The main frame's cardholder name and expiration date fields make the login
+  // frame's username field look like a card number field.
+  const FormStructure* form_structure =
+      manager().FindCachedFormById(mixed_form.global_id());
+  ASSERT_TRUE(form_structure);
+  ASSERT_EQ(form_structure->field(1)->Type().GetCreditCardType(),
+            CREDIT_CARD_NUMBER);
+
+  FormData filled_form = mixed_form;
+  for (int i : {0, 1}) {
+    test_api(filled_form)
+        .field(i)
+        .set_is_autofilled_according_to_renderer(true);
+    test_api(filled_form).field(i).set_value(u"JaneDoe");
+  }
+
+  EXPECT_THAT(ApplyFillAndGetTypes(filled_form, login_origin),
+              UnorderedElementsAre(
+                  Pair(mixed_form.fields()[0].global_id(), UNKNOWN_TYPE),
+                  Pair(mixed_form.fields()[1].global_id(), UNKNOWN_TYPE)));
+  histogram_tester.ExpectTotalCount(kCrossOriginMainFrameValidationHistogram,
+                                    0);
+}
+
+// Tests that a main-frame password control with `autocomplete="cc-name"` stays
+// UNKNOWN_TYPE, while a payment iframe CVC masked with `kInputPassword` still
+// allows non-password main-frame card fields to receive their predicted types.
+TEST_F(AndroidAutofillManagerSecurityPolicyTypesTest,
+       MainFramePasswordControlGetsUnknownTypeWhileMaskedIframeCvcWorks) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAndroidAutofillFillNonSensitiveCardFieldsInMainFrame);
+  base::HistogramTester histogram_tester;
+
+  FormData card_form;
+  card_form.set_renderer_id(test::MakeFormRendererId());
+  card_form.set_url(GURL("https://merchant.test/checkout.html"));
+  card_form.set_main_frame_origin(main_origin());
+  card_form.set_fields(
+      {CreateTestFormField("Name on card", "name", "",
+                           FormControlType::kInputPassword, "cc-name"),
+       CreateTestFormField("Card number", "number", "",
+                           FormControlType::kInputText, "cc-number"),
+       CreateTestFormField("Expiration month", "month", "",
+                           FormControlType::kInputText, "cc-exp-month"),
+       CreateTestFormField("Expiration year", "year", "",
+                           FormControlType::kInputText, "cc-exp-year"),
+       CreateTestFormField("CVC", "cvc", "", FormControlType::kInputPassword,
+                           "cc-csc")});
+  card_form = CreateFormDataForFrame(
+      std::move(card_form),
+      LocalFrameToken(main_rfh()->GetFrameToken().value()));
+  for (int i : {kName, kMonth, kYear}) {
+    test_api(card_form).field(i).set_origin(main_origin());
+  }
+  for (int i : {kNumber, kCvc}) {
+    test_api(card_form).field(i).set_origin(iframe_origin());
+  }
+  manager().OnFormsSeen({card_form}, /*removed_forms=*/{},
+                        AutofillManagerTestApi::pass_key());
+
+  FormData filled_form = card_form;
+  FillAllFields(filled_form, /*name=*/u"SecretPassphrase");
+
+  EXPECT_THAT(
+      ApplyFillAndGetTypes(filled_form, iframe_origin()),
+      UnorderedElementsAre(
+          Pair(card_form.fields()[kName].global_id(), UNKNOWN_TYPE),
+          Pair(card_form.fields()[kNumber].global_id(), UNKNOWN_TYPE),
+          Pair(card_form.fields()[kMonth].global_id(), CREDIT_CARD_EXP_MONTH),
+          Pair(card_form.fields()[kYear].global_id(),
+               AnyOf(CREDIT_CARD_EXP_2_DIGIT_YEAR,
+                     CREDIT_CARD_EXP_4_DIGIT_YEAR)),
+          Pair(card_form.fields()[kCvc].global_id(), UNKNOWN_TYPE)));
+  histogram_tester.ExpectUniqueSample(
+      kCrossOriginMainFrameValidationHistogram,
+      MainFrameCreditCardFieldValidationResult::kAllowed, 2);
 }
 
 }  // namespace

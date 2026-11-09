@@ -2725,6 +2725,20 @@ TEST_F(ContextualSearchboxHandlerTest,
   }
 }
 
+// The opt-in applies to the current model and whenever the handler re-attaches.
+TEST_F(ContextualSearchboxHandlerTest, OptInToDynamicAimFulfillment) {
+  ASSERT_TRUE(handler().input_state_model());
+  EXPECT_FALSE(
+      handler().input_state_model()->dynamic_aim_fulfillment_enabled());
+
+  handler().OptInToDynamicAimFulfillment();
+  EXPECT_TRUE(handler().input_state_model()->dynamic_aim_fulfillment_enabled());
+
+  handler().InitializeInputStateModel();
+  ASSERT_TRUE(handler().input_state_model());
+  EXPECT_TRUE(handler().input_state_model()->dynamic_aim_fulfillment_enabled());
+}
+
 TEST_F(ContextualSearchboxHandlerTest, SubmitQueryWithAdditionalParams) {
   // Ensure udm param is always set as an additional param.
   SubmitQueryAndWaitForNavigation();
@@ -4243,7 +4257,9 @@ TEST_F(ContextualSearchboxHandlerTestTabsTest, GetRecentTabs) {
     auto tabs = future.Take();
     ASSERT_EQ(tabs.size(), 2u);
     EXPECT_EQ(tabs[0]->tab_id, gmail_tab->GetHandle().raw_value());
+    EXPECT_TRUE(tabs[0]->recent_tab);
     EXPECT_EQ(tabs[1]->tab_id, youtube_tab->GetHandle().raw_value());
+    EXPECT_FALSE(tabs[1]->recent_tab);
   }
 
   content::WebContentsTester::For(example_tab->GetContents())
@@ -4257,7 +4273,9 @@ TEST_F(ContextualSearchboxHandlerTestTabsTest, GetRecentTabs) {
     handler().GetRecentTabs(future.GetCallback());
     auto tabs = future.Take();
     EXPECT_EQ(tabs[0]->tab_id, example_tab->GetHandle().raw_value());
+    EXPECT_TRUE(tabs[0]->recent_tab);
     EXPECT_EQ(tabs[1]->tab_id, gmail_tab->GetHandle().raw_value());
+    EXPECT_FALSE(tabs[1]->recent_tab);
   }
 }
 
@@ -4312,8 +4330,10 @@ TEST_F(ContextualSearchboxHandlerTestTabsTest,
   ASSERT_EQ(tabs.size(), 2u);
   EXPECT_EQ(tabs[0]->tab_id, active_tab->GetHandle().raw_value());
   EXPECT_TRUE(tabs[0]->show_in_current_tab_chip);
+  EXPECT_TRUE(tabs[0]->recent_tab);
   EXPECT_EQ(tabs[1]->tab_id, background_tab->GetHandle().raw_value());
   EXPECT_FALSE(tabs[1]->show_in_current_tab_chip);
+  EXPECT_FALSE(tabs[1]->recent_tab);
 }
 
 TEST_F(ContextualSearchboxHandlerTestTabsTest,

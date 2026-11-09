@@ -15,6 +15,7 @@
 #include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "ash/constants/geolocation_access_level.h"
 #include "ash/display/cros_display_config.h"
 #include "ash/public/cpp/ash_prefs.h"
@@ -165,7 +166,6 @@ void Preferences::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
       ash::prefs::kSystemTimezoneAutomaticDetectionPolicy,
       enterprise_management::SystemTimezoneProto::USERS_DECIDE);
-  registry->RegisterStringPref(::prefs::kMinimumAllowedChromeVersion, "");
   registry->RegisterBooleanPref(prefs::kDeviceSystemWideTracingEnabled, true);
   registry->RegisterBooleanPref(
       prefs::kLocalStateDevicePeripheralDataAccessEnabled, false);
@@ -212,10 +212,10 @@ void Preferences::RegisterProfilePrefs(
   registry->RegisterBooleanPref(prefs::kEnableTouchpadThreeFingerClick, false);
   // This preference can only be set to true by policy or command_line flag
   // and it should not carry over to sessions were neither of these is set.
-  registry->RegisterBooleanPref(::prefs::kUnifiedDesktopEnabledByDefault, false,
+  registry->RegisterBooleanPref(prefs::kUnifiedDesktopEnabledByDefault, false,
                                 PrefRegistry::NO_REGISTRATION_FLAGS);
-  registry->RegisterBooleanPref(::prefs::kAllowExcludeDisplayInMirrorMode,
-                                false, PrefRegistry::NO_REGISTRATION_FLAGS);
+  registry->RegisterBooleanPref(prefs::kAllowExcludeDisplayInMirrorMode, false,
+                                PrefRegistry::NO_REGISTRATION_FLAGS);
 
   // TODO(anasalazar): Finish moving this to ash.
   registry->RegisterBooleanPref(
@@ -251,10 +251,7 @@ void Preferences::RegisterProfilePrefs(
   registry->RegisterBooleanPref(
       prefs::kTouchpadHapticFeedback, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PRIORITY_PREF);
-  registry->RegisterBooleanPref(::prefs::kLabsMediaplayerEnabled, false);
   registry->RegisterBooleanPref(::ash::prefs::kLabsAdvancedFilesystemEnabled,
-                                false);
-  registry->RegisterBooleanPref(::prefs::kAppReinstallRecommendationEnabled,
                                 false);
 
   registry->RegisterIntegerPref(
@@ -514,11 +511,6 @@ void Preferences::RegisterProfilePrefs(
   registry->RegisterBooleanPref(
       ash::prefs::kHatsSlowAndLaggyDeepDiveSurveyIsSelected, false);
 
-  registry->RegisterBooleanPref(::prefs::kPinUnlockFeatureNotificationShown,
-                                false);
-  registry->RegisterBooleanPref(
-      ::prefs::kFingerprintUnlockFeatureNotificationShown, false);
-
   // We don't sync EOL related prefs because they are device specific.
   registry->RegisterBooleanPref(ash::prefs::kEolNotificationDismissed, false);
   registry->RegisterTimePref(ash::prefs::kEndOfLifeDate, base::Time());
@@ -529,8 +521,7 @@ void Preferences::RegisterProfilePrefs(
   registry->RegisterBooleanPref(prefs::kExtendedUpdatesNotificationDismissed,
                                 false);
 
-  registry->RegisterBooleanPref(::prefs::kCastReceiverEnabled, false);
-  registry->RegisterBooleanPref(::prefs::kShowArcSettingsOnSessionStart, false);
+  registry->RegisterBooleanPref(prefs::kCastReceiverEnabled, false);
   registry->RegisterBooleanPref(::ash::prefs::kShowSyncSettingsOnSessionStart,
                                 false);
 
@@ -555,15 +546,11 @@ void Preferences::RegisterProfilePrefs(
   registry->RegisterBooleanPref(
       ::ash::prefs::kTPMFirmwareUpdateCleanupDismissed, false);
 
-  registry->RegisterBooleanPref(::prefs::kStartupBrowserWindowLaunchSuppressed,
+  registry->RegisterBooleanPref(prefs::kStartupBrowserWindowLaunchSuppressed,
                                 false);
 
   registry->RegisterBooleanPref(prefs::kLoginDisplayPasswordButtonEnabled,
                                 true);
-
-  registry->RegisterBooleanPref(
-      prefs::kSuggestedContentEnabled, true,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
 
   registry->RegisterBooleanPref(prefs::kMagicBoostEnabled, true);
 
@@ -657,7 +644,7 @@ void Preferences::InitUserPrefs(sync_preferences::PrefServiceSyncable* prefs) {
   three_finger_click_enabled_.Init(prefs::kEnableTouchpadThreeFingerClick,
                                    prefs, callback);
   unified_desktop_enabled_by_default_.Init(
-      ::prefs::kUnifiedDesktopEnabledByDefault, prefs, callback);
+      prefs::kUnifiedDesktopEnabledByDefault, prefs, callback);
   // TODO(anasalazar): Finish moving this to ash.
   natural_scroll_.Init(prefs::kNaturalScroll, prefs, callback);
   mouse_reverse_scroll_.Init(prefs::kMouseReverseScroll, prefs, callback);
@@ -686,8 +673,8 @@ void Preferences::InitUserPrefs(sync_preferences::PrefServiceSyncable* prefs) {
                                  callback);
   touchpad_haptic_click_sensitivity_.Init(
       prefs::kTouchpadHapticClickSensitivity, prefs, callback);
-  download_default_directory_.Init(::prefs::kDownloadDefaultDirectory, prefs,
-                                   callback);
+  download_default_directory_.Init(ash::chrome_prefs::kDownloadDefaultDirectory,
+                                   prefs, callback);
   preload_engines_.Init(ash::prefs::kLanguagePreloadEngines, prefs, callback);
   enabled_imes_.Init(ash::prefs::kLanguageEnabledImes, prefs, callback);
   current_input_method_.Init(ash::prefs::kLanguageCurrentInputMethod, prefs,
@@ -931,7 +918,7 @@ void Preferences::ApplyPreferences(ApplyReason reason,
     }
   }
   if (reason != REASON_PREF_CHANGED ||
-      pref_name == ::prefs::kUnifiedDesktopEnabledByDefault) {
+      pref_name == prefs::kUnifiedDesktopEnabledByDefault) {
     // "Unified Desktop" is a per-user policy setting which will not be applied
     // until a user logs in.
     if (ash::Shell::HasInstance()) {
@@ -1092,7 +1079,7 @@ void Preferences::ApplyPreferences(ApplyReason reason,
     }
   }
   if (reason != REASON_PREF_CHANGED ||
-      pref_name == ::prefs::kDownloadDefaultDirectory) {
+      pref_name == ash::chrome_prefs::kDownloadDefaultDirectory) {
     const bool default_download_to_drive = drive::util::IsUnderDriveMountPoint(
         download_default_directory_.GetValue());
     ReportBooleanPrefApplication(

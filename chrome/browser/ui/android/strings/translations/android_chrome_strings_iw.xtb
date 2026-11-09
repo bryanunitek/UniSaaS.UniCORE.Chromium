@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">אין להציג את ההצעה לתרגם את האתרים האלה</translation>
 <translation id="1143193470214071120">אפשר לסגור חלון או לנהל חלונות</translation>
 <translation id="1143486892058798649">שמירת הקישור בשם…</translation>
+<translation id="1149644372535087155">‏שמירת סיסמאות ב-Chrome</translation>
 <translation id="1149725087019908252">מתבצעת סריקה של <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504">‏האפליקציה <ph name="APP_NAME" /> תיפתח ב-Chrome. המשך הפעולה מבטא הסכמה <ph name="BEGIN_LINK1" />לתנאים ולהגבלות של Google<ph name="END_LINK1" /> ו<ph name="BEGIN_LINK2" />לתנאים ולהגבלות הנוספים של Google Chrome ו-ChromeOS<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">‏אין לך סיסמאות שמורות במנהל הסיסמאות של Google.</translation>
@@ -297,6 +298,7 @@
 <translation id="2190355936436201913">(ריק)</translation>
 <translation id="219283042927675668">כרטיסיות בקבוצה</translation>
 <translation id="2194856509914051091">מה כדאי לקחת בחשבון</translation>
+<translation id="2195339740518523951">‏רוצה ליהנות מהאבטחה החזקה ביותר של Chrome?</translation>
 <translation id="2196695604589508993">פתיחת ההיסטוריה</translation>
 <translation id="2205701497928406883">‫<ph name="TAB_TITLE" />, כרטיסייה שהוצמדה והתוכן בה משותף</translation>
 <translation id="22091350895006575">הוספה של שם המשתמש</translation>
@@ -1249,6 +1251,7 @@
 <translation id="6022659036123304283">‏אפשר להתאים אישית את Chrome בדרך שנוחה לך</translation>
 <translation id="6023820583797130428">כדי לחזור למסך הקודם צריך לפתוח את התפריט</translation>
 <translation id="6026538407078977628">הרחבה למסך מלא</translation>
+<translation id="6027619584715411062">כדאי להיכנס לחשבון כדי שהסימניות, הסיסמאות ונתונים נוספים יופיעו בכל המכשירים שלך.</translation>
 <translation id="6039379616847168523">מעבר לכרטיסייה הבאה</translation>
 <translation id="6040143037577758943">סגירה</translation>
 <translation id="604124094241169006">אוטומטי</translation>
@@ -1607,6 +1610,7 @@
 <translation id="72415438529550637">ההצעה לסיסמה נסגרה.</translation>
 <translation id="724510009481365878">לא ניתן להדפיס את הדף הזה</translation>
 <translation id="7248671827512403053">יישום</translation>
+<translation id="7253205084599155458">הצגת הניווט והכלים בסרגל הכלים התחתון לגישה קלה</translation>
 <translation id="7253951228444156601">הסיסמאות נבדקות…</translation>
 <translation id="7265857422443387781">‏חיפוש כרטיסייה עם Google Lens <ph name="BEGIN_NEW" />חדש<ph name="END_NEW" /></translation>
 <translation id="727288900855680735">לשלוח את <ph name="ONE_TIME_CODE" /> אל <ph name="ORIGIN" />?</translation>
@@ -1671,6 +1675,7 @@
 <translation id="7499065150275272675">‫<ph name="TAB_TITLE" />, כרטיסייה שהוצמדה והתוכן בה מושתק</translation>
 <translation id="7500851014030446046">‏המערכת מורידה את קובץ ה-PDF</translation>
 <translation id="7501135638693251872">כל הסימניות</translation>
+<translation id="7504076214066136798">אי אפשר לשמור את השינויים</translation>
 <translation id="7507207699631365376">הצגת <ph name="BEGIN_LINK" />מדיניות הפרטיות<ph name="END_LINK" /> של הספק הזה</translation>
 <translation id="750886945254958667">אפשר לשמור את הקבוצה הזו כדי להוסיף כרטיסיות מאוחר יותר, או לעזוב אותה אם אין לך יותר צורך בה</translation>
 <translation id="7514365320538308">הורדה</translation>

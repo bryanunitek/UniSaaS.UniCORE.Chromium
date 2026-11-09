@@ -120,6 +120,10 @@ BASE_FEATURE(kClipboardOnExtensionServiceWorker,
 BASE_FEATURE(kComputePressureRateObfuscationMitigation,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// Reports a touch pointerType on contextmenu events dispatched from touch
+// selection menus (non-located context menus). Kill switch.
+BASE_FEATURE(kContextMenuPointerTypeForTouch, base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kCrashReportingAPIMoreContextData,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -753,6 +757,9 @@ BASE_FEATURE(kFontAccessCheckFrameIsActive, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kFontResourceDecodedMemoryAccounting,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kResourceEncodedMemoryAccounting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kBlockPartialResponseWithoutRange,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -798,6 +805,12 @@ BASE_FEATURE(kFreezeSharedWorker, base::FEATURE_ENABLED_BY_DEFAULT);
 // are the interstitials that pop up and block the main content of the page.
 BASE_FEATURE(kFrequencyCappingForOverlayPopupDetection,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+// Gates periodic 1 Hz renderer memory metrics sampling timers on renderer
+// visibility on Android.
+BASE_FEATURE(kGateMemoryMetricsOnVisibility, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 BASE_FEATURE(kGlobalPrivacyControlAlwaysSample,
              base::FEATURE_DISABLED_BY_DEFAULT);

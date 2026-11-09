@@ -41,12 +41,17 @@
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/glic_features.mojom-features.h"
 #include "chrome/browser/glic/host/glic_features.mojom.h"
+#include "chrome/browser/glic/host/glic_provider_change_relaunch.h"
 #include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/public/glic_feature.h"
 #include "chrome/browser/glic/public/glic_fre_store.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/glic_provider_change.h"
 #include "chrome/browser/glic/public/glic_provider_latch.h"
 #include "chrome/browser/glic/public/glic_provider_spec.h"
+#include "chrome/browser/glic/public/provider_features.h"
+#include "chrome/browser/glic/suggestions/contextual_cueing_features.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/prefs/browser_prefs.h"
@@ -74,6 +79,7 @@
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/skills/features.h"
 #include "components/subscription_eligibility/subscription_eligibility_prefs.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/variations/service/test_variations_service.h"
@@ -81,6 +87,7 @@
 #include "components/variations/variations_switches.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_task_environment.h"
+#include "pdf/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -744,6 +751,32 @@ TEST_F(GlicEnablingProfileEligibilityTest, Eligible) {
   EXPECT_TRUE(GlicEnabling::IsProfileEligible(profile()));
 }
 
+// Consumer Gemini supports contextual cueing and zero state suggestions, so
+// they follow their flags.
+TEST_F(GlicEnablingProfileEligibilityTest,
+       ContextualCueingAndZeroStateSuggestionsFollowFlags) {
+  EXPECT_TRUE(GetGlicProviderSpec(profile()).SupportsFeature(
+      GlicFeature::kContextualCueing));
+  EXPECT_TRUE(GetGlicProviderSpec(profile()).SupportsFeature(
+      GlicFeature::kZeroStateSuggestions));
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatures(
+        /*enabled_features=*/{kContextualCueing, kGlicZeroStateSuggestions},
+        /*disabled_features=*/{});
+    EXPECT_TRUE(IsContextualCueingEnabled(profile()));
+    EXPECT_TRUE(IsZeroStateSuggestionsEnabled(profile()));
+  }
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{kContextualCueing, kGlicZeroStateSuggestions});
+    EXPECT_FALSE(IsContextualCueingEnabled(profile()));
+    EXPECT_FALSE(IsZeroStateSuggestionsEnabled(profile()));
+  }
+}
+
 TEST_F(GlicEnablingProfileEligibilityTest, WasPreviouslyNotAllowedTest) {
   // 1. Initially, when signed out and never previously evaluated, it defaults
   // to false (not previously not allowed).
@@ -1375,7 +1408,7 @@ class GlicEnablingGatedFeatureTest
       public testing::WithParamInterface<GatedFeatureParams> {
  public:
   void SetUpFeature(const base::Feature& feature,
-                    const base::FeatureParam<bool>& onboarding_param) {
+                    std::string_view onboarding_param_name) {
     GlicEnablingProfileReadyStateTestBase::SetUp();
     if (IsSkipped()) {
       return;
@@ -1392,7 +1425,7 @@ class GlicEnablingGatedFeatureTest
     if (GetParam().is_feature_enabled) {
       enabled_features.push_back(
           {feature,
-           {{onboarding_param.name,
+           {{std::string(onboarding_param_name),
              GetParam().is_onboarding_param_enabled ? "true" : "false"}}});
     } else {
       disabled_features.push_back(feature);
@@ -1421,7 +1454,7 @@ class GlicEnablingAutoOpenForPdfTest : public GlicEnablingGatedFeatureTest {
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(switches::kTestType);
     SetUpFeature(features::kAutoOpenGlicForPdf,
-                 features::kAutoOpenGlicForPdfWithOnboarding);
+                 features::kAutoOpenGlicForPdfWithOnboardingParam);
   }
 };
 
@@ -4106,6 +4139,64 @@ TEST_F(GlicEnablingGeicPolicyGlicDisabledTest,
   EXPECT_EQ(GlicKeyedService::Get(profile()), nullptr);
 }
 
+// Like the latch, a pending provider change doesn't depend on Glic
+// eligibility. Callers decide whether to act on it.
+TEST_F(GlicEnablingGeicPolicyGlicDisabledTest,
+       PendingProviderChangeReportedWhenIneligibleForGlic) {
+  base::test::ScopedFeatureList feature_list(
+      features::kGeicProviderChangePrompt);
+  ASSERT_FALSE(GlicEnabling::IsProfileEligible(profile()));
+
+  static_cast<sync_preferences::TestingPrefServiceSyncable*>(
+      profile()->GetPrefs())
+      ->RemoveManagedPref(prefs::kGlicGeminiEnterpriseUrl);
+
+  EXPECT_EQ(GlicEnabling::GetPendingProviderChange(profile()),
+            GlicProviderChange::kGeicToGemini);
+}
+
+// The relaunch button can't restart Chrome unless a provider change is pending.
+TEST_F(GlicEnablingGeicPolicyTest,
+       RelaunchForProviderChange_DoesNothingWithoutPendingChange) {
+  base::test::ScopedFeatureList feature_list(
+      features::kGeicProviderChangePrompt);
+  ASSERT_EQ(GlicEnabling::GetPendingProviderChange(profile()),
+            GlicProviderChange::kNone);
+  base::UserActionTester user_action_tester;
+  int restart_count = 0;
+  auto restart_override = SetRestartCallbackForTesting(
+      base::BindLambdaForTesting([&] { ++restart_count; }));
+
+  MaybeRelaunchForProviderChange(profile());
+
+  EXPECT_EQ(restart_count, 0);
+  EXPECT_EQ(
+      user_action_tester.GetActionCount("Glic.ProviderChange.RelaunchClicked"),
+      0);
+}
+
+TEST_F(GlicEnablingGeicPolicyTest,
+       RelaunchForProviderChange_RestartsWithPendingChange) {
+  base::test::ScopedFeatureList feature_list(
+      features::kGeicProviderChangePrompt);
+  static_cast<sync_preferences::TestingPrefServiceSyncable*>(
+      profile()->GetPrefs())
+      ->RemoveManagedPref(prefs::kGlicGeminiEnterpriseUrl);
+  ASSERT_EQ(GlicEnabling::GetPendingProviderChange(profile()),
+            GlicProviderChange::kGeicToGemini);
+  base::UserActionTester user_action_tester;
+  int restart_count = 0;
+  auto restart_override = SetRestartCallbackForTesting(
+      base::BindLambdaForTesting([&] { ++restart_count; }));
+
+  MaybeRelaunchForProviderChange(profile());
+
+  EXPECT_EQ(restart_count, 1);
+  EXPECT_EQ(
+      user_action_tester.GetActionCount("Glic.ProviderChange.RelaunchClicked"),
+      1);
+}
+
 // Like `GlicEnablingGeicPolicyTest`, but with the `enabled` param of
 // `features::kGeic` set to false when the profile is created.
 class GlicEnablingGeicPolicyEnabledParamFalseTest
@@ -4198,6 +4289,61 @@ TEST_F(GlicEnablingGeicPolicyTest,
             mojom::ProfileReadyState::kReady);
 }
 
+// Consumer-only entry points stay off for an enabled Gemini Enterprise
+// profile, even with their features enabled.
+TEST_F(GlicEnablingGeicPolicyTest, ConsumerOnlyEntryPointsDisabledForGeic) {
+  std::vector<base::test::FeatureRef> enabled_features = {
+      features::kAutoOpenGlicForPdf, features::kGlicSelectionPrompt,
+      features::kGlicCaptureRegion,  features::kGlicExperimentalTriggering,
+#if BUILDFLAG(ENABLE_PDF)
+      features::kPdfGlicSummarize,
+#endif
+  };
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(enabled_features, /*disabled_features=*/{});
+  ASSERT_TRUE(GlicEnabling::IsEnabledForProfile(profile()));
+  // Complete the GEiC FRE so only the provider keeps PDF auto-open off.
+  geic::CompleteFre(profile());
+  ASSERT_TRUE(GlicEnabling::HasConsentedForProfile(profile()));
+
+  EXPECT_FALSE(GlicEnabling::IsPdfSummarizeEnabled(profile()));
+  EXPECT_FALSE(GlicEnabling::IsAutoOpenForPdfEnabled(profile()));
+  EXPECT_FALSE(GlicEnabling::IsInlineCueEnabledForProfile(profile()));
+  EXPECT_FALSE(GetGlicProviderSpec(profile()).SupportsFeature(
+      GlicFeature::kCaptureRegion));
+
+  GlicKeyedService* service = GlicKeyedService::Get(profile());
+  ASSERT_TRUE(service);
+  EXPECT_EQ(service->enabling().GetExperimentalTriggeringState(),
+            syncer::DeviceInfo::GlicExperimentalTriggeringState::kUnavailable);
+  EXPECT_FALSE(service->enabling().ShouldShowExperimentalTriggeringToggle());
+}
+
+// Contextual cueing and zero state suggestions stay off for a Gemini Enterprise
+// profile and its incognito profile, even with their features enabled. This
+// also keeps GlicInstanceImpl from warming zero state suggestions, which would
+// send page content to the consumer model.
+TEST_F(GlicEnablingGeicPolicyTest,
+       ContextualCueingAndZeroStateSuggestionsDisabledForGeic) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kContextualCueing, kGlicZeroStateSuggestions},
+      /*disabled_features=*/{});
+  ASSERT_TRUE(GlicEnabling::IsEnabledForProfile(profile()));
+
+  EXPECT_FALSE(GetGlicProviderSpec(profile()).SupportsFeature(
+      GlicFeature::kContextualCueing));
+  EXPECT_FALSE(GetGlicProviderSpec(profile()).SupportsFeature(
+      GlicFeature::kZeroStateSuggestions));
+  EXPECT_FALSE(IsContextualCueingEnabled(profile()));
+  EXPECT_FALSE(IsZeroStateSuggestionsEnabled(profile()));
+
+  Profile* incognito =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  EXPECT_FALSE(IsContextualCueingEnabled(incognito));
+  EXPECT_FALSE(IsZeroStateSuggestionsEnabled(incognito));
+}
+
 TEST_F(GlicEnablingGeicPolicyTest, Provider_LatchedAtCreation) {
   // Removing the policy after the profile was created does not change the
   // provider or the latched guest URL for the rest of the session.
@@ -4235,13 +4381,13 @@ TEST_F(GlicEnablingGeicPolicyTest, GeicEnabledWithoutConsumerAccountChecks) {
                   ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
                   .IsEmpty());
 
+  // Consent comes from the GEiC FRE, not the consumer FRE.
+  // `GeicFreControlsConsentInEnablement` covers consent in more detail.
+  geic::CompleteFre(profile());
+
   GlicEnabling::ProfileEnablement enablement =
       GlicEnabling::EnablementForProfile(profile());
   EXPECT_TRUE(enablement.IsEnabled());
-  // This is true only because `features::kGeicFre` is disabled (the default),
-  // so `GeminiEnterpriseGlicFreStore` reports the FRE as `kCompleted` (see
-  // glic_fre_store_impl.cc). `GeicFreControlsConsentInEnablement` covers
-  // consent with the GEiC FRE enabled.
   EXPECT_TRUE(enablement.IsEnabledAndConsented());
   EXPECT_TRUE(enablement.ShouldShowGlicButton());
   EXPECT_TRUE(enablement.ShouldShowSettingsPage());
@@ -4451,6 +4597,23 @@ TEST_F(GlicEnablingGeicPolicyCountryCheckTest,
 
   EXPECT_FALSE(GlicEnabling::IsEnabledForFirstRunProfile(profile(), "us", "us",
                                                          account_info));
+}
+
+// Gemini Enterprise doesn't support Chrome Skills.
+TEST_F(GlicEnablingGeicPolicyTest, GeicDoesNotSupportSkills) {
+  base::test::ScopedFeatureList feature_list(::features::kSkillsEnabled);
+  ASSERT_EQ(GlicProviderLatch::GetProvider(*profile()),
+            GlicProvider::kGeminiEnterprise);
+  EXPECT_FALSE(
+      GetGlicProviderSpec(profile()).SupportsFeature(GlicFeature::kSkills));
+}
+
+// Consumer Gemini supports Chrome Skills.
+TEST_F(GlicEnablingGeicPolicyFeatureDisabledTest, ConsumerSupportsSkills) {
+  base::test::ScopedFeatureList feature_list(::features::kSkillsEnabled);
+  ASSERT_EQ(GlicProviderLatch::GetProvider(*profile()), GlicProvider::kGemini);
+  EXPECT_TRUE(
+      GetGlicProviderSpec(profile()).SupportsFeature(GlicFeature::kSkills));
 }
 
 // Gemini Enterprise skips the server-side user status check, so it doesn't

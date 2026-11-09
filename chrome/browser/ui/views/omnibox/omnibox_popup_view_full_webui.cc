@@ -11,6 +11,7 @@
 
 #include "base/auto_reset.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
@@ -372,7 +373,7 @@ void OmniboxPopupViewFullWebUI::OnTabChanged(content::WebContents* contents) {
   // overrides any OS-default focus selection (such as macOS Select-All).
   if (target_popup_state == OmniboxPopupState::kFull) {
     if (presenter()) {
-      if (presenter()->ShouldApplyHeightWorkarounds()) {
+      if (presenter()->config().height_workarounds) {
         // Reset cached height to 1 on tab switch. This forces
         // `OmniboxPopupFullPresenter::SynchronizePopupBounds` to fall back to
         // `default_height` (the single location bar height) and drop
@@ -520,6 +521,15 @@ void OmniboxPopupViewFullWebUI::
   }
 }
 
+void OmniboxPopupViewFullWebUI::Blur() {
+  // This view always creates an `OmniboxPopupFullPresenter`.
+  if (auto* const full_presenter =
+          static_cast<OmniboxPopupFullPresenter*>(presenter())) {
+    full_presenter->DeactivatePopupAndKillFocus(
+        OmniboxPopupFullPresenter::FocusAfterBlur::kNone);
+  }
+}
+
 void OmniboxPopupViewFullWebUI::OnBlur() {
   focused_ = false;
   if (auto* popup_handler = GetPopupHandler()) {
@@ -566,6 +576,26 @@ bool OmniboxPopupViewFullWebUI::IsReverting() const {
 
 void OmniboxPopupViewFullWebUI::SetIsReverting(bool reverting) {
   is_reverting_ = reverting;
+}
+
+// TODO(crbug.com/582852137): Handle ChromeOS in
+// `OnFullscreenTransitionStarting` too, instead of in
+// `BrowserView::PrepareFullscreen()` (crrev.com/c/8717429).
+void OmniboxPopupViewFullWebUI::OnFullscreenTransitionStarting() {
+#if BUILDFLAG(IS_MAC)
+  // This popup is a child window, so AppKit doesn't animate it with the
+  // browser window, and `LocationBarView` doesn't close it for fullscreen on
+  // macOS, where the location bar stays drawn. Close it for the transition
+  // while the omnibox is unfocused, keeping any draft. `BrowserView` reopens
+  // it with `ReshowPopup()` once the transition completes. A focused popup
+  // holds activation, see crbug.com/582521205.
+  if (!controller()->edit_model()->has_focus() &&
+      controller()->popup_state_manager()->popup_state() ==
+          OmniboxPopupState::kFull) {
+    controller()->popup_state_manager()->SetPopupState(
+        OmniboxPopupState::kNone);
+  }
+#endif  // BUILDFLAG(IS_MAC)
 }
 
 void OmniboxPopupViewFullWebUI::DidFinishNavigation(

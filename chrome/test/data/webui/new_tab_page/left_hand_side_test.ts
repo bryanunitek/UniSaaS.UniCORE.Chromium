@@ -11,6 +11,7 @@ import {LhsClientAction} from 'chrome://new-tab-page/lazy_load.js';
 import type {LeftHandSideElement} from 'chrome://new-tab-page/new_tab_page.js';
 import {COLOR_PROVIDER_CHANGED, ColorChangeUpdater, NtpLhsMessageType, WindowProxy} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {TestMock} from 'chrome://webui-test/test_mock.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
@@ -24,8 +25,14 @@ suite('NewTabPageLeftHandSideTest', () => {
   let leftHandSide: LeftHandSideElement;
   let windowProxy: TestMock<WindowProxy>;
 
+  function getExpandedIframe(): IframeElement|null {
+    return leftHandSide.shadowRoot.querySelector<IframeElement>('#expanded');
+  }
+
   function getExpandedIframeWindow(): Window {
-    const iframe = leftHandSide.$.expanded.shadowRoot.querySelector('iframe');
+    const iframeElement = getExpandedIframe();
+    assertTrue(!!iframeElement);
+    const iframe = iframeElement.shadowRoot.querySelector('iframe');
     assertTrue(!!iframe);
     assertTrue(!!iframe.contentWindow);
     return iframe.contentWindow;
@@ -47,6 +54,7 @@ suite('NewTabPageLeftHandSideTest', () => {
       enableThreadsRailHybrid: true,
       expandedLhsUrl: EXPANDED_LHS_URL,
       lhsRailConfig: {items: []},
+      threadsRailPreloadDebounceMs: 0,
     });
     windowProxy = installMock(WindowProxy);
     // Prevents the iframe from actually loading the LHS page.
@@ -59,14 +67,20 @@ suite('NewTabPageLeftHandSideTest', () => {
     await microtasksFinished();
   }
 
-  function getExpandedIframe(): IframeElement {
-    return leftHandSide.$.expanded;
+  async function expandLeftHandSide() {
+    const folded =
+        leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded');
+    assertTrue(!!folded);
+    folded.click();
+    await microtasksFinished();
   }
 
   test('updates color-scheme on isDark changes', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     const iframe = getExpandedIframe();
+    assertTrue(!!iframe);
     assertEquals('light', getComputedStyle(iframe).colorScheme);
 
     leftHandSide.isDark = true;
@@ -104,11 +118,18 @@ suite('NewTabPageLeftHandSideTest', () => {
       loadTimeData.overrideValues({enableThreadsRailHybrid});
       await createLeftHandSide();
 
+      if (enableThreadsRailHybrid) {
+        assertFalse(!!getExpandedIframe());
+        assertEquals(0, windowProxy.getCallCount('ensureLazyLoaded'));
+        await expandLeftHandSide();
+        assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+      }
+
       const iframe = getExpandedIframe();
       assertTrue(!!iframe);
       assertEquals('NTP-IFRAME', iframe.tagName);
       assertEquals(EXPANDED_LHS_URL, iframe.src);
-      assertEquals('unbounded-element', iframe.allow);
+      assertEquals('clipboard-write; unbounded-element', iframe.allow);
       assertEquals(enableThreadsRailHybrid ? '261px' : '', iframe.style.width);
       // In hybrid mode the host starts at the folded rail's width. In
       // full-iframe mode no width is known until the iframe reports one.
@@ -121,8 +142,7 @@ suite('NewTabPageLeftHandSideTest', () => {
       assertEquals(
           enableThreadsRailHybrid ? `${folded!.offsetWidth}px` : '',
           getHostWidthProperty());
-      assertEquals(enableThreadsRailHybrid, iframe.hidden);
-      assertTrue(iframe.inert);
+      assertTrue(iframe.hidden);
       assertFalse(iframe.classList.contains('ready'));
     });
   });
@@ -140,63 +160,30 @@ suite('NewTabPageLeftHandSideTest', () => {
     assertTrue(!!iframe);
     assertEquals('', iframe.style.width);
     assertFalse(iframe.hidden);
-    assertFalse(iframe.inert);
     assertTrue(iframe.classList.contains('ready'));
   });
 
-  test(
-      'keeps rail folded while updating expanded width on NTP_LHS_READY in' +
-          ' hybrid mode',
-      async () => {
-        await createLeftHandSide();
+  test('updates expanded width and ready state on NTP_LHS_READY', async () => {
+    await createLeftHandSide();
+    await expandLeftHandSide();
 
-        postLhsMessage({
-          type: NtpLhsMessageType.NTP_LHS_READY,
-          width: 320,
-        });
-        await microtasksFinished();
+    postLhsMessage({
+      type: NtpLhsMessageType.NTP_LHS_READY,
+      width: 320,
+    });
+    await microtasksFinished();
 
-        const folded =
-            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
-        const iframe = getExpandedIframe();
-        assertTrue(!!iframe);
-        assertEquals('320px', iframe.style.width);
-        assertEquals(`${folded.offsetWidth}px`, getHostWidthProperty());
-        assertFalse(folded.hidden);
-        assertTrue(iframe.hidden);
-        assertFalse(iframe.inert);
-        assertTrue(iframe.classList.contains('ready'));
-      });
-
-  test(
-      'expands once NTP_LHS_READY arrives if clicked before ready',
-      async () => {
-        await createLeftHandSide();
-
-        const folded =
-            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
-        const iframe = getExpandedIframe();
-
-        folded.click();
-        await microtasksFinished();
-        assertFalse(folded.hidden);
-        assertTrue(iframe.hidden);
-
-        postLhsMessage({
-          type: NtpLhsMessageType.NTP_LHS_READY,
-          width: 320,
-        });
-        await microtasksFinished();
-        assertTrue(folded.hidden);
-        assertFalse(iframe.hidden);
-      });
+    const iframe = getExpandedIframe();
+    assertTrue(!!iframe);
+    assertEquals('320px', iframe.style.width);
+    assertEquals('320px', getHostWidthProperty());
+    assertFalse(iframe.hidden);
+    assertTrue(iframe.classList.contains('ready'));
+  });
 
   test('falls back to default width on invalid or missing width', async () => {
     await createLeftHandSide();
-    const folded =
-        leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
-    folded.click();
-    await microtasksFinished();
+    await expandLeftHandSide();
 
     for (const invalidWidth of [undefined, 0, -100, '320']) {
       postLhsMessage({
@@ -223,6 +210,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('ignores messages from unexpected origin or invalid type', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     postLhsMessage(
         {
@@ -253,15 +241,16 @@ suite('NewTabPageLeftHandSideTest', () => {
       'does not listen for messages when expandedLhsUrl is empty', async () => {
         loadTimeData.overrideValues({expandedLhsUrl: ''});
         await createLeftHandSide();
+        await expandLeftHandSide();
 
+        const iframe = getExpandedIframe();
+        assertTrue(!!iframe);
         postLhsMessage({
           type: NtpLhsMessageType.NTP_LHS_READY,
           width: 320,
         });
         await microtasksFinished();
 
-        const iframe = getExpandedIframe();
-        assertTrue(!!iframe);
         assertEquals('261px', iframe.style.width);
       });
 
@@ -269,12 +258,14 @@ suite('NewTabPageLeftHandSideTest', () => {
     loadTimeData.overrideValues({enableThreadsRailHybrid: true});
     await createLeftHandSide();
 
-    const expanded = leftHandSide.$.expanded;
     const folded =
         leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
     assertTrue(folded.offsetWidth > 0 && folded.offsetWidth < 261);
     const collapsedWidth = `${folded.offsetWidth}px`;
-    assertEquals(collapsedWidth, getHostWidthProperty());
+
+    await expandLeftHandSide();
+    const expanded = getExpandedIframe();
+    assertTrue(!!expanded);
 
     postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY, width: 320});
     folded.click();
@@ -285,6 +276,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
     postLhsMessage({type: NtpLhsMessageType.NTP_LHS_CLOSE});
     await microtasksFinished();
+    assertEquals(expanded, getExpandedIframe());
     assertTrue(expanded.hidden);
     assertFalse(folded.hidden);
     assertEquals(collapsedWidth, getHostWidthProperty());
@@ -294,41 +286,253 @@ suite('NewTabPageLeftHandSideTest', () => {
     loadTimeData.overrideValues({enableThreadsRailHybrid: true});
     await createLeftHandSide();
 
-    const expanded = leftHandSide.$.expanded;
+    assertFalse(!!getExpandedIframe());
     const folded =
         leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+    const collapsedWidth = `${folded.offsetWidth}px`;
+
+    await expandLeftHandSide();
+    assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+    const initialExpanded = getExpandedIframe();
+    assertTrue(!!initialExpanded);
+    assertTrue(initialExpanded.hidden);
+    assertFalse(folded.hidden);
+    assertEquals(collapsedWidth, getHostWidthProperty());
 
     postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY, width: 320});
     await microtasksFinished();
-    assertTrue(expanded.hidden);
-    assertFalse(folded.hidden);
-    assertEquals(`${folded.offsetWidth}px`, getHostWidthProperty());
-
-    folded.click();
-    await microtasksFinished();
-    assertFalse(expanded.hidden);
+    assertFalse(initialExpanded.hidden);
     assertTrue(folded.hidden);
+    assertEquals('320px', getHostWidthProperty());
+
+    postLhsMessage({type: NtpLhsMessageType.NTP_LHS_CLOSE});
+    await microtasksFinished();
+    assertEquals(initialExpanded, getExpandedIframe());
+    assertTrue(initialExpanded.hidden);
+    assertFalse(folded.hidden);
+    assertEquals(collapsedWidth, getHostWidthProperty());
+
+    await expandLeftHandSide();
+    assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+    assertEquals(initialExpanded, getExpandedIframe());
+    assertFalse(initialExpanded.hidden);
+    assertTrue(folded.hidden);
+    assertEquals('320px', getHostWidthProperty());
   });
 
   test('expands LHS on expand-rail event in hybrid mode', async () => {
     loadTimeData.overrideValues({enableThreadsRailHybrid: true});
     await createLeftHandSide();
 
-    const expanded = leftHandSide.$.expanded;
+    assertFalse(!!getExpandedIframe());
     const folded =
         leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
-
-    postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY});
-    await microtasksFinished();
-    assertTrue(expanded.hidden);
-    assertFalse(folded.hidden);
 
     folded.dispatchEvent(
         new CustomEvent('expand-rail', {bubbles: true, composed: true}));
     await microtasksFinished();
+    assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+    const expanded = getExpandedIframe();
+    assertTrue(!!expanded);
+    assertTrue(expanded.hidden);
+    assertFalse(folded.hidden);
+
+    postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY});
+    await microtasksFinished();
     assertFalse(expanded.hidden);
     assertTrue(folded.hidden);
   });
+
+  ['pointerenter', 'focusin'].forEach(eventName => {
+    test(
+        `preloads expanded LHS iframe on ${eventName} in hybrid mode`,
+        async () => {
+          loadTimeData.overrideValues({enableThreadsRailHybrid: true});
+          await createLeftHandSide();
+
+          assertFalse(!!getExpandedIframe());
+          const folded =
+              leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+          const collapsedWidth = `${folded.offsetWidth}px`;
+
+          // Hovering or focusing the folded rail preloads the expanded iframe
+          // while keeping the rail folded.
+          folded.dispatchEvent(new Event(eventName));
+          await microtasksFinished();
+          assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+          const preloaded = getExpandedIframe();
+          assertTrue(!!preloaded);
+          assertTrue(preloaded.hidden);
+          assertFalse(folded.hidden);
+          assertEquals(collapsedWidth, getHostWidthProperty());
+
+          // Receiving NTP_LHS_READY while preloaded marks the iframe ready and
+          // updates its width, but keeps the rail folded until clicked.
+          postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY, width: 320});
+          await microtasksFinished();
+          assertEquals('320px', preloaded.style.width);
+          assertTrue(preloaded.classList.contains('ready'));
+          assertTrue(preloaded.hidden);
+          assertFalse(folded.hidden);
+          assertEquals(collapsedWidth, getHostWidthProperty());
+
+          // Clicking the folded rail expands immediately since the preloaded
+          // iframe is already ready.
+          folded.click();
+          await microtasksFinished();
+          assertFalse(preloaded.hidden);
+          assertTrue(folded.hidden);
+          assertEquals('320px', getHostWidthProperty());
+        });
+  });
+
+  ['pointerenter', 'focusin'].forEach(eventName => {
+    test(
+        `debounces preloading on ${eventName} when debounce delay is set`,
+        async () => {
+          loadTimeData.overrideValues({
+            enableThreadsRailHybrid: true,
+            threadsRailPreloadDebounceMs: 100,
+          });
+          windowProxy.setResultFor('setTimeout', 42);
+          await createLeftHandSide();
+
+          const folded =
+              leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+
+          folded.dispatchEvent(new Event(eventName));
+          await microtasksFinished();
+
+          assertEquals(1, windowProxy.getCallCount('setTimeout'));
+          const [callback, duration] = windowProxy.getArgs('setTimeout')[0];
+          assertEquals(100, duration);
+          assertEquals(0, windowProxy.getCallCount('ensureLazyLoaded'));
+          assertFalse(!!getExpandedIframe());
+
+          // Triggering the callback completes the preload.
+          await callback();
+          await microtasksFinished();
+          assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+          assertTrue(!!getExpandedIframe());
+        });
+  });
+
+  ['pointerleave', 'focusout'].forEach(eventName => {
+    test(
+        `cancels preload timer on ${eventName}`,
+        async () => {
+          loadTimeData.overrideValues({
+            enableThreadsRailHybrid: true,
+            threadsRailPreloadDebounceMs: 100,
+          });
+          windowProxy.setResultFor('setTimeout', 42);
+          await createLeftHandSide();
+
+          const folded =
+              leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+
+          folded.dispatchEvent(new Event('pointerenter'));
+          await microtasksFinished();
+          assertEquals(1, windowProxy.getCallCount('setTimeout'));
+
+          folded.dispatchEvent(new Event(eventName));
+          await microtasksFinished();
+          assertEquals(1, windowProxy.getCallCount('clearTimeout'));
+          assertEquals(42, windowProxy.getArgs('clearTimeout')[0]);
+          assertEquals(0, windowProxy.getCallCount('ensureLazyLoaded'));
+          assertFalse(!!getExpandedIframe());
+        });
+  });
+
+  test(
+      'cancels pending preload timer and expands immediately on click',
+      async () => {
+        loadTimeData.overrideValues({
+          enableThreadsRailHybrid: true,
+          threadsRailPreloadDebounceMs: 100,
+        });
+        windowProxy.setResultFor('setTimeout', 42);
+        await createLeftHandSide();
+
+        const folded =
+            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+
+        folded.dispatchEvent(new Event('pointerenter'));
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('setTimeout'));
+        assertEquals(0, windowProxy.getCallCount('ensureLazyLoaded'));
+
+        folded.click();
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('clearTimeout'));
+        assertEquals(42, windowProxy.getArgs('clearTimeout')[0]);
+        assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+        assertTrue(!!getExpandedIframe());
+      });
+
+  test(
+      'does not restart timer on repeated pointerenter or focusin while active',
+      async () => {
+        loadTimeData.overrideValues({
+          enableThreadsRailHybrid: true,
+          threadsRailPreloadDebounceMs: 100,
+        });
+        windowProxy.setResultFor('setTimeout', 42);
+        await createLeftHandSide();
+
+        const folded =
+            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+
+        folded.dispatchEvent(new Event('pointerenter'));
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('setTimeout'));
+
+        folded.dispatchEvent(new Event('pointerenter'));
+        folded.dispatchEvent(new Event('focusin'));
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('setTimeout'));
+      });
+
+  test(
+      'cancels pending preload timer when disconnected',
+      async () => {
+        loadTimeData.overrideValues({
+          enableThreadsRailHybrid: true,
+          threadsRailPreloadDebounceMs: 100,
+        });
+        windowProxy.setResultFor('setTimeout', 42);
+        await createLeftHandSide();
+
+        const folded =
+            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+
+        folded.dispatchEvent(new Event('pointerenter'));
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('setTimeout'));
+
+        leftHandSide.remove();
+        assertEquals(1, windowProxy.getCallCount('clearTimeout'));
+        assertEquals(42, windowProxy.getArgs('clearTimeout')[0]);
+      });
+
+  test(
+      'waits for ensureLazyLoaded before stamping expanded iframe',
+      async () => {
+        const lazyLoadResolver = new PromiseResolver<void>();
+        windowProxy.setResultFor('ensureLazyLoaded', lazyLoadResolver.promise);
+        await createLeftHandSide();
+
+        const folded =
+            leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
+        folded.click();
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+        assertFalse(!!getExpandedIframe());
+
+        lazyLoadResolver.resolve();
+        await microtasksFinished();
+        assertTrue(!!getExpandedIframe());
+      });
 
   test(
       'handles folded rail item clicks without spurious expansion',
@@ -352,15 +556,11 @@ suite('NewTabPageLeftHandSideTest', () => {
         });
         await createLeftHandSide();
 
-        const expanded = leftHandSide.$.expanded;
         const folded =
             leftHandSide.shadowRoot.querySelector<ThreadsRailElement>(
                 '#folded')!;
 
-        postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY, width: 320});
-        await microtasksFinished();
-        assertTrue(expanded.hidden);
-        assertFalse(folded.hidden);
+        assertFalse(!!getExpandedIframe());
 
         // Clicking FOCUS_REALBOX_AIM bubbles open-composebox without expanding.
         const newSearchButton =
@@ -370,13 +570,22 @@ suite('NewTabPageLeftHandSideTest', () => {
         newSearchButton.click();
         await whenOpenComposebox;
         await microtasksFinished();
-        assertTrue(expanded.hidden);
+        assertEquals(0, windowProxy.getCallCount('ensureLazyLoaded'));
+        assertFalse(!!getExpandedIframe());
         assertFalse(folded.hidden);
 
         // Clicking EXPAND_RAIL expands the LHS iframe.
         const expandButton =
             folded.shadowRoot.querySelector<HTMLElement>('#railItem-0')!;
         expandButton.click();
+        await microtasksFinished();
+        assertEquals(1, windowProxy.getCallCount('ensureLazyLoaded'));
+        const expanded = getExpandedIframe();
+        assertTrue(!!expanded);
+        assertTrue(expanded.hidden);
+        assertFalse(folded.hidden);
+
+        postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY, width: 320});
         await microtasksFinished();
         assertFalse(expanded.hidden);
         assertTrue(folded.hidden);
@@ -389,7 +598,6 @@ suite('NewTabPageLeftHandSideTest', () => {
         loadTimeData.overrideValues({enableThreadsRailHybrid: true});
         await createLeftHandSide();
 
-        const expanded = leftHandSide.$.expanded;
         const folded =
             leftHandSide.shadowRoot.querySelector<HTMLElement>('#folded')!;
         assertTrue(folded.offsetWidth > 0 && folded.offsetWidth < 261);
@@ -397,8 +605,9 @@ suite('NewTabPageLeftHandSideTest', () => {
 
         // Clicking the folded rail before the embedded page is ready keeps
         // showing the folded rail, so the host must keep its width too.
-        folded.click();
-        await microtasksFinished();
+        await expandLeftHandSide();
+        const expanded = getExpandedIframe();
+        assertTrue(!!expanded);
         assertTrue(expanded.hidden);
         assertFalse(folded.hidden);
         assertEquals(collapsedWidth, getHostWidthProperty());
@@ -408,6 +617,15 @@ suite('NewTabPageLeftHandSideTest', () => {
         assertFalse(expanded.hidden);
         assertTrue(folded.hidden);
         assertEquals('320px', getHostWidthProperty());
+      });
+
+  test(
+      'does not post NTP_LHS_SET_THEME while collapsed in hybrid mode',
+      async () => {
+        await createLeftHandSide();
+        ColorChangeUpdater.forDocument().eventTarget.dispatchEvent(
+            new CustomEvent(COLOR_PROVIDER_CHANGED));
+        assertEquals(0, windowProxy.getCallCount('postMessage'));
       });
 
   // Resizes the inner <iframe> to simulate the embedded page reporting a new
@@ -478,6 +696,7 @@ suite('NewTabPageLeftHandSideTest', () => {
   test('does not mirror iframe width onto host in hybrid mode', async () => {
     loadTimeData.overrideValues({enableThreadsRailHybrid: true});
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     postLhsMessage({type: NtpLhsMessageType.NTP_LHS_READY});
     const folded =
@@ -494,6 +713,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('handles NTP_LHS_NEW_THREAD message', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     const whenOpenComposebox = eventToPromise('open-composebox', leftHandSide);
     postLhsMessage({type: NtpLhsMessageType.NTP_LHS_NEW_THREAD});
@@ -502,6 +722,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('handles NTP_LHS_NAVIGATE message', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     const targetUrl = 'https://www.google.com/search?q=hello';
     postLhsMessage({
@@ -515,6 +736,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('ignores NTP_LHS_NAVIGATE with invalid or non-http(s) URL', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
 
     postLhsMessage({
       type: NtpLhsMessageType.NTP_LHS_NAVIGATE,
@@ -530,6 +752,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('posts NTP_LHS_SET_THEME message on theme change', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
     leftHandSide.isDark = true;
     leftHandSide.style.setProperty(
         '--color-new-tab-page-threads-rail-primary-font',
@@ -544,8 +767,9 @@ suite('NewTabPageLeftHandSideTest', () => {
     assertEquals(1, windowProxy.getCallCount('postMessage'));
     const [iframe, message, targetOrigin] =
         windowProxy.getArgs('postMessage')[0];
-    assertEquals(
-        getExpandedIframe().shadowRoot.querySelector('#iframe'), iframe);
+    const expandedIframe = getExpandedIframe();
+    assertTrue(!!expandedIframe);
+    assertEquals(expandedIframe.shadowRoot.querySelector('#iframe'), iframe);
     assertDeepEquals(
         {
           type: NtpLhsMessageType.NTP_LHS_SET_THEME,
@@ -561,6 +785,7 @@ suite('NewTabPageLeftHandSideTest', () => {
 
   test('posts NTP_LHS_SET_THEME on NTP_LHS_READY', async () => {
     await createLeftHandSide();
+    await expandLeftHandSide();
     leftHandSide.isDark = false;
     leftHandSide.style.setProperty(
         '--color-new-tab-page-threads-rail-primary-font',
@@ -578,8 +803,9 @@ suite('NewTabPageLeftHandSideTest', () => {
     assertEquals(1, windowProxy.getCallCount('postMessage'));
     const [iframe, message, targetOrigin] =
         windowProxy.getArgs('postMessage')[0];
-    assertEquals(
-        getExpandedIframe().shadowRoot.querySelector('#iframe'), iframe);
+    const expandedIframe = getExpandedIframe();
+    assertTrue(!!expandedIframe);
+    assertEquals(expandedIframe.shadowRoot.querySelector('#iframe'), iframe);
     assertDeepEquals(
         {
           type: NtpLhsMessageType.NTP_LHS_SET_THEME,

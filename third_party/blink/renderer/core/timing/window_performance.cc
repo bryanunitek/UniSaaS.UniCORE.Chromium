@@ -87,7 +87,6 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_hidden_state.h"
-#include "third_party/blink/renderer/core/paint/timing/container_timing.h"
 #include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/core/speculation_rules/document_speculation_rules.h"
 #include "third_party/blink/renderer/core/speculation_rules/speculation_candidate.h"
@@ -1399,32 +1398,6 @@ void WindowPerformance::ApplyContextMenuFallbackToPendingEvents(
       });
 }
 
-void WindowPerformance::SetHasContainerTimingChanges() {
-  DCHECK(IsContainerTimingEnabled());
-
-  has_container_timing_changes_ = true;
-  NotifyObserversOfContainerTiming();
-}
-
-void WindowPerformance::PopulateContainerTimingEntries() {
-  if (!has_container_timing_changes_) {
-    return;
-  }
-
-  DCHECK(IsContainerTimingEnabled());
-
-  LocalDOMWindow* window = DomWindow();
-  if (!window) {
-    return;
-  }
-
-  ContainerTiming& container_timing = ContainerTiming::From(*window);
-
-  container_timing.EmitPerformanceEntries();
-
-  has_container_timing_changes_ = false;
-}
-
 void WindowPerformance::QueueLongAnimationFrameTiming(
     AnimationFrameTimingInfo* info,
     std::optional<DOMPaintTimingInfo> paint_timing_info) {
@@ -1798,19 +1771,7 @@ uint64_t WindowPerformance::interactionCount() const {
 }
 
 void WindowPerformance::OnLargestContentfulPaintUpdated(
-    const DOMPaintTimingInfo& paint_timing_info,
-    uint64_t paint_size,
-    base::TimeTicks load_time,
-    const AtomicString& id,
-    const String& url,
-    Element* element) {
-  auto* entry = MakeGarbageCollected<LargestContentfulPaint>(
-      /*start_time=*/paint_timing_info.presentation_time,
-      /*render_time=*/paint_timing_info.presentation_time, paint_size,
-      MonotonicTimeToDOMHighResTimeStamp(load_time), id, url, element,
-      DomWindow(), NavigationId().web_exposed_id);
-  entry->SetPaintTimingInfo(paint_timing_info);
-
+    LargestContentfulPaint* entry) {
   if (HasObserverFor(PerformanceEntry::kLargestContentfulPaint)) {
     NotifyObserversOfEntry(*entry);
   }
@@ -1819,6 +1780,7 @@ void WindowPerformance::OnLargestContentfulPaintUpdated(
     window->document()->OnLargestContentfulPaintUpdated();
   }
 
+  Element* element = entry->element();
   if (HTMLImageElement* image_element = DynamicTo<HTMLImageElement>(element)) {
     image_element->SetIsLCPElement();
     if (image_element->HasLazyLoadingAttribute()) {
@@ -1830,8 +1792,8 @@ void WindowPerformance::OnLargestContentfulPaintUpdated(
     if (LocalFrame* local_frame = element->GetDocument().GetFrame()) {
       if (LCPCriticalPathPredictor* lcpp = local_frame->GetLCPP()) {
         std::optional<KURL> maybe_url = std::nullopt;
-        if (!url.empty()) {
-          maybe_url = KURL(url);
+        if (!entry->url().empty()) {
+          maybe_url = KURL(entry->url());
         }
         lcpp->OnLargestContentfulPaintUpdated(*element, maybe_url);
       }
@@ -1899,13 +1861,17 @@ void WindowPerformance::IterateEventTimingsByAnimationFrame(
   }
 }
 
-// static
-void WindowPerformance::ClearForWindowReuse(LocalDOMWindow& window) {
+void WindowPerformance::ClearForWindowReuse() {
   // While `WindowPerformance` is per-`LocalDOMWindow`, metrics data is
-  // typically per-`Document`. Some data (e.g. first input timestamp) can be
-  // captured and cached on the initially empty document, so we need to clear it
-  // if clearing that document so it doesn't leak to the new document.
-  GlobalPerformance::performance(window)->timing_for_reporting_ = nullptr;
+  // typically per-`Document`. Some data (e.g. first paint, first contentful
+  // paint, first input timestamp) can be captured and cached on the initially
+  // empty document, so we need to clear it if clearing that document so it
+  // doesn't leak to the new document.
+  // TODO(crbug.com/580495627): Evaluate encapsulating per-Document state on
+  // Performance / WindowPerformance so it cannot leak across LocalDOMWindow
+  // reuse.
+  Performance::ClearForWindowReuse();
+  timing_for_reporting_ = nullptr;
 }
 
 }  // namespace blink

@@ -40,15 +40,8 @@ class OmniboxPopupAimPresenter
   void Show() override;
   void Hide() override;
   std::string_view GetPopupMetricPrefix() const override;
-  std::optional<base::TimeDelta> ShouldDeferUntilVisualStateReady()
-      const override;
-  bool ShouldDebounceResize() const override;
-  bool ShouldApplyHeightWorkarounds() const override;
-  bool ShouldDetachWebContentsOnHide() const override;
-  bool ShouldEvictOnHide() const override;
+  OmniboxPopupState GetSharedPopupKind() const override;
   bool ShouldDestroyWidgetOnHide() const override;
-  bool ShouldSizeWebViewToPreferredHeight() const override;
-  bool ShouldDrawShadowInWebUI() const override;
   // Triggered when a file selection dialog opened by this popup is closed,
   // initiating the focus restoration flow (only active when
   // `omnibox::kOmniboxKeepOpenOnFileSelection` is enabled).
@@ -65,6 +58,8 @@ class OmniboxPopupAimPresenter
   void WidgetDestroyed() override;
   std::unique_ptr<OmniboxPopupWebUIBaseContent> CreateWebUIContent(
       std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents) override;
+  WebUIContentCreationStrategy GetDeferredWebUIContentCreationStrategy()
+      const override;
 
  private:
   // views::WidgetObserver:

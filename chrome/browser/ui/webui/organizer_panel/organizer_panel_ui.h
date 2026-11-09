@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEBUI_ORGANIZER_PANEL_ORGANIZER_PANEL_UI_H_
 
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "chrome/browser/ui/webui/organizer_panel/foreign_tabs.mojom.h"
@@ -29,6 +30,12 @@ class OrganizerPanelUIConfig
     : public DefaultTopChromeWebUIConfig<OrganizerPanelUI> {
  public:
   OrganizerPanelUIConfig();
+
+  // DefaultTopChromeWebUIConfig:
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+  bool IsPreloadable() override;
+  std::optional<int> GetCommandIdForTesting() override;
+  std::optional<GURL> GetPreloadEngagementAliasURL() const override;
 };
 
 class OrganizerPanelUI

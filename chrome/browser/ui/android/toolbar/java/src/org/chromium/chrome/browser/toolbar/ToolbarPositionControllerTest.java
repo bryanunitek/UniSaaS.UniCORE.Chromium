@@ -82,6 +82,8 @@ import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.prefs.PrefService;
@@ -360,7 +362,7 @@ public class ToolbarPositionControllerTest {
         }
 
         @Override
-        public boolean isKeyboardShowing(View view) {
+        public boolean isKeyboardObscuring(View view) {
             return mIsShowing;
         }
     }
@@ -1189,6 +1191,7 @@ public class ToolbarPositionControllerTest {
     public void testTopInsetAdjustment_EdgeToEdgeRefactorEnabled() {
         verify(mTopInsetProvider, never()).addObserver(any());
         mActivityTabSupplier.set(mock(Tab.class));
+        when(mEdgeToEdgeController.tabShouldDrawFullTopEdgeToEdge()).thenReturn(true);
         mEdgeToEdgeControllerSupplier.set(mEdgeToEdgeController);
 
         ArgumentCaptor<TopInsetProvider.Observer> observerCaptor =
@@ -1207,6 +1210,65 @@ public class ToolbarPositionControllerTest {
 
         mController.destroy();
         verify(mEdgeToEdgeController).removeObserver(observer);
+    }
+
+    @Test
+    @Config(sdk = 30)
+    @EnableFeatures(ChromeFeatureList.EDGE_TO_EDGE_TOP_INSET)
+    public void testTopInsetAdjustment_TopEdgeToEdge_SkipsToolbarPaddingForOptedInWebPage() {
+        mActivityTabSupplier.set(mock(Tab.class));
+        mEdgeToEdgeControllerSupplier.set(mEdgeToEdgeController);
+
+        ArgumentCaptor<TopInsetProvider.Observer> observerCaptor =
+                ArgumentCaptor.forClass(TopInsetProvider.Observer.class);
+        verify(mEdgeToEdgeController).addObserver(observerCaptor.capture());
+        TopInsetProvider.Observer observer = observerCaptor.getValue();
+
+        int topInset = 50;
+
+        // 1. On a viewport-fit=cover web page, consumeTopInset is true, but the top scalp handles
+        // the status bar inset (tabShouldDrawFullTopEdgeToEdge() == false), so the toolbar must
+        // not add internal top padding.
+        when(mEdgeToEdgeController.tabShouldDrawFullTopEdgeToEdge()).thenReturn(false);
+        observer.onToEdgeChange(topInset, /* consumeTopInset= */ true, LayoutType.BROWSING);
+        assertEquals(0, mToolbarLayout.getEdgeToEdgeTopPadding());
+        assertEquals(0, mToolbarLayout.getPaddingTop());
+
+        // 2. Switching to a custom-background NTP (tabShouldDrawFullTopEdgeToEdge() == true, no
+        // top scalp) should apply the top inset padding to the toolbar.
+        when(mEdgeToEdgeController.tabShouldDrawFullTopEdgeToEdge()).thenReturn(true);
+        observer.onToEdgeChange(topInset, /* consumeTopInset= */ true, LayoutType.BROWSING);
+        assertEquals(topInset, mToolbarLayout.getEdgeToEdgeTopPadding());
+        assertEquals(topInset, mToolbarLayout.getPaddingTop());
+
+        // 3. Switching directly back to a viewport-fit=cover web page (where consumeTopInset is
+        // still true, but tabShouldDrawFullTopEdgeToEdge() becomes false) must clear the toolbar
+        // padding back to 0 so it doesn't double-pad with the top scalp.
+        when(mEdgeToEdgeController.tabShouldDrawFullTopEdgeToEdge()).thenReturn(false);
+        observer.onToEdgeChange(topInset, /* consumeTopInset= */ true, LayoutType.BROWSING);
+        assertEquals(0, mToolbarLayout.getEdgeToEdgeTopPadding());
+        assertEquals(0, mToolbarLayout.getPaddingTop());
+    }
+
+    @Test
+    @Config(sdk = 30)
+    @EnableFeatures(ChromeFeatureList.EDGE_TO_EDGE_TOP_INSET + ":enable_top_edge_to_edge/false")
+    public void testTopInsetAdjustment_EdgeToEdgeRefactorOnlyArm() {
+        mActivityTabSupplier.set(mock(Tab.class));
+        when(mEdgeToEdgeController.tabShouldDrawFullTopEdgeToEdge()).thenReturn(false);
+        mEdgeToEdgeControllerSupplier.set(mEdgeToEdgeController);
+
+        ArgumentCaptor<TopInsetProvider.Observer> observerCaptor =
+                ArgumentCaptor.forClass(TopInsetProvider.Observer.class);
+        verify(mEdgeToEdgeController).addObserver(observerCaptor.capture());
+        TopInsetProvider.Observer observer = observerCaptor.getValue();
+
+        // In the refactor-only arm (no top scalp), consumeTopInset=true should still pad the
+        // toolbar even before the native page finishes initializing.
+        int topInset = 50;
+        observer.onToEdgeChange(topInset, /* consumeTopInset= */ true, LayoutType.BROWSING);
+        assertEquals(topInset, mToolbarLayout.getEdgeToEdgeTopPadding());
+        assertEquals(topInset, mToolbarLayout.getPaddingTop());
     }
 
     @Test
@@ -1338,23 +1400,17 @@ public class ToolbarPositionControllerTest {
         BottomSheetContent bottomSheetContent = mock(BottomSheetContent.class);
         when(bottomSheetContent.actsAsBrowserControls()).thenReturn(true);
         when(mBottomSheetController.getCurrentSheetContent()).thenReturn(bottomSheetContent);
-        when(mBottomSheetController.getSheetState())
-                .thenReturn(BottomSheetController.SheetState.HALF);
+        when(mBottomSheetController.getSheetState()).thenReturn(SheetState.HALF);
 
-        observer.onSheetStateChanged(
-                BottomSheetController.SheetState.HALF,
-                BottomSheetController.StateChangeReason.NONE);
+        observer.onSheetStateChanged(SheetState.HALF, StateChangeReason.NONE);
 
         BottomControlsLayer toolbarLayer =
                 mBottomControlsStacker.getLayerForTesting(LayerType.BOTTOM_TOOLBAR);
         assertEquals(LayerVisibility.HIDDEN, toolbarLayer.getLayerVisibility());
 
         // Restore to HIDDEN
-        when(mBottomSheetController.getSheetState())
-                .thenReturn(BottomSheetController.SheetState.HIDDEN);
-        observer.onSheetStateChanged(
-                BottomSheetController.SheetState.HIDDEN,
-                BottomSheetController.StateChangeReason.NONE);
+        when(mBottomSheetController.getSheetState()).thenReturn(SheetState.HIDDEN);
+        observer.onSheetStateChanged(SheetState.HIDDEN, StateChangeReason.NONE);
         mBrowserControlsObserver.onBottomControlsHeightAnimationEnded();
 
         assertEquals(LayerVisibility.VISIBLE, toolbarLayer.getLayerVisibility());
@@ -1374,12 +1430,9 @@ public class ToolbarPositionControllerTest {
         BottomSheetContent bottomSheetContent = mock(BottomSheetContent.class);
         when(bottomSheetContent.actsAsBrowserControls()).thenReturn(true);
         when(mBottomSheetController.getCurrentSheetContent()).thenReturn(bottomSheetContent);
-        when(mBottomSheetController.getSheetState())
-                .thenReturn(BottomSheetController.SheetState.FULL);
+        when(mBottomSheetController.getSheetState()).thenReturn(SheetState.FULL);
 
-        observer.onSheetStateChanged(
-                BottomSheetController.SheetState.FULL,
-                BottomSheetController.StateChangeReason.NONE);
+        observer.onSheetStateChanged(SheetState.FULL, StateChangeReason.NONE);
 
         BottomControlsLayer toolbarLayer =
                 mBottomControlsStacker.getLayerForTesting(LayerType.BOTTOM_TOOLBAR);
@@ -1399,12 +1452,9 @@ public class ToolbarPositionControllerTest {
         BottomSheetContent bottomSheetContent = mock(BottomSheetContent.class);
         when(bottomSheetContent.actsAsBrowserControls()).thenReturn(false);
         when(mBottomSheetController.getCurrentSheetContent()).thenReturn(bottomSheetContent);
-        when(mBottomSheetController.getSheetState())
-                .thenReturn(BottomSheetController.SheetState.HALF);
+        when(mBottomSheetController.getSheetState()).thenReturn(SheetState.HALF);
 
-        observer.onSheetStateChanged(
-                BottomSheetController.SheetState.HALF,
-                BottomSheetController.StateChangeReason.NONE);
+        observer.onSheetStateChanged(SheetState.HALF, StateChangeReason.NONE);
         mBrowserControlsObserver.onBottomControlsHeightAnimationEnded();
 
         BottomControlsLayer toolbarLayer =
@@ -1425,12 +1475,9 @@ public class ToolbarPositionControllerTest {
         BottomSheetContent bottomSheetContent = mock(BottomSheetContent.class);
         when(bottomSheetContent.actsAsBrowserControls()).thenReturn(true);
         when(mBottomSheetController.getCurrentSheetContent()).thenReturn(bottomSheetContent);
-        when(mBottomSheetController.getSheetState())
-                .thenReturn(BottomSheetController.SheetState.HALF);
+        when(mBottomSheetController.getSheetState()).thenReturn(SheetState.HALF);
 
-        observer.onSheetStateChanged(
-                BottomSheetController.SheetState.HALF,
-                BottomSheetController.StateChangeReason.NONE);
+        observer.onSheetStateChanged(SheetState.HALF, StateChangeReason.NONE);
 
         BottomControlsLayer toolbarLayer =
                 mBottomControlsStacker.getLayerForTesting(LayerType.BOTTOM_TOOLBAR);

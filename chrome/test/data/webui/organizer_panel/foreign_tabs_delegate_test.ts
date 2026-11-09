@@ -59,6 +59,8 @@ suite('ForeignTabsDelegateTest', () => {
   test('returns id and localized header', () => {
     assertEquals('cross-device-tabs', delegate.getId());
     assertEquals('Tabs on other devices', delegate.getHeader());
+    assertEquals('CrossDeviceTabs', delegate.getHistogramSectionName());
+    assertEquals('OpenCrossDeviceTab', delegate.getItemClickAction());
   });
 
   test(

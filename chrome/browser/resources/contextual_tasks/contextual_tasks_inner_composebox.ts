@@ -351,12 +351,11 @@ export class
       return;
     }
     // AutoSuggestedTabContext is routed differently for Ask Google entry points
-    // when opening a side panel to cobrowse.
+    // (except homework action chip) when opening a side panel to cobrowse.
     const isUpdatedEntryPoint =
         this.contextualTasksUpdatedEntryPointsEnabled_ &&
-        (invocationSource === 'ContentAreaContextMenuPage' ||
-         invocationSource === 'AppMenu' ||
-         invocationSource === 'HomeworkActionChip');
+        (invocationSource === 'ContentAreaContextMenuPageAskGoogle' ||
+         invocationSource === 'AppMenuAskGoogle');
     const isOmniboxAskG = this.webUIOmniboxAskGAboutThisPageEnabled_ &&
         invocationSource === 'OmniboxPageAction';
     const askGAndPageAction =

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://contextual-tasks/strings.m.js';
+import 'chrome://webui-test/strings.m.js';
 import 'chrome://resources/cr_components/composebox/contextual_action_menu.js';
 import 'chrome://resources/cr_components/composebox/composebox_favicon_group.js';
 
@@ -35,6 +35,7 @@ function createTabSuggestion(overrides: Partial<TabInfo> = {}): TabInfo {
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
         isLoading: false,
+        recentTab: false,
         lastActive: {internalValue: 0n},
       },
       overrides);
@@ -1152,6 +1153,7 @@ suite('ContextualActionMenu', () => {
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
       isLoading: false,
+      recentTab: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -1179,6 +1181,7 @@ suite('ContextualActionMenu', () => {
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
       isLoading: false,
+      recentTab: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -1218,6 +1221,7 @@ suite('ContextualActionMenu', () => {
           showInCurrentTabChip: false,
           showInPreviousTabChip: false,
           isLoading: false,
+          recentTab: false,
           lastActive: {internalValue: 0n},
         };
         actionMenu.tabSuggestions = [tabInfo];
@@ -1523,6 +1527,7 @@ suite('ContextualActionMenu', () => {
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
         isLoading: false,
+        recentTab: false,
         lastActive: {internalValue: 0n},
       },
     ];
@@ -1565,6 +1570,7 @@ suite('ContextualActionMenu', () => {
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
         isLoading: false,
+        recentTab: false,
         lastActive: {internalValue: 0n},
       },
     ];
@@ -2436,6 +2442,56 @@ suite('ContextualActionMenu', () => {
       });
 
   test(
+      'Prefers inputState.maxTotalInputs over composeboxFileMaxCount',
+      async () => {
+        actionMenu.remove();
+        loadTimeData.overrideValues({
+          composeboxFileMaxCount: 0,
+        });
+        actionMenu =
+            document.createElement('cr-composebox-contextual-action-menu');
+        actionMenu.fileNum = 0;
+
+        const tabInfo = createTabSuggestion({
+          tabId: 1,
+          title: 'Google',
+        });
+        actionMenu.tabSuggestions = [tabInfo];
+
+        actionMenu.inputState = new MockInputState({
+          allowedInputTypes: [
+            InputType.kLensImage,
+            InputType.kLensFile,
+            InputType.kDrive,
+            InputType.kBrowserTab,
+          ],
+          disabledInputTypes: [],
+          maxTotalInputs: 10,
+          toolsSectionConfig: {header: ''},
+          modelSectionConfig: {header: ''},
+        });
+
+        document.body.appendChild(actionMenu);
+        await microtasksFinished();
+
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const imageUpload = $$(actionMenu, '#imageUpload') as HTMLButtonElement;
+        const fileUpload = $$(actionMenu, '#fileUpload') as HTMLButtonElement;
+        const driveUpload = $$(actionMenu, '#driveUpload') as HTMLButtonElement;
+
+        assertFalse(imageUpload.disabled);
+        assertFalse(fileUpload.disabled);
+        assertFalse(driveUpload.disabled);
+
+        const tabButton = actionMenu.$.menu.querySelector<HTMLButtonElement>(
+            '.suggestion-container button')!;
+        assertTrue(isVisible(tabButton));
+        assertFalse(tabButton.disabled);
+      });
+
+  test(
       'Disables unselected tabs and enable selected tabs if max files reached',
       async () => {
         // Recreate actionMenu with maxFileCount = 1.
@@ -2506,6 +2562,7 @@ suite('ContextualActionMenu', () => {
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
       isLoading: false,
+      recentTab: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -3588,6 +3645,7 @@ suite('ContextualActionMenu', () => {
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
         isLoading: false,
+        recentTab: false,
         lastActive: {internalValue: 0n},
       });
 
@@ -3684,6 +3742,7 @@ suite('ContextualActionMenu', () => {
             showInCurrentTabChip: false,
             showInPreviousTabChip: false,
             isLoading: false,
+            recentTab: false,
             lastActive: {internalValue: 0n},
           });
           await Promise.all([microtasksFinished(), repositionedPromise]);
@@ -3956,6 +4015,7 @@ suite('ContextualActionMenu', () => {
           showInCurrentTabChip: false,
           showInPreviousTabChip: false,
           isLoading: false,
+          recentTab: false,
           lastActive: {internalValue: 0n},
         } as unknown as TabInfo,
       ];
@@ -4148,6 +4208,7 @@ suite('ContextualActionMenu', () => {
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
         isLoading: false,
+        recentTab: false,
         lastActive: {internalValue: 0n},
       });
       actionMenu.inputState = new MockInputState({

@@ -44,6 +44,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/hit_test_region_observer.h"
+#include "content/public/test/popup_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/update_user_activation_state_interceptor.h"
@@ -4749,7 +4750,6 @@ class SitePerProcessMouseWheelHitTestBrowserTest
         "document.body.style.background = 'black';";
 
     content::DOMMessageQueue msg_queue(rfh);
-    std::string reply;
     EXPECT_TRUE(ExecJs(rfh, script));
 
     // Wait until renderer's compositor thread is synced. Otherwise the event

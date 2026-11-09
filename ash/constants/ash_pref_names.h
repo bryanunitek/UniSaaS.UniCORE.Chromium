@@ -419,11 +419,6 @@ inline constexpr char kLoginDisplayPasswordButtonEnabled[] =
 inline constexpr char kLoginExtensionApiCanLockManagedGuestSession[] =
     "extensions_api.login.can_lock_managed_guest_session";
 
-// Boolean pref indicating whether the user has enabled Suggested Content in
-// OS settings > Privacy > "Suggest new content to explore".
-inline constexpr char kSuggestedContentEnabled[] =
-    "settings.suggested_content_enabled";
-
 // Boolean value indicating the user has hidden the launcher continue section
 // (usually because they want more visual space available for apps).
 inline constexpr char kLauncherContinueSectionHidden[] =
@@ -1142,6 +1137,18 @@ inline constexpr char kSecondaryDisplays[] =
 // managed guest session should be stored in local state.
 inline constexpr char kAllowMGSToStoreDisplayProperties[] =
     "settings.display.allow_mgs_to_store";
+// A boolean pref. If set to true, the Unified Desktop feature is made
+// available and turned on by default, which allows applications to span
+// multiple screens. Users may turn the feature off and on in the settings
+// while this is set to true.
+inline constexpr char kUnifiedDesktopEnabledByDefault[] =
+    "settings.display.unified_desktop_enabled_by_default";
+// A boolean pref. If set to true, the Exclude Display in Mirror Mode feature
+// is made available to the user, which allows a display to be excluded in
+// mirror mode. Users may turn the feature off and on in the settings while
+// this is set to true.
+inline constexpr char kAllowExcludeDisplayInMirrorMode[] =
+    "settings.display.allow_exclude_display_in_mirror_mode";
 
 // A list of all displays used by the user and reported to popularity metrics.
 const char kDisplayPopularityUserReportedDisplays[] =
@@ -2908,6 +2915,14 @@ inline constexpr char kSessionWaitForInitialUserActivity[] =
 // on user session start.
 inline constexpr char kShowSyncSettingsOnSessionStart[] =
     "start_sync_settings_on_session_start";
+
+// A boolean pref that when set to true, prevents the browser window from
+// launching at the start of the session.
+inline constexpr char kStartupBrowserWindowLaunchSuppressed[] =
+    "startup_browser_window_launch_suppressed";
+
+// Boolean pref indicating whether someone can cast to the device.
+inline constexpr char kCastReceiverEnabled[] = "cast_receiver.enabled";
 
 //-----------------------------------------------------------------------------
 // Login screen related Prefs

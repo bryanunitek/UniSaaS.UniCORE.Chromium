@@ -262,6 +262,11 @@ source_set("model_execution") {
   }
 }
 
+source_set("manifest_provider") {
+  sources = [ "model_execution/manifest_provider.h" ]
+  public_deps = [ "//base" ]
+}
+
 source_set("ondevice") {
   # TODO: crbug.com/421262905 - Should not need these without model_execution
   sources = [
@@ -292,6 +297,8 @@ source_set("ondevice") {
   ]
   if (build_with_model_execution) {
     sources += [
+      "model_execution/broker_init.cc",
+      "model_execution/broker_init.h",
       "model_execution/fieldwise_response_parser.cc",
       "model_execution/fieldwise_response_parser.h",
       "model_execution/json_response_parser.cc",
@@ -377,9 +384,12 @@ source_set("ondevice") {
 
 if (build_with_model_execution) {
   source_set("manifest_broker") {
+    public_deps = [ ":manifest_provider" ]
     sources = [
       "model_execution/manifest_broker/asset_priorities.cc",
       "model_execution/manifest_broker/asset_priorities.h",
+      "model_execution/manifest_broker/disk_space_status.cc",
+      "model_execution/manifest_broker/disk_space_status.h",
       "model_execution/manifest_broker/manifest.cc",
       "model_execution/manifest_broker/manifest.h",
       "model_execution/manifest_broker/manifest_asset_manager.cc",
@@ -777,6 +787,7 @@ source_set("delivery_unit_tests") {
     ":prediction",
     "//base",
     "//base/test:test_support",
+    "//build:branding_buildflags",
     "//components/component_updater",
     "//components/download/public/background_service/test:test_support",
     "//components/optimization_guide/proto:optimization_guide_proto",
@@ -784,6 +795,7 @@ source_set("delivery_unit_tests") {
     "//components/services/unzip:in_process",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//google_apis",
     "//services/network:test_support",
     "//testing/gtest",
     "//third_party/zlib/google:zip",
@@ -846,10 +858,12 @@ if (build_with_model_execution && !is_chrome_for_testing) {
   source_set("ondevice_unit_tests") {
     testonly = true
     sources = [
+      "model_execution/broker_init_unittest.cc",
       "model_execution/configs/summarize_solution_config_unittest.cc",
       "model_execution/fieldwise_response_parser_unittest.cc",
       "model_execution/json_response_parser_unittest.cc",
       "model_execution/manifest_broker/asset_priorities_unittest.cc",
+      "model_execution/manifest_broker/disk_space_status_unittest.cc",
       "model_execution/manifest_broker/manifest_asset_manager_unittest.cc",
       "model_execution/manifest_broker/manifest_broker_service_crash_unittest.cc",
       "model_execution/manifest_broker/manifest_broker_state_unittest.cc",
@@ -939,6 +953,7 @@ source_set("unit_tests") {
     ":unit_tests_bundle_data",
     "//base",
     "//base/test:test_support",
+    "//build:branding_buildflags",
     "//components/optimization_guide/core/inference:unit_tests",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/prefs:test_support",

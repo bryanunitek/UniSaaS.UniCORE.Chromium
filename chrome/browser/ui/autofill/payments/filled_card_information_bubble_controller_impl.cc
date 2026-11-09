@@ -22,9 +22,9 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/window_open_disposition.h"
 
 namespace autofill {
 
@@ -90,9 +90,7 @@ void FilledCardInformationBubbleControllerImpl::SetupAndShowBubble(
 void FilledCardInformationBubbleControllerImpl::SetupBubbleState(
     FilledCardInformationBubbleOptions options) {
   was_bubble_shown_ = false;
-  // TODO(crbug.com/578555608): CHECK-exclusion: Convert to a CHECK once we are
-  // confident it won't be triggered.
-  DCHECK(options.IsValid());
+  CHECK(options.IsValid());
   options_ = std::move(options);
   is_user_gesture_ = false;
   should_icon_be_visible_ = true;
@@ -230,7 +228,8 @@ bool FilledCardInformationBubbleControllerImpl::ShouldIconBeVisible() const {
 void FilledCardInformationBubbleControllerImpl::OnLinkClicked() {
   web_contents()->OpenURL(
       content::OpenURLParams::CreateBrowserInitiated(
-          GetLearnMoreUrl(), WindowOpenDisposition::kNewForegroundTab,
+          GetLearnMoreUrl(),
+          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
           ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
@@ -374,24 +373,6 @@ void FilledCardInformationBubbleControllerImpl::PrimaryPageChanged(
   bubble_has_been_shown_ = false;
   UpdatePageActionIcon();
   HideBubble(/*initiated_by_bubble_manager=*/false);
-}
-
-void FilledCardInformationBubbleControllerImpl::OnVisibilityChanged(
-    content::Visibility visibility) {
-  if (IsBubbleManagerEnabled()) {
-    // BubbleManager will handle the effects of tab changes.
-    return;
-  }
-
-  // If the bubble hasn't been shown yet due to changing the tab during
-  // kFilledCardInformationBubbleDelay, show the bubble after switching back
-  // to the tab.
-  if (visibility == content::Visibility::VISIBLE && !bubble_has_been_shown_ &&
-      should_icon_be_visible_) {
-    QueueOrShowBubble();
-  } else if (visibility == content::Visibility::HIDDEN) {
-    HideBubble(/*initiated_by_bubble_manager=*/false);
-  }
 }
 
 bool FilledCardInformationBubbleControllerImpl::ShouldReshowOnTabVisible()

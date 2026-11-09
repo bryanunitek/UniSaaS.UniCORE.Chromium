@@ -16,6 +16,7 @@
 #include "base/android/jni_weak_ref.h"
 #include "base/android/token_android.h"
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/feature.h"
 #include "base/feature_list.h"
@@ -135,10 +136,6 @@ TabModelJniBridge::TabModelJniBridge(
   }
 }
 
-void TabModelJniBridge::Destroy() {
-  delete this;
-}
-
 void TabModelJniBridge::AssociateWithBrowserWindow(
     int64_t native_android_browser_window) {
   BrowserWindowInterface* android_browser_window =
@@ -171,10 +168,6 @@ void TabModelJniBridge::TabAddedToModel(TabAndroid* tab) {
   } else if (GetProfile()->IsEnterpriseIsolatedModeProfile()) {
     UMA_HISTOGRAM_COUNTS_100("Tab.Count.Isolated", GetTabCount());
   }
-}
-
-TabAndroid* TabModelJniBridge::DuplicateTab(JNIEnv* env, TabAndroid* tab) {
-  return static_cast<TabAndroid*>(DuplicateTab(tab));
 }
 
 void TabModelJniBridge::MoveTabToWindowForTesting(
@@ -480,6 +473,15 @@ void TabModelJniBridge::BroadcastSessionRestoreComplete() {
     return;
   }
 
+  if (has_scheduled_restored_tabs_) {
+    // Browser tests that manually call BroadcastSessionRestoreComplete() can
+    // race with DeferredStartupHandler running
+    // ChromeTabbedActivity.onDeferredStartup(), which invokes
+    // BroadcastSessionRestoreComplete() a second time.
+    CHECK_IS_TEST();
+    return;
+  }
+
   TabModel::BroadcastSessionRestoreComplete();
 
   // On Desktop platforms, SessionRestoreDelegate explicitly schedules
@@ -516,6 +518,7 @@ void TabModelJniBridge::BroadcastSessionRestoreComplete() {
     }
 
     if (!background_tabs.empty()) {
+      has_scheduled_restored_tabs_ = true;
       performance_manager::policies::ScheduleLoadForRestoredTabs(
           std::move(background_tabs));
     }
@@ -650,15 +653,16 @@ tabs::TabInterface* TabModelJniBridge::DuplicateTab(tabs::TabHandle tab) {
   return DuplicateTab(tab_android);
 }
 
-tabs::TabInterface* TabModelJniBridge::DuplicateTab(TabAndroid* tab) {
+TabAndroid* TabModelJniBridge::DuplicateTab(TabAndroid* tab) {
   WebContents* web_contents = tab ? tab->web_contents() : nullptr;
   if (!web_contents) {
     return nullptr;
   }
 
   std::unique_ptr<WebContents> cloned_web_contents = web_contents->Clone();
-  return CreateTab(tab, std::move(cloned_web_contents), /* index= */ -1,
-                   TabLaunchType::FROM_TAB_LIST_INTERFACE, tab->IsPinned());
+  return static_cast<TabAndroid*>(
+      CreateTab(tab, std::move(cloned_web_contents), /* index= */ -1,
+                TabLaunchType::FROM_TAB_LIST_INTERFACE, tab->IsPinned()));
 }
 
 tabs::TabInterface* TabModelJniBridge::GetTab(int index) {
@@ -666,18 +670,13 @@ tabs::TabInterface* TabModelJniBridge::GetTab(int index) {
 }
 
 int TabModelJniBridge::GetIndexOfTab(tabs::TabHandle tab) {
-  tabs::TabInterface* tab_interface = tab.Get();
-  if (!tab_interface) {
+  TabAndroid* tab_android = TabAndroid::FromTabHandle(tab);
+  if (!tab_android) {
     return tab_list::kNoTabIndex;
   }
-  int count = GetTabCount();
-  for (int i = 0; i < count; ++i) {
-    if (GetTabAt(i) == tab_interface) {
-      return i;
-    }
-  }
-
-  return tab_list::kNoTabIndex;
+  JNIEnv* env = AttachCurrentThread();
+  return Java_TabModelJniBridge_getIndexOfTab(env, java_object_.get(env),
+                                              tab_android);
 }
 
 void TabModelJniBridge::HighlightTabs(tabs::TabHandle tab_to_activate,
@@ -991,8 +990,7 @@ TabModel* TabModelJniBridge::FromJavaObject(const JavaRef<jobject>& obj) {
   if (!obj) {
     return nullptr;
   }
-  return reinterpret_cast<TabModel*>(
-      Java_TabModelJniBridge_getNativePtr(AttachCurrentThread(), obj));
+  return Java_TabModelJniBridge_getNativePtr(AttachCurrentThread(), obj);
 }
 
 TabModelJniBridge::~TabModelJniBridge() {
@@ -1010,7 +1008,7 @@ TabModelJniBridge::~TabModelJniBridge() {
   }
 }
 
-static int64_t JNI_TabModelJniBridge_Init(
+static jni_zero::JniUniquePtr<TabModelJniBridge> JNI_TabModelJniBridge_Init(
     JNIEnv* env,
     const JavaRef<jobject>& obj,
     Profile* profile,
@@ -1023,11 +1021,10 @@ static int64_t JNI_TabModelJniBridge_Init(
                 static_cast<chrome::android::CustomTabProfileType>(
                     j_custom_tab_profile_type.value()))
           : std::nullopt;
-  TabModel* tab_model = new TabModelJniBridge(
+  return jni_zero::MakeUnique<TabModelJniBridge>(
       env, obj, profile, static_cast<ActivityType>(j_activity_type),
       custom_tab_profile_type,
       static_cast<TabModel::TabModelType>(j_tab_model_type));
-  return reinterpret_cast<intptr_t>(tab_model);
 }
 
 DEFINE_JNI(TabModelJniBridge)

@@ -29,10 +29,12 @@
 #include "chrome/renderer/accessibility/read_anything/read_anything_distiller.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_test_utils.h"
 #include "components/translate/core/common/translate_features.h"
+#include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/mock_render_thread.h"
 #include "gin/array_buffer.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/v8_initializer.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/strings/grit/services_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -192,6 +194,7 @@ class MockReadAnythingUntrustedPageHandler
 
 using testing::ElementsAre;
 using testing::Mock;
+using testing::SizeIs;
 
 class ReadAnythingAppControllerTest : public testing::Test {
  public:
@@ -219,6 +222,10 @@ class ReadAnythingAppControllerTest : public testing::Test {
     controller_ = cppgc::MakeGarbageCollected<ReadAnythingAppController>(
         isolate_holder_->isolate()->GetCppHeap()->GetAllocationHandle(),
         /*render_frame=*/nullptr);
+
+    auto test_ukm_recorder = std::make_unique<ukm::TestUkmRecorder>();
+    test_ukm_recorder_ = test_ukm_recorder.get();
+    controller_->ukm_recorder_ = std::move(test_ukm_recorder);
   }
 
   void SetUp() override {
@@ -306,6 +313,7 @@ class ReadAnythingAppControllerTest : public testing::Test {
       controller_ = nullptr;
     }
     distiller_ = nullptr;
+    test_ukm_recorder_ = nullptr;
     isolate_holder_.reset();
     testing::Test::TearDown();
   }
@@ -416,6 +424,27 @@ class ReadAnythingAppControllerTest : public testing::Test {
     AccessibilityEventReceived({std::move(update)});
   }
 
+  // Simulates the user selecting text from node 2 to node 3 on the main page.
+  // Unlike SetMainPageSelection(), this updates the tree's selection, so the
+  // selection is processed as a non-collapsed selection on the page.
+  void SelectTextOnPage() {
+    ui::AXTreeUpdate update;
+    test::SetUpdateTreeID(&update, tree_id_);
+    update.has_tree_data = true;
+    update.tree_data.sel_anchor_object_id = 2;
+    update.tree_data.sel_anchor_offset = 0;
+    update.tree_data.sel_focus_object_id = 3;
+    update.tree_data.sel_focus_offset = 1;
+    AccessibilityEventReceived({std::move(update)});
+  }
+
+  // Opens reading mode to translate a PDF, and then fails the translation.
+  void FailAwaitedTranslation() {
+    controller().OnReadingModeShown(
+        read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
+    controller().OnTranslationFailed();
+  }
+
   void ProcessDisplayNodes(const std::vector<ui::AXNodeID>& content_node_ids) {
     model().Reset(content_node_ids);
     model().ComputeDisplayNodeIdsForDistilledTree();
@@ -449,17 +478,6 @@ class ReadAnythingAppControllerTest : public testing::Test {
     scoped_feature_list_.Reset();
     scoped_feature_list_.InitAndEnableFeature(
         features::kReadAnythingSendFeedback);
-  }
-
-  void EnableLineFocus() {
-    scoped_feature_list_.Reset();
-    scoped_feature_list_.InitAndEnableFeature(features::kReadAnythingLineFocus);
-  }
-
-  void DisableLineFocus() {
-    scoped_feature_list_.Reset();
-    scoped_feature_list_.InitAndDisableFeature(
-        features::kReadAnythingLineFocus);
   }
 
   void StartLineFocusSession() { controller_->StartLineFocusSession(); }
@@ -496,6 +514,7 @@ class ReadAnythingAppControllerTest : public testing::Test {
 
   ui::AXTreeID tree_id_;
   raw_ptr<MockAXTreeDistiller> distiller_ = nullptr;
+  raw_ptr<ukm::TestUkmRecorder> test_ukm_recorder_ = nullptr;
   testing::StrictMock<MockReadAnythingUntrustedPageHandler> page_handler_;
   base::test::ScopedFeatureList scoped_feature_list_;
 
@@ -558,24 +577,12 @@ TEST_F(ReadAnythingAppControllerTest, OnDeviceLocked_ResetsWordsHeard) {
 
 TEST_F(ReadAnythingAppControllerTest,
        OnDeviceLocked_LogsLineFocusSessionWithFlag) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   StartLineFocusSession();
   controller().OnDeviceLocked();
 
   histogram_tester.ExpectTotalCount(
       "Accessibility.ReadAnything.LineFocusSessionLength", 1);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
-       OnDeviceLocked_DoesNotLogLineFocusSessionWithoutFlag) {
-  DisableLineFocus();
-  base::HistogramTester histogram_tester;
-  StartLineFocusSession();
-  controller().OnDeviceLocked();
-
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionLength", 0);
 }
 #endif
 
@@ -698,25 +705,12 @@ TEST_F(ReadAnythingAppControllerTest, OnDistilled_Screen2x_LogsMetric) {
 
 TEST_F(ReadAnythingAppControllerTest,
        OnReadingModeHidden_LogsLineFocusSessionWithFlag) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   StartLineFocusSession();
   controller().OnReadingModeHidden(true);
 
   histogram_tester.ExpectTotalCount(
       "Accessibility.ReadAnything.LineFocusSessionLength", 1);
-  EXPECT_CALL(page_handler_, AckReadingModeHidden());
-}
-
-TEST_F(ReadAnythingAppControllerTest,
-       OnReadingModeHidden_DoesNotLogLineFocusSessionWithoutFlag) {
-  DisableLineFocus();
-  base::HistogramTester histogram_tester;
-  StartLineFocusSession();
-  controller().OnReadingModeHidden(true);
-
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionLength", 0);
   EXPECT_CALL(page_handler_, AckReadingModeHidden());
 }
 
@@ -773,24 +767,12 @@ TEST_F(ReadAnythingAppControllerTest, OnTabWillDetach_ResetsWordsHeard) {
 
 TEST_F(ReadAnythingAppControllerTest,
        OnTabWillDetach_LogsLineFocusSessionWithFlag) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   StartLineFocusSession();
   controller().OnTabWillDetach();
 
   histogram_tester.ExpectTotalCount(
       "Accessibility.ReadAnything.LineFocusSessionLength", 1);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
-       OnTabWillDetach_DoesNotLogLineFocusSessionWithoutFlag) {
-  DisableLineFocus();
-  base::HistogramTester histogram_tester;
-  StartLineFocusSession();
-  controller().OnTabWillDetach();
-
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionLength", 0);
 }
 
 TEST_F(ReadAnythingAppControllerTest, OnUrlInformationSet_LogsReload) {
@@ -1099,7 +1081,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnSettingsRestoredFromPrefs_WithLineFocusFlag) {
-  EnableLineFocus();
   auto line_spacing = read_anything::mojom::LineSpacing::kVeryLoose;
   auto letter_spacing = read_anything::mojom::LetterSpacing::kVeryWide;
   std::string font_name = "Roboto";
@@ -1131,31 +1112,14 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       StartLineFocusSession_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  StartLineFocusSession();
-  ASSERT_FALSE(model().line_focus_session_start_time().has_value());
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        StartLineFocusSession_StartsSessionWithFlag) {
-  EnableLineFocus();
   StartLineFocusSession();
   ASSERT_TRUE(model().line_focus_session_start_time().has_value());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       AddLineFocusScrollDistance_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  const int distance = 100;
-  AddLineFocusScrollDistance(distance);
-  ASSERT_EQ(model().line_focus_scroll_distance(), 0);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        AddLineFocusScrollDistance_AddsDistanceWithFlag) {
   const int distance = 100;
-  EnableLineFocus();
 
   AddLineFocusScrollDistance(distance);
   ASSERT_EQ(model().line_focus_scroll_distance(), distance);
@@ -1165,17 +1129,8 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       AddLineFocusMouseDistance_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  const int distance = 100;
-  AddLineFocusMouseDistance(distance);
-  ASSERT_EQ(model().line_focus_scroll_distance(), 0);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        AddLineFocusMouseDistance_AddsDistanceWithFlag) {
   const int distance = 100;
-  EnableLineFocus();
 
   AddLineFocusMouseDistance(distance);
   ASSERT_EQ(model().line_focus_mouse_distance(), distance);
@@ -1185,15 +1140,7 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       IncrementLineFocusKeyboardLines_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  IncrementLineFocusKeyboardLines();
-  ASSERT_EQ(model().line_focus_keyboard_lines(), 0);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        IncrementLineFocusKeyboardLines_IncrementsWithFlag) {
-  EnableLineFocus();
 
   IncrementLineFocusKeyboardLines();
   ASSERT_EQ(model().line_focus_keyboard_lines(), 1);
@@ -1203,15 +1150,7 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       IncrementLineFocusSpeechLines_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  IncrementLineFocusSpeechLines();
-  ASSERT_EQ(model().line_focus_speech_lines(), 0);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        IncrementLineFocusSpeechLines_IncrementsWithFlag) {
-  EnableLineFocus();
 
   IncrementLineFocusSpeechLines();
   ASSERT_EQ(model().line_focus_speech_lines(), 1);
@@ -1221,32 +1160,7 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       LogLineFocusSession_DoesNothingWithoutFlag) {
-  DisableLineFocus();
-  base::HistogramTester histogram_tester;
-  StartLineFocusSession();
-  model().set_line_focus_mouse_distance(1000);
-  model().set_line_focus_scroll_distance(348);
-  model().set_line_focus_keyboard_lines(25);
-  model().set_line_focus_speech_lines(102);
-
-  LogLineFocusSession();
-
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionLength", 0);
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionMouseDistance", 0);
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionScrollDistance", 0);
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionKeyboardLines", 0);
-  histogram_tester.ExpectTotalCount(
-      "Accessibility.ReadAnything.LineFocusSessionSpeechLines", 0);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        LogLineFocusSession_DoesNothingIfNeverStarted) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   model().set_line_focus_mouse_distance(1000);
   model().set_line_focus_scroll_distance(348);
@@ -1268,7 +1182,6 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest, LogLineFocusSession_IncrementsWithFlag) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   StartLineFocusSession();
   const int mouse_distance = 2001;
@@ -1299,7 +1212,6 @@ TEST_F(ReadAnythingAppControllerTest, LogLineFocusSession_IncrementsWithFlag) {
 }
 
 TEST_F(ReadAnythingAppControllerTest, LogLineFocusSession_ResetsSession) {
-  EnableLineFocus();
   StartLineFocusSession();
   const int mouse_distance = 2001;
   const int scroll_distance = 202;
@@ -1321,7 +1233,6 @@ TEST_F(ReadAnythingAppControllerTest, LogLineFocusSession_ResetsSession) {
 
 TEST_F(ReadAnythingAppControllerTest,
        TurningLineFocusOffThenClosingReadingModeLogsOneSession) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
 
   auto line_focus = read_anything::mojom::LineFocus::kLineCursor;
@@ -1343,54 +1254,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
   histogram_tester.ExpectTotalCount(
       "Accessibility.ReadAnything.LineFocusSessionLength", 1);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
-       OnSettingsRestoredFromPrefs_WithLineFocusFlagDisabled) {
-  DisableLineFocus();
-  auto line_spacing = read_anything::mojom::LineSpacing::kVeryLoose;
-  auto letter_spacing = read_anything::mojom::LetterSpacing::kVeryWide;
-  std::string font_name = "Roboto";
-  double font_size = 3.0;
-  bool links_enabled = false;
-  bool images_enabled = true;
-  auto color = read_anything::mojom::Colors::kDefaultValue;
-  int color_value = 0;
-  double speech_rate = 1.5;
-  std::string voice_value = "Italian voice 3";
-  std::string language_value = "it";
-  base::DictValue voices = base::DictValue();
-  voices.Set(language_value, voice_value);
-  base::ListValue languages_enabled_in_pref = base::ListValue();
-  languages_enabled_in_pref.Append(language_value);
-  auto highlight_granularity =
-      read_anything::mojom::HighlightGranularity::kDefaultValue;
-  int highlight_granularity_value = 0;
-  auto line_focus_enabled_mode = read_anything::mojom::LineFocus::kLineCursor;
-
-  controller().SetLanguageForTesting(language_value);
-
-  controller().OnSettingsRestoredFromPrefs(
-      line_spacing, letter_spacing, font_name, font_size, links_enabled,
-      images_enabled, color, speech_rate, std::move(voices),
-      std::move(languages_enabled_in_pref), highlight_granularity,
-      line_focus_enabled_mode, true);
-
-  EXPECT_EQ(std::to_underlying(line_spacing), controller().LineSpacing());
-  EXPECT_EQ(std::to_underlying(letter_spacing), controller().LetterSpacing());
-  EXPECT_EQ(font_name, controller().FontName());
-  EXPECT_EQ(font_size, controller().FontSize());
-  EXPECT_EQ(links_enabled, controller().LinksEnabled());
-  EXPECT_EQ(color_value, controller().ColorTheme());
-  EXPECT_EQ(speech_rate, read_aloud_model().speech_rate());
-  EXPECT_EQ(voice_value, controller().GetStoredVoice());
-  EXPECT_EQ(1u, controller().GetLanguagesEnabledInPref().size());
-  EXPECT_EQ(language_value, controller().GetLanguagesEnabledInPref()[0]);
-  EXPECT_EQ(highlight_granularity_value,
-            read_aloud_model().highlight_granularity());
-  EXPECT_EQ(static_cast<int>(read_anything::mojom::LineFocus::kDefaultValue),
-            controller().LastNonDisabledLineFocus());
-  EXPECT_FALSE(controller().IsLineFocusOn());
 }
 
 TEST_F(ReadAnythingAppControllerTest, RootIdIsSnapshotRootId) {
@@ -2728,6 +2591,75 @@ TEST_F(ReadAnythingAppControllerTest,
   Mock::VerifyAndClearExpectations(distiller_);
 }
 
+TEST_F(ReadAnythingAppControllerTest,
+       OnSelectionChange_SameSelectionInFlightIsNotResent) {
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+
+  EXPECT_CALL(page_handler_,
+              OnSelectionChange(tree_id_, 2, 0, 3, 1, testing::_))
+      .Times(1);
+  controller().OnSelectionChange(2, 0, 3, 1);
+  controller().OnSelectionChange(2, 0, 3, 1);
+
+  // The main page reports one selection change for the request, so only one
+  // selection is unprocessed.
+  EXPECT_EQ(1, model().unprocessed_selections_from_reading_mode());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       OnSelectionChange_SameSelectionResentAfterUserSelection) {
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+
+  EXPECT_CALL(page_handler_,
+              OnSelectionChange(tree_id_, 2, 0, 3, 1, testing::_))
+      .Times(2);
+  controller().OnSelectionChange(2, 0, 3, 1);
+  // A user selection on the main page supersedes the request.
+  SetMainPageSelection(2, 0, 3, 2, ax::mojom::EventFrom::kUser);
+  ASSERT_EQ(0, model().unprocessed_selections_from_reading_mode());
+
+  controller().OnSelectionChange(2, 0, 3, 1);
+
+  EXPECT_EQ(1, model().unprocessed_selections_from_reading_mode());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       OnSelectionChange_SameSelectionResentAfterCollapse) {
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+  SetMainPageSelection(2, 0, 3, 2);
+
+  EXPECT_CALL(page_handler_,
+              OnSelectionChange(tree_id_, 2, 0, 3, 1, testing::_))
+      .Times(2);
+  EXPECT_CALL(page_handler_, OnCollapseSelection).Times(1);
+  controller().OnSelectionChange(2, 0, 3, 1);
+  controller().OnCollapseSelection();
+  controller().OnSelectionChange(2, 0, 3, 1);
+
+  EXPECT_EQ(3, model().unprocessed_selections_from_reading_mode());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       OnSelectionChange_SameSelectionResentAfterRejected) {
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+
+  EXPECT_CALL(page_handler_,
+              OnSelectionChange(tree_id_, 2, 0, 3, 1, testing::_))
+      .WillOnce(base::test::RunOnceCallback<5>(false))
+      .WillOnce(base::test::RunOnceCallback<5>(true));
+  controller().OnSelectionChange(2, 0, 3, 1);
+  FlushPageHandlerReplies();
+  ASSERT_EQ(0, model().unprocessed_selections_from_reading_mode());
+
+  controller().OnSelectionChange(2, 0, 3, 1);
+
+  EXPECT_EQ(1, model().unprocessed_selections_from_reading_mode());
+}
+
 TEST_F(ReadAnythingAppControllerTest, OnSelectionChange_ThenPostProcess) {
   ui::AXNodeData node1 = test::TextNode(/* id= */ 2);
   ui::AXNodeData node2 = test::TextNode(/* id= */ 3);
@@ -2981,8 +2913,11 @@ TEST_F(ReadAnythingAppControllerTest,
   EXPECT_FALSE(controller().IsContentTranslated());
 }
 
-TEST_F(ReadAnythingAppControllerTest, IsAwaitingTranslation_DefaultsToFalse) {
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+TEST_F(ReadAnythingAppControllerTest, TranslationState_DefaultsToNone) {
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+  EXPECT_EQ(static_cast<int>(ReadAnythingAppModel::TranslationState::kNone),
+            controller().GetTranslationState());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -2990,14 +2925,17 @@ TEST_F(ReadAnythingAppControllerTest,
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // A report that the tab isn't translated (yet) doesn't stop awaiting.
   controller().OnTranslationStateChanged(/*is_translated=*/false);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   controller().OnTranslationStateChanged(/*is_translated=*/true);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3006,7 +2944,8 @@ TEST_F(ReadAnythingAppControllerTest,
   controller().OnTranslationStateChanged(/*is_translated=*/true);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3015,7 +2954,8 @@ TEST_F(ReadAnythingAppControllerTest,
   feature_list.InitAndDisableFeature(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3023,18 +2963,21 @@ TEST_F(ReadAnythingAppControllerTest,
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kReadAnythingContextMenu);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest, OnReadingModeHidden_StopsAwaiting) {
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   EXPECT_CALL(page_handler_, AckReadingModeHidden());
   controller().OnReadingModeHidden(/*tab_active=*/true);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3042,19 +2985,23 @@ TEST_F(ReadAnythingAppControllerTest,
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   EXPECT_CALL(page_handler_, AckReadingModeHidden());
   controller().OnReadingModeHidden(/*tab_active=*/false);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // Returning to the tab keeps awaiting the pending translation.
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kTabSwitch);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   controller().OnTranslationStateChanged(/*is_translated=*/true);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3066,12 +3013,14 @@ TEST_F(ReadAnythingAppControllerTest,
                                        kFirstPage, /*is_pdf=*/true);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // Navigating to another page cancels the pending translation.
   controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(),
                                        kSecondPage, /*is_pdf=*/false);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3082,17 +3031,20 @@ TEST_F(ReadAnythingAppControllerTest,
                                        /*is_pdf=*/true);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // The PDF's tree can change without the page changing.
   controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(), kPage,
                                        /*is_pdf=*/true);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // An unknown tree doesn't mean that the page changed.
   controller().OnActiveAXTreeIDChanged(ui::AXTreeIDUnknown(),
                                        ukm::kInvalidSourceId, /*is_pdf=*/false);
-  EXPECT_TRUE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3105,26 +3057,197 @@ TEST_F(ReadAnythingAppControllerTest,
                                        /*is_pdf=*/true);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   // On a navigation, the previous page's tree can be destroyed before the new
   // page's tree becomes active. The page change is still detected.
   controller().OnAXTreeDestroyed(first_tree);
   controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(),
                                        kSecondPage, /*is_pdf=*/false);
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest, OnTranslationFailed_StopsAwaiting) {
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   controller().OnReadingModeShown(
       read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
-  ASSERT_TRUE(controller().IsAwaitingTranslation());
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
 
   controller().OnTranslationFailed();
-  EXPECT_FALSE(controller().IsAwaitingTranslation());
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
   // The content is still not translated.
   EXPECT_FALSE(model().is_content_translated());
+}
+
+TEST_F(ReadAnythingAppControllerTest, OnTranslationFailed_SetsFailed) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  FailAwaitedTranslation();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+
+  // Other translation state changes keep showing the failure.
+  controller().OnTranslationStateChanged(/*is_translated=*/false);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       OnTranslationFailed_NotAwaiting_DoesNotSetFailed) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  // Reading mode wasn't opened for the translation, so the untranslated content
+  // is still shown.
+  controller().OnTranslationFailed();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       OnTranslationFailed_AfterReadingModeClosed_DoesNotSetFailed) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  controller().OnReadingModeShown(
+      read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
+  EXPECT_CALL(page_handler_, AckReadingModeHidden());
+  controller().OnReadingModeHidden(/*tab_active=*/true);
+
+  controller().OnTranslationFailed();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest, TranslationFailed_ClearedWhenTranslated) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  FailAwaitedTranslation();
+
+  controller().OnTranslationStateChanged(/*is_translated=*/true);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       TranslationFailed_ClearedByNewTranslationRequest) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  FailAwaitedTranslation();
+
+  controller().OnReadingModeShown(
+      read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest, TranslationFailed_KeptOnTabSwitch) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  FailAwaitedTranslation();
+
+  // Switching tabs only hides reading mode.
+  EXPECT_CALL(page_handler_, AckReadingModeHidden());
+  controller().OnReadingModeHidden(/*tab_active=*/false);
+  controller().OnReadingModeShown(
+      read_anything::mojom::ReadAnythingOpenTrigger::kTabSwitch);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       TranslationFailed_ClearedWhenReadingModeClosed) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  FailAwaitedTranslation();
+
+  EXPECT_CALL(page_handler_, AckReadingModeHidden());
+  controller().OnReadingModeHidden(/*tab_active=*/true);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       TranslationFailed_ClearedBySelectionOnPage) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  // PDFs are distilled with Screen2x.
+  model().set_next_distillation_method(
+      ReadAnythingAppModel::DistillationMethod::kScreen2x);
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+  // Only node 2 is distilled, so a selection that ends in node 3 is outside the
+  // distilled content.
+  OnAXTreeDistilled(tree_id_, {2});
+  FailAwaitedTranslation();
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+
+  // A selection on the page replaces the translation failure message with the
+  // selected content.
+  SelectTextOnPage();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       TranslationFailed_KeptBySelectionFromReadingMode) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  // PDFs are distilled with Screen2x.
+  model().set_next_distillation_method(
+      ReadAnythingAppModel::DistillationMethod::kScreen2x);
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+  // Only node 2 is distilled, so a selection that ends in node 3 is outside the
+  // distilled content.
+  OnAXTreeDistilled(tree_id_, {2});
+  FailAwaitedTranslation();
+
+  // A selection made in reading mode is reflected on the page, but isn't a
+  // selection the user made on the page.
+  EXPECT_CALL(page_handler_, OnSelectionChange).Times(1);
+  controller().OnSelectionChange(2, 0, 3, 1);
+  FlushPageHandlerReplies();
+  SelectTextOnPage();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       AwaitingTranslation_KeptBySelectionOnPage) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  // PDFs are distilled with Screen2x.
+  model().set_next_distillation_method(
+      ReadAnythingAppModel::DistillationMethod::kScreen2x);
+  SendUpdateWithNodes(
+      {test::TextNode(/* id= */ 2), test::TextNode(/* id= */ 3)});
+  // Only node 2 is distilled, so a selection that ends in node 3 is outside the
+  // distilled content.
+  OnAXTreeDistilled(tree_id_, {2});
+  controller().OnReadingModeShown(
+      read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation);
+  ASSERT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
+
+  // Only a failure is replaced by the selection. The selected content is still
+  // kept behind the loading screen until it's translated.
+  SelectTextOnPage();
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kAwaiting,
+            model().translation_state());
+}
+
+TEST_F(ReadAnythingAppControllerTest, TranslationFailed_ClearedOnNewPage) {
+  base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
+  constexpr ukm::SourceId kFirstPage = 1;
+  constexpr ukm::SourceId kSecondPage = 2;
+  controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(),
+                                       kFirstPage, /*is_pdf=*/true);
+  FailAwaitedTranslation();
+
+  // A tree change within the same page keeps the failure.
+  controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(),
+                                       kFirstPage, /*is_pdf=*/true);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kFailed,
+            model().translation_state());
+
+  controller().OnActiveAXTreeIDChanged(ui::AXTreeID::CreateNewAXTreeID(),
+                                       kSecondPage, /*is_pdf=*/false);
+  EXPECT_EQ(ReadAnythingAppModel::TranslationState::kNone,
+            model().translation_state());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -3174,7 +3297,6 @@ TEST_F(ReadAnythingAppControllerTest, TurnedHighlightOff_SavesHighlightState) {
 }
 
 TEST_F(ReadAnythingAppControllerTest, OnLineFocusChanged_SetsLineFocus) {
-  EnableLineFocus();
   auto line_focus = read_anything::mojom::LineFocus::kLineCursor;
   EXPECT_CALL(page_handler_, OnLineFocusChanged(line_focus, line_focus))
       .Times(1);
@@ -3188,7 +3310,6 @@ TEST_F(ReadAnythingAppControllerTest, OnLineFocusChanged_SetsLineFocus) {
 
 TEST_F(ReadAnythingAppControllerTest,
        OnLineFocusChanged_ToOff_SetsLineFocusOff) {
-  EnableLineFocus();
   auto line_focus_off = read_anything::mojom::LineFocus::kOff;
   auto line_focus = read_anything::mojom::LineFocus::kLineStatic;
   EXPECT_CALL(page_handler_, OnLineFocusChanged).Times(1);
@@ -3418,7 +3539,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnActiveAXTreeIDChanged_StartsNewLineFocusSessionIfLineFocusOn) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   model().set_line_focus_enabled(true);
   StartLineFocusSession();
@@ -3465,7 +3585,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnActiveAXTreeIDChanged_DoesNotStartLineFocusSessionIfLineFocusOff) {
-  EnableLineFocus();
   model().set_line_focus_enabled(false);
 
   auto const new_id = ui::AXTreeID::CreateNewAXTreeID();
@@ -3475,20 +3594,7 @@ TEST_F(ReadAnythingAppControllerTest,
 }
 
 TEST_F(ReadAnythingAppControllerTest,
-       OnActiveAXTreeIDChanged_DoesNotStartLineFocusSessionWithoutFlag) {
-  DisableLineFocus();
-  model().set_line_focus_enabled(true);
-  StartLineFocusSession();
-
-  auto const new_id = ui::AXTreeID::CreateNewAXTreeID();
-  controller().OnActiveAXTreeIDChanged(new_id, ukm::kInvalidSourceId, false);
-
-  EXPECT_FALSE(model().line_focus_session_start_time().has_value());
-}
-
-TEST_F(ReadAnythingAppControllerTest,
        OnActiveAXTreeIDChanged_DoesNotStartLineFocusSessionIfHidden) {
-  EnableLineFocus();
   model().set_line_focus_enabled(true);
   model().set_active_presentation_state(
       read_anything::mojom::ReadAnythingPresentationState::kInactive);
@@ -3501,7 +3607,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnActiveAXTreeIDChanged_DoesNotStartLineFocusSessionIfWillHide) {
-  EnableLineFocus();
   model().set_line_focus_enabled(true);
   model().set_will_hide(true);
 
@@ -3513,7 +3618,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnActiveAXTreeIDChanged_NoPreviousTree_DoesNotStartLineFocusSession) {
-  EnableLineFocus();
   model().set_line_focus_enabled(true);
   model().SetRootTreeId(ui::AXTreeIDUnknown());
 
@@ -4495,6 +4599,29 @@ TEST_F(ReadAnythingAppControllerReadabilityTest,
 }
 
 TEST_F(ReadAnythingAppControllerReadabilityTest,
+       OnActiveAXTreeIDChanged_BeforeFirstAXUpdate_ExposesUkmSourceId) {
+  // The browser announces a page's tree and UKM source ID before the tree's
+  // first accessibility update. Readability doesn't wait for that update, so
+  // its content can arrive first.
+  const ui::AXTreeID tree_id = ui::AXTreeID::CreateNewAXTreeID();
+  const ukm::SourceId source_id = ukm::AssignNewSourceId();
+  controller().OnActiveAXTreeIDChanged(tree_id, source_id, /*is_pdf=*/false);
+  controller().UpdateContent("Title", "<p>Body</p>");
+
+  EXPECT_FALSE(model().ContainsActiveTree());
+  EXPECT_EQ(model().GetUkmSourceId(), source_id);
+
+  using Distillation = ukm::builders::Accessibility_ReadAnything_Distillation;
+  const auto entries =
+      test_ukm_recorder_->GetEntriesByName(Distillation::kEntryName);
+  ASSERT_THAT(entries, SizeIs(1));
+  EXPECT_EQ(entries[0]->source_id, source_id);
+  test_ukm_recorder_->ExpectEntryMetric(
+      entries[0], Distillation::kDistillationStatusName,
+      static_cast<int>(read_anything::mojom::DistillationStatus::kSuccess));
+}
+
+TEST_F(ReadAnythingAppControllerReadabilityTest,
        UpdateContent_ResetsSelectionMode) {
   model().set_side_panel_distillation_mode_for_testing(
       ReadAnythingAppModel::SidePanelDistillationMode::kSelection);
@@ -4774,6 +4901,25 @@ TEST_F(ReadAnythingAppControllerReadabilityTest,
 
   // Every new navigation should start with the preferred method (Readability in
   // this test suite).
+  EXPECT_EQ(model().current_content_distillation_method(),
+            ReadAnythingAppModel::DistillationMethod::kReadability);
+}
+
+TEST_F(ReadAnythingAppControllerReadabilityTest,
+       PhraseHighlightingEnabled_StillUsesReadability) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kReadAnythingWithReadability,
+       features::kReadAnythingReadAloudPhraseHighlighting},
+      {});
+
+  EXPECT_TRUE(controller().IsReadabilityEnabled());
+
+  model().set_current_content_distillation_method(
+      ReadAnythingAppModel::DistillationMethod::kScreen2x);
+  ui::AXTreeID new_tree_id = ui::AXTreeID::CreateNewAXTreeID();
+  controller().OnActiveAXTreeIDChanged(new_tree_id, ukm::kInvalidSourceId,
+                                       /*is_pdf=*/false);
   EXPECT_EQ(model().current_content_distillation_method(),
             ReadAnythingAppModel::DistillationMethod::kReadability);
 }
@@ -6154,7 +6300,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnReadingModeShown_StartsNewLineFocusSessionIfLineFocusOn) {
-  EnableLineFocus();
   base::HistogramTester histogram_tester;
   model().set_line_focus_enabled(true);
   StartLineFocusSession();
@@ -6177,7 +6322,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnReadingModeShown_DoesNotStartLineFocusSessionIfLineFocusOff) {
-  EnableLineFocus();
   model().set_line_focus_enabled(false);
 
   controller().OnReadingModeShown(
@@ -6188,7 +6332,6 @@ TEST_F(ReadAnythingAppControllerTest,
 
 TEST_F(ReadAnythingAppControllerTest,
        OnReadingModeShown_PreservesExistingLineFocusSessionIfAlreadyActive) {
-  EnableLineFocus();
   model().set_line_focus_enabled(true);
   StartLineFocusSession();
 
@@ -6202,17 +6345,6 @@ TEST_F(ReadAnythingAppControllerTest,
   EXPECT_TRUE(model().line_focus_session_start_time().has_value());
   EXPECT_EQ(model().line_focus_session_start_time().value(),
             initial_start_time);
-}
-
-TEST_F(ReadAnythingAppControllerTest,
-       OnReadingModeShown_DoesNotStartLineFocusSessionWithoutFlag) {
-  DisableLineFocus();
-  model().set_line_focus_enabled(true);
-
-  controller().OnReadingModeShown(
-      read_anything::mojom::ReadAnythingOpenTrigger::kOmniboxChip);
-
-  EXPECT_FALSE(model().line_focus_session_start_time().has_value());
 }
 
 TEST_F(ReadAnythingAppControllerTest,
@@ -6315,6 +6447,74 @@ TEST_F(ReadAnythingAppControllerTest,
 
   // Verify that node ID 2 WAS added to displayed_nodes_pending_deletion_.
   EXPECT_TRUE(IsNodePendingDeletion(2));
+}
+
+TEST_F(ReadAnythingAppControllerTest, OnNodeWillBeDeleted_Pdf_Ignored) {
+  // Same setup as OnNodeWillBeDeleted_ActiveTree_Processed, but for a PDF.
+  model().set_next_distillation_method(
+      ReadAnythingAppModel::DistillationMethod::kScreen2x);
+  model().SetIsPdf(true);
+  ui::AXTreeUpdate update;
+  test::SetUpdateTreeID(&update, tree_id_);
+  update.nodes = {test::TextNode(/* id= */ 2)};
+  AccessibilityEventReceived({std::move(update)});
+
+  model().Reset({2});
+  model().ComputeDisplayNodeIdsForDistilledTree();
+  ASSERT_TRUE(model().GetCurrentlyVisibleNodes()->contains(2));
+
+  const auto& tree_infos = model().tree_infos_for_testing();
+  auto it = tree_infos.find(tree_id_);
+  ASSERT_NE(it, tree_infos.end());
+  ui::AXTree* active_tree = it->second->manager->ax_tree();
+  ui::AXNode* active_node = active_tree->GetFromId(2);
+  ASSERT_NE(active_node, nullptr);
+
+  // PDF nodes can be temporarily removed from the tree, e.g. while the PDF
+  // viewer shows a modal menu. The displayed node should not be marked for
+  // deletion, which would remove it from the side panel.
+  controller().OnNodeWillBeDeleted(active_tree, active_node);
+
+  EXPECT_FALSE(IsNodePendingDeletion(2));
+  EXPECT_TRUE(model().GetCurrentlyVisibleNodes()->contains(2));
+}
+
+TEST_F(ReadAnythingAppControllerTest,
+       Pdf_DisplayedNodesTemporarilyRemoved_KeepsContentAndRedistills) {
+  SendUpdateWithNodes({test::TextNode(kId1, u"First page."),
+                       test::TextNode(kId2, u"Second page."),
+                       test::TextNode(kId3, u"Third page.")});
+
+  // Set up a PDF and display its content once the debouncer finishes.
+  controller().OnActiveAXTreeIDChanged(tree_id_, ukm::kInvalidSourceId,
+                                       /*is_pdf=*/true);
+  OnAXTreeDistilled(tree_id_, {kId1, kId2, kId3});
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+  ASSERT_THAT(model().display_node_ids(),
+              testing::IsSupersetOf({kId1, kId2, kId3}));
+
+  // Simulate the PDF viewer opening a modal menu, which removes the PDF
+  // content from the tree. The displayed content is kept, and no distillation
+  // is triggered because the tree shrank.
+  ExpectDistill(0);
+  ui::AXNodeData empty_root;
+  empty_root.id = 1;
+  SendUpdateWithNodes({std::move(empty_root)});
+  EXPECT_THAT(model().display_node_ids(),
+              testing::IsSupersetOf({kId1, kId2, kId3}));
+  Mock::VerifyAndClearExpectations(distiller_);
+
+  // Simulate the menu closing, which restores the PDF content. The tree grew,
+  // so the content is redistilled.
+  ExpectDistill(1);
+  ui::AXNodeData restored_root;
+  restored_root.id = 1;
+  restored_root.child_ids = {kId1, kId2, kId3};
+  SendUpdateWithNodes({std::move(restored_root),
+                       test::TextNode(kId1, u"First page."),
+                       test::TextNode(kId2, u"Second page."),
+                       test::TextNode(kId3, u"Third page.")});
+  Mock::VerifyAndClearExpectations(distiller_);
 }
 
 TEST_F(ReadAnythingAppControllerTest, OnNodeDeleted_InactiveTree_Ignored) {

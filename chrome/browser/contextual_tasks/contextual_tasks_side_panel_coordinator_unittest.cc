@@ -658,6 +658,12 @@ TEST_F(ContextualTasksSidePanelCoordinatorTest, GetActiveEntrySource) {
 
   EXPECT_EQ(ContextualTasksPanelController::EntrySource::kAskGoogle,
             coordinator_->GetActiveEntrySource());
+
+  coordinator_->Show(
+      false, omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_ABA_ONRAMP_IPH);
+
+  EXPECT_EQ(ContextualTasksPanelController::EntrySource::kAbaOnRamp,
+            coordinator_->GetActiveEntrySource());
 }
 
 TEST_F(ContextualTasksSidePanelCoordinatorTest, ShowSidePanelSetsEntryPoint) {
@@ -3742,6 +3748,33 @@ TEST_F(ContextualTasksSidePanelCoordinatorTest, IsShowingResults) {
   EXPECT_FALSE(IsShowingLensResults());
   EXPECT_FALSE(IsShowingAimResults());
 
+  // 1a. An unsubmitted query (added context) in AIM zero state
+  // counts as having an active session so the ephemeral and pinned buttons
+  // stay active when the side panel is closed.
+  auto* zero_state_user_data =
+      ContextualTasksWebContentsUserData::GetOrCreateForWebContents(
+          zero_state_wc);
+  zero_state_user_data->set_has_unsubmitted_query(true);
+  EXPECT_TRUE(coordinator_->IsShowingResults());
+  EXPECT_TRUE(coordinator_->HasResults());
+  EXPECT_FALSE(IsShowingLensResults());
+  EXPECT_TRUE(IsShowingAimResults());
+
+  // Closing the panel with an unsubmitted query in zero state keeps
+  // HasResults() true while IsShowingResults() becomes false.
+  ON_CALL(*mock_panel_host_, IsPanelOpenForContextualTask())
+      .WillByDefault(Return(false));
+  EXPECT_FALSE(coordinator_->IsShowingResults());
+  EXPECT_TRUE(coordinator_->HasResults());
+  ON_CALL(*mock_panel_host_, IsPanelOpenForContextualTask())
+      .WillByDefault(Return(true));
+
+  zero_state_user_data->set_has_unsubmitted_query(false);
+  EXPECT_FALSE(coordinator_->IsShowingResults());
+  EXPECT_FALSE(coordinator_->HasResults());
+  EXPECT_FALSE(IsShowingLensResults());
+  EXPECT_FALSE(IsShowingAimResults());
+
   // 1b. While a navigation to AIM results is still in progress (before commit),
   // HasResults() and IsShowingResults() are already true.
   auto pending_aim_nav = content::NavigationSimulator::CreateBrowserInitiated(
@@ -4361,6 +4394,106 @@ TEST_F(ContextualTasksSidePanelCoordinatorTest,
 }
 
 TEST_F(ContextualTasksSidePanelCoordinatorTest,
+       UnshareTabs_RevokesZeroStateFullTabAiModeSession) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kContextualTasks, {}},
+       {kContextualTasksForceEntryPointEligibility, {}},
+       {kContextualTasksSidePanelRearchitecture, {}},
+       {omnibox::kContextManagementInComposebox,
+        {{"enable_tab_deselection", "true"}}}},
+      {});
+
+  tabs::TabInterface* ai_tab = CreateMockTab();
+  tabs::TabInterface* tab1 = CreateMockTab();
+  content::WebContentsTester::For(ai_tab->GetContents())
+      ->NavigateAndCommit(GURL("https://www.google.com/search?udm=50&aep=11"));
+  content::WebContentsTester::For(tab1->GetContents())
+      ->NavigateAndCommit(GURL("https://example.com/1"));
+  ON_CALL(*static_cast<tabs::MockTabInterface*>(tab1), GetTitle())
+      .WillByDefault(Return(u"Tab 1"));
+
+  SessionID session_id1 =
+      sessions::SessionTabHelper::IdForTab(tab1->GetContents());
+
+  ON_CALL(*mock_panel_host_, IsPanelOpenForContextualTask())
+      .WillByDefault(Return(false));
+  webui::SetBrowserWindowInterface(ai_tab->GetContents(),
+                                   browser_window_.get());
+  auto* ai_user_data =
+      ContextualTasksWebContentsUserData::GetOrCreateForWebContents(
+          ai_tab->GetContents());
+  ASSERT_FALSE(ai_user_data->GetEffectiveTaskId().has_value());
+  ai_user_data->RecordTabIdMapping(tab1->GetHandle().raw_value(),
+                                   session_id1.id());
+
+  NiceMock<contextual_search::MockContextualSearchContextController>
+      mock_context_controller;
+  base::UnguessableToken attached_token = base::UnguessableToken::Create();
+  contextual_search::FileInfo controller_file;
+  controller_file.file_token = attached_token;
+  controller_file.tab_session_id = session_id1;
+  controller_file.tab_url = GURL("https://example.com/1");
+  controller_file.tab_title = "Tab 1";
+  ON_CALL(mock_context_controller, GetFileInfo(attached_token))
+      .WillByDefault(Return(&controller_file));
+  ON_CALL(mock_context_controller, DeleteFile(_)).WillByDefault(Return(true));
+
+  auto zero_state_session = std::make_unique<
+      NiceMock<contextual_search::MockContextualSearchSessionHandle>>();
+  auto* zero_state_session_ptr = zero_state_session.get();
+  ON_CALL(*zero_state_session_ptr, GetController())
+      .WillByDefault(Return(&mock_context_controller));
+  zero_state_session_ptr->GetUploadedContextTokensForTesting() = {
+      attached_token};
+  zero_state_session_ptr->AttachTabPendingUpload(
+      attached_token, session_id1.id(), GURL("https://example.com/1"), "Tab 1");
+  ContextualSearchWebContentsHelper::GetOrCreateForWebContents(
+      ai_tab->GetContents())
+      ->SetTaskSession(/*task_id=*/std::nullopt, std::move(zero_state_session),
+                       /*input_state_model=*/nullptr);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
+  std::vector<int32_t> full_tab_ext_ids;
+  NiceMock<MockContextualTasksExtensionPage> full_tab_ext_page;
+  mojo::Remote<mojom::ExtensionPageHandler> full_tab_ext_remote;
+  auto* full_tab_ext_handler =
+      ContextualTasksExtensionHandler::GetOrCreateForCurrentDocument(
+          ai_tab->GetContents()->GetPrimaryMainFrame());
+  ON_CALL(full_tab_ext_page, OnTabContextUpdated(_, _, _))
+      .WillByDefault([&full_tab_ext_ids](
+                         std::vector<searchbox::mojom::TabInfoPtr> tabs,
+                         const std::vector<int32_t>& /*submitted_tab_ids*/,
+                         mojom::SmartTabSharingStatePtr
+                         /*smart_tab_sharing_state*/) {
+        full_tab_ext_ids.clear();
+        for (const auto& t : tabs) {
+          full_tab_ext_ids.push_back(t->tab_id);
+        }
+      });
+  full_tab_ext_handler->CreateExtensionPageHandler(
+      full_tab_ext_page.BindAndGetRemote(),
+      full_tab_ext_remote.BindNewPipeAndPassReceiver());
+  full_tab_ext_page.FlushForTesting();
+  EXPECT_THAT(full_tab_ext_ids,
+              testing::ElementsAre(tab1->GetHandle().raw_value()));
+#endif
+
+  SetActiveTab(ai_tab);
+  coordinator_->UnshareTabs({tab1->GetHandle()});
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
+  full_tab_ext_page.FlushForTesting();
+  EXPECT_TRUE(full_tab_ext_ids.empty());
+#endif
+  EXPECT_TRUE(zero_state_session_ptr->GetTabContextState().attached.empty());
+  EXPECT_TRUE(zero_state_session_ptr->GetUploadedContextTokens().empty());
+
+  webui::SetBrowserWindowInterface(ai_tab->GetContents(), nullptr);
+  ON_CALL(*zero_state_session_ptr, GetController())
+      .WillByDefault(Return(nullptr));
+}
+
+TEST_F(ContextualTasksSidePanelCoordinatorTest,
        NavigationMetrics_RecordsResponseCodesAndNetError) {
   base::test::ScopedFeatureList local_feature_list;
   local_feature_list.InitAndEnableFeature(
@@ -4739,6 +4872,32 @@ TEST_F(ContextualTasksSidePanelCoordinatorTest,
                                       0, 1);
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.SidePanel.UserAction.CloseHadLinkClick", false, 1);
+}
+
+TEST_F(ContextualTasksSidePanelCoordinatorTest,
+       AbaOnRampSessionDuration_AndCloseSidePanelMetrics) {
+  base::HistogramTester histogram_tester;
+  base::UserActionTester user_action_tester;
+
+  ContextualTask task(base::Uuid::GenerateRandomV4());
+  ON_CALL(*mock_controller_, GetContextualTaskForTab(_))
+      .WillByDefault(Return(task));
+
+  coordinator_->Show(
+      /*transition_from_tab=*/false,
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_ABA_ONRAMP_IPH);
+
+  coordinator_->Close();
+  coordinator_->OnSurfaceStateChanged(
+      ContextualTasksPanelHost::SurfaceState::kClosed,
+      ContextualTasksPanelHost::StateChangeReason::kUserAction);
+
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Session.Duration.AbaOnRamp", 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.SidePanel.UserAction.Close.AbaOnRamp", true, 1);
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "ContextualTasks.SidePanel.UserAction.Close.AbaOnRamp"));
 }
 
 TEST_F(ContextualTasksSidePanelCoordinatorTest,

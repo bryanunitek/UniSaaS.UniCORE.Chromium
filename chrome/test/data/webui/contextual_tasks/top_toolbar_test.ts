@@ -36,6 +36,26 @@ suite('TopToolbarTest', () => {
   let proxy: TestContextualTasksBrowserProxy;
   let toolbarProxy: TestToolbarBrowserProxy;
 
+  // Ignore OS-level window blur/resize events (e.g. from parallel browser_tests
+  // windows stealing focus or asynchronous host window layout) so open menus do
+  // not close mid-test. Synthetic events (`!e.isTrusted`) dispatched by focus
+  // loss tests still propagate normally.
+  function stopTrustedWindowEvent(e: Event) {
+    if (e.isTrusted) {
+      e.stopImmediatePropagation();
+    }
+  }
+
+  suiteSetup(() => {
+    window.addEventListener('blur', stopTrustedWindowEvent, true);
+    window.addEventListener('resize', stopTrustedWindowEvent, true);
+  });
+
+  suiteTeardown(() => {
+    window.removeEventListener('blur', stopTrustedWindowEvent, true);
+    window.removeEventListener('resize', stopTrustedWindowEvent, true);
+  });
+
   setup(() => {
     proxy = new TestContextualTasksBrowserProxy(
         'chrome://webui-test/contextual_tasks/test.html');
@@ -99,13 +119,14 @@ suite('TopToolbarTest', () => {
   (loadTimeData.getBoolean('isSmallDeviceFormFactor') ?
        suite.skip :
        suite)('Expand button enabled', () => {
-    setup(() => {
+    setup(async () => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
       loadTimeData.overrideValues({expandButtonEnabled: true});
 
       topToolbar = document.createElement('top-toolbar');
       document.body.appendChild(topToolbar);
+      await microtasksFinished();
     });
 
     test('shows correct logo', () => {
@@ -435,6 +456,7 @@ suite('TopToolbarTest', () => {
     test(
         'logo click does not trigger page info when flag disabled',
         async () => {
+          const metrics = fakeMetricsPrivate();
           document.body.innerHTML = window.trustedTypes!.emptyHTML;
           loadTimeData.overrideValues({
             contextualTasksSidePanelRearchitectureEnabled: false,
@@ -451,10 +473,14 @@ suite('TopToolbarTest', () => {
           logo.click();
           assertEquals(
               0, toolbarProxy.handler.getCallCount('showPageInfoBubble'));
+          assertEquals(
+              0,
+              metrics.count('ContextualTasks.WebUI.UserAction.OpenPageInfo'));
         });
 
     test(
         'logo pointer click triggers page info when flag enabled', async () => {
+          const metrics = fakeMetricsPrivate();
           document.body.innerHTML = window.trustedTypes!.emptyHTML;
           loadTimeData.overrideValues({
             contextualTasksSidePanelRearchitectureEnabled: true,
@@ -472,9 +498,17 @@ suite('TopToolbarTest', () => {
           const isPointer =
               await toolbarProxy.handler.whenCalled('showPageInfoBubble');
           assertTrue(isPointer);
+          assertEquals(
+              2,
+              metrics.count('ContextualTasks.WebUI.UserAction.OpenPageInfo'));
+          assertEquals(
+              1,
+              metrics.count(
+                  'ContextualTasks.WebUI.UserAction.OpenPageInfo', true));
         });
 
     test('logo enter key triggers page info when flag enabled', async () => {
+      const metrics = fakeMetricsPrivate();
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
       loadTimeData.overrideValues({
         contextualTasksSidePanelRearchitectureEnabled: true,
@@ -491,9 +525,12 @@ suite('TopToolbarTest', () => {
       const isPointer =
           await toolbarProxy.handler.whenCalled('showPageInfoBubble');
       assertFalse(isPointer);
+      assertEquals(
+          2, metrics.count('ContextualTasks.WebUI.UserAction.OpenPageInfo'));
     });
 
     test('logo space key triggers page info when flag enabled', async () => {
+      const metrics = fakeMetricsPrivate();
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
       loadTimeData.overrideValues({
         contextualTasksSidePanelRearchitectureEnabled: true,
@@ -511,6 +548,8 @@ suite('TopToolbarTest', () => {
       const isPointer =
           await toolbarProxy.handler.whenCalled('showPageInfoBubble');
       assertFalse(isPointer);
+      assertEquals(
+          2, metrics.count('ContextualTasks.WebUI.UserAction.OpenPageInfo'));
     });
 
     test(
@@ -712,7 +751,7 @@ suite('TopToolbarTest', () => {
   });
 
   suite('Expand button and menu for lens flows disabled', () => {
-    setup(() => {
+    setup(async () => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
       loadTimeData.overrideValues({
@@ -725,6 +764,7 @@ suite('TopToolbarTest', () => {
 
       topToolbar = document.createElement('top-toolbar');
       document.body.appendChild(topToolbar);
+      await microtasksFinished();
     });
 
     const isPhone = loadTimeData.getBoolean('isSmallDeviceFormFactor');
@@ -846,7 +886,7 @@ suite('TopToolbarTest', () => {
   (loadTimeData.getBoolean('isSmallDeviceFormFactor') ?
        suite.skip :
        suite)('Menu for lens flows only', () => {
-    setup(() => {
+    setup(async () => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
       loadTimeData.overrideValues({
@@ -858,6 +898,7 @@ suite('TopToolbarTest', () => {
 
       topToolbar = document.createElement('top-toolbar');
       document.body.appendChild(topToolbar);
+      await microtasksFinished();
     });
 
     test('hides overflow menu button on ai page, shown for lens', async () => {
@@ -1228,7 +1269,8 @@ suite('TopToolbarTest', () => {
     test('forwards permission chip delegate calls to service', async () => {
       topToolbar.permissionDashboardState = {
         indicatorChip: createFakeChip(),
-        requestChip: createFakeChip({isVisible: true, iconName: 'kMicIcon'}),
+        requestChip: createFakeChip(
+            {isVisible: true, isFullyCollapsed: true, iconName: 'kMicIcon'}),
         isDividerVisible: false,
       };
       await microtasksFinished();
@@ -1556,6 +1598,33 @@ suite('TopToolbarTest', () => {
       profileIndicator.click();
       await microtasksFinished();
       assertFalse(tooltip.isOpen);
+    });
+
+    test('labels sign out based on signed in account count', async () => {
+      loadTimeData.overrideValues({
+        accountMenuSignOut: 'Sign out',
+        accountMenuSignOutOfAllAccounts: 'Sign out of all accounts',
+      });
+      topToolbar.profileAvatarUrl = 'data:image/png;base64,fakeImageData';
+      toolbarProxy.callbackRouterRemote.setSignedInAccountCount(1);
+      await microtasksFinished();
+
+      const profileIndicator =
+          topToolbar.shadowRoot.querySelector<HTMLElement>('#profileIndicator');
+      assertTrue(!!profileIndicator);
+      profileIndicator.click();
+      await microtasksFinished();
+
+      const accountMenu = topToolbar.$.accountMenu.get();
+      const signOutButton =
+          accountMenu.shadowRoot.querySelector<HTMLElement>('#signOutButton');
+      assertTrue(!!signOutButton);
+      assertEquals('Sign out', signOutButton.textContent.trim());
+
+      toolbarProxy.callbackRouterRemote.setSignedInAccountCount(2);
+      await microtasksFinished();
+      assertEquals(
+          'Sign out of all accounts', signOutButton.textContent.trim());
     });
 
     test('records account menu metrics', async () => {

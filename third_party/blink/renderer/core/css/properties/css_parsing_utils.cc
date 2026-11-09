@@ -962,7 +962,7 @@ bool IsImageSet(const CSSValueID id) {
   return id == CSSValueID::kWebkitImageSet || id == CSSValueID::kImageSet;
 }
 
-// Consumes a single param(<dashed-ident>, <declaration-value>?) function
+// Consumes a single param(<dashed-ident>: <declaration-value>?) function
 // from |stream|. Returns a CSSParamValuePair on success.
 CSSParamValuePair* ConsumeParam(CSSParserTokenStream& stream,
                                 const CSSParserContext& context,
@@ -983,9 +983,9 @@ CSSParamValuePair* ConsumeParam(CSSParserTokenStream& stream,
       return nullptr;
     }
 
-    // Comma is required per
-    // https://github.com/w3c/csswg-drafts/issues/13767.
-    if (stream.Peek().GetType() != kCommaToken) {
+    // A parameter name and explicit value are separated by a colon per
+    // https://github.com/w3c/csswg-drafts/issues/14275.
+    if (stream.Peek().GetType() != kColonToken) {
       return nullptr;
     }
     stream.Consume();
@@ -1078,6 +1078,22 @@ bool ConsumeAnyComponentValue(CSSParserTokenStream& stream) {
   return false;
 }
 
+bool InPermittedIntegerRange(CSSPrimitiveValue::ValueRange value_range,
+                             double value) {
+  switch (value_range) {
+    case CSSPrimitiveValue::ValueRange::kAll:
+      NOTREACHED() << "unexpected value range for integer parsing";
+    case CSSPrimitiveValue::ValueRange::kInteger:
+      return true;
+    case CSSPrimitiveValue::ValueRange::kNonNegative:
+      NOTREACHED() << "unexpected value range for integer parsing";
+    case CSSPrimitiveValue::ValueRange::kNonNegativeInteger:
+      return !(value < 0.0);
+    case CSSPrimitiveValue::ValueRange::kPositiveInteger:
+      return !(value < 1.0);
+  }
+}
+
 }  // namespace
 
 void ConsumeAnyValue(CSSParserTokenStream& stream) {
@@ -1154,31 +1170,21 @@ class MathFunctionParser {
   CSSMathFunctionValue* calc_value_ = nullptr;
 };
 
-CSSPrimitiveValue* ConsumeIntegerInternal(CSSParserTokenStream& stream,
-                                          const CSSParserContext& context,
-                                          CSSParserLocalContext& local_context,
-                                          double minimum_value,
-                                          const bool is_percentage_allowed) {
+CSSPrimitiveValue* ConsumeIntegerInternal(
+    CSSParserTokenStream& stream,
+    const CSSParserContext& context,
+    CSSParserLocalContext& local_context,
+    CSSPrimitiveValue::ValueRange value_range,
+    const bool is_percentage_allowed) {
   const CSSParserToken token = stream.Peek();
   if (token.GetType() == kNumberToken) {
     if (token.GetNumericValueType() == kNumberValueType ||
-        token.NumericValue() < minimum_value) {
+        !InPermittedIntegerRange(value_range, token.NumericValue())) {
       return nullptr;
     }
     return CSSNumericLiteralValue::Create(
         stream.ConsumeIncludingWhitespace().NumericValue(),
         CSSPrimitiveValue::UnitType::kInteger);
-  }
-
-  DCHECK(minimum_value == -std::numeric_limits<double>::max() ||
-         minimum_value == 0 || minimum_value == 1);
-
-  CSSPrimitiveValue::ValueRange value_range =
-      CSSPrimitiveValue::ValueRange::kInteger;
-  if (minimum_value == 0) {
-    value_range = CSSPrimitiveValue::ValueRange::kNonNegativeInteger;
-  } else if (minimum_value == 1) {
-    value_range = CSSPrimitiveValue::ValueRange::kPositiveInteger;
   }
 
   using enum CSSMathExpressionNode::Flag;
@@ -1203,9 +1209,9 @@ CSSPrimitiveValue* ConsumeIntegerInternal(CSSParserTokenStream& stream,
 CSSPrimitiveValue* ConsumeInteger(CSSParserTokenStream& stream,
                                   const CSSParserContext& context,
                                   CSSParserLocalContext& local_context,
-                                  double minimum_value,
+                                  CSSPrimitiveValue::ValueRange value_range,
                                   const bool is_percentage_allowed) {
-  return ConsumeIntegerInternal(stream, context, local_context, minimum_value,
+  return ConsumeIntegerInternal(stream, context, local_context, value_range,
                                 is_percentage_allowed);
 }
 
@@ -1223,24 +1229,8 @@ CSSPrimitiveValue* ConsumeIntegerOrNumberCalc(
     const CSSParserContext& context,
     CSSParserLocalContext& local_context,
     CSSPrimitiveValue::ValueRange value_range) {
-  double minimum_value = -std::numeric_limits<double>::max();
-  switch (value_range) {
-    case CSSPrimitiveValue::ValueRange::kAll:
-      NOTREACHED() << "unexpected value range for integer parsing";
-    case CSSPrimitiveValue::ValueRange::kInteger:
-      minimum_value = -std::numeric_limits<double>::max();
-      break;
-    case CSSPrimitiveValue::ValueRange::kNonNegative:
-      NOTREACHED() << "unexpected value range for integer parsing";
-    case CSSPrimitiveValue::ValueRange::kNonNegativeInteger:
-      minimum_value = 0.0;
-      break;
-    case CSSPrimitiveValue::ValueRange::kPositiveInteger:
-      minimum_value = 1.0;
-      break;
-  }
   if (CSSPrimitiveValue* value =
-          ConsumeInteger(stream, context, local_context, minimum_value)) {
+          ConsumeInteger(stream, context, local_context, value_range)) {
     return value;
   }
 
@@ -1262,7 +1252,8 @@ CSSPrimitiveValue* ConsumePositiveInteger(
     CSSParserTokenStream& stream,
     const CSSParserContext& context,
     CSSParserLocalContext& local_context) {
-  return ConsumeInteger(stream, context, local_context, 1);
+  return ConsumeInteger(stream, context, local_context,
+                        CSSPrimitiveValue::ValueRange::kPositiveInteger);
 }
 
 CSSPrimitiveValue* ConsumeNumber(CSSParserTokenStream& stream,
@@ -1738,10 +1729,10 @@ CSSFunctionValue* ConsumeIdentFunction(CSSParserTokenStream& stream,
       values.push_back(string_value);
       continue;
     }
-    if (CSSValue* integer_value = ConsumeInteger(
-            stream, context, local_context,
-            /*minimum_value=*/-std::numeric_limits<double>::max(),
-            /*is_percentage_allowed=*/false)) {
+    if (CSSValue* integer_value =
+            ConsumeInteger(stream, context, local_context,
+                           CSSPrimitiveValue::ValueRange::kInteger,
+                           /*is_percentage_allowed=*/false)) {
       // TODO(crbug.com/488111037): Add support for random() inside ident().
       if (integer_value->HasRandomFunctions()) {
         return nullptr;
@@ -4422,20 +4413,9 @@ bool FontFamilyNeedsQuoting(const AtomicString& string) {
           !can_serialize_unquoted);
 }
 
-// https://drafts.csswg.org/css-cascade/#default
-bool IsRevertKeyword(StringView keyword) {
-  return EqualIgnoringAsciiCase(keyword, "revert");
-}
-
 // https://drafts.csswg.org/css-values-4/#identifier-value
 bool IsDefaultKeyword(StringView keyword) {
   return EqualIgnoringAsciiCase(keyword, "default");
-}
-
-// https://drafts.csswg.org/css-syntax/#typedef-hash-token
-bool IsHashIdentifier(const CSSParserToken& token) {
-  return token.GetType() == kHashToken &&
-         token.GetHashTokenType() == kHashTokenId;
 }
 
 bool IsDashedIdent(const CSSParserToken& token) {
@@ -4479,14 +4459,6 @@ CSSValue* ConsumeCSSWideKeyword(CSSParserTokenStream& stream,
     default:
       NOTREACHED();
   }
-}
-
-bool IsTimelineName(const CSSParserToken& token) {
-  if (token.GetType() == kStringToken) {
-    return true;
-  }
-  return token.GetType() == kIdentToken &&
-         IsCustomIdent<CSSValueID::kNone>(token.Id());
 }
 
 CSSValue* ConsumeSelfPositionOverflowPosition(
@@ -4815,13 +4787,6 @@ CSSValue* ConsumeTimelineRangeNameAndPercent(
   }
   list->Append(*percentage);
   return list;
-}
-
-CSSValue* ConsumeAnimationDelay(CSSParserTokenStream& stream,
-                                const CSSParserContext& context,
-                                CSSParserLocalContext& local_context) {
-  return ConsumeTime(stream, context, local_context,
-                     CSSPrimitiveValue::ValueRange::kAll);
 }
 
 CSSValue* ConsumeAnimationRange(CSSParserTokenStream& stream,
@@ -5509,11 +5474,11 @@ bool ParseBackgroundOrMask(bool important,
           }
         }
 
-        if (shorthand_id == CSSPropertyID::kMask) {
-          longhands[i].push_back(To<Longhand>(property).InitialValue());
-        } else {
-          longhands[i].push_back(CSSInitialValue::Create());
-        }
+        // Store the property's actual initial value rather than the 'initial'
+        // keyword, so that reading a longhand back reports its canonical
+        // initial value (e.g. 'scroll' for background-attachment) as required
+        // by https://drafts.csswg.org/cssom/#serialize-a-css-value.
+        longhands[i].push_back(To<Longhand>(property).InitialValue());
       }
     }
   } while (ConsumeCommaIncludingWhitespace(stream));
@@ -5525,7 +5490,8 @@ bool ParseBackgroundOrMask(bool important,
     if (property.IDEquals(CSSPropertyID::kBackgroundColor)) {
       // There can only be one background-color (we've verified this earlier,
       // by means of previous_layer_had_background_color), so pick out only
-      // the last one (any others will just be “initial” over and over again).
+      // the last one (any others will just be its initial value over and
+      // over again).
       longhand = longhands[i].back().Get();
     } else {
       // To conserve memory we don't wrap a single value in a list.
@@ -5813,32 +5779,29 @@ CSSValue* ConsumeCornerShape(CSSParserTokenStream& stream,
   return MakeGarbageCollected<cssvalue::CSSSuperellipseValue>(*param);
 }
 
-bool ConsumeCorner(CSSParserTokenStream& stream,
-                   const CSSParserContext& context,
-                   CSSParserLocalContext& local_context,
-                   CSSValue*& radius,
-                   CSSValue*& shape) {
-  if (stream.Peek().GetType() == kIdentToken &&
-      stream.Peek().Id() == CSSValueID::kNormal) {
-    ConsumeIdent(stream);
-    radius = MakeGarbageCollected<CSSValuePair>(
-        CSSNumericLiteralValue::Create(0, CSSPrimitiveValue::UnitType::kPixels),
-        CSSNumericLiteralValue::Create(0, CSSPrimitiveValue::UnitType::kPixels),
-        CSSValuePair::kDropIdenticalValues);
-    shape = CSSIdentifierValue::Create(CSSValueID::kRound);
-    return true;
+CSSValue* ConsumeSingleCornerRadius(CSSParserTokenStream& stream,
+                                    const CSSParserContext& context,
+                                    CSSParserLocalContext& local_context) {
+  CSSParserSavePoint savepoint(stream);
+  CSSValue* horizontal =
+      ConsumeLengthOrPercent(stream, context, local_context,
+                             CSSPrimitiveValue::ValueRange::kNonNegative);
+  if (!horizontal) {
+    return nullptr;
   }
-
-  shape = ConsumeCornerShape(stream, context, local_context);
-  radius = ParseBorderRadiusCorner(stream, context, local_context);
-  if (!radius) {
-    return false;
+  const bool slash_separated = ConsumeSlashIncludingWhitespace(stream);
+  CSSValue* vertical =
+      ConsumeLengthOrPercent(stream, context, local_context,
+                             CSSPrimitiveValue::ValueRange::kNonNegative);
+  if (!vertical) {
+    if (slash_separated) {
+      return nullptr;
+    }
+    vertical = horizontal;
   }
-
-  if (!shape) {
-    shape = ConsumeCornerShape(stream, context, local_context);
-  }
-  return shape != nullptr;
+  savepoint.Release();
+  return MakeGarbageCollected<CSSValuePair>(horizontal, vertical,
+                                            CSSValuePair::kDropIdenticalValues);
 }
 
 CSSValue* ParseBorderWidthSide(CSSParserTokenStream& stream,
@@ -7289,7 +7252,7 @@ CSSValue* ConsumeGridLine(CSSParserTokenStream& stream,
     CSSCustomIdentValue* line_name = nullptr;
     do {
       if (!span_count) {
-        span_count = ConsumeInteger(stream, context, local_context, 1.0);
+        span_count = ConsumePositiveInteger(stream, context, local_context);
         if (span_count) {
           continue;
         }

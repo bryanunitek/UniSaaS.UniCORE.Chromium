@@ -82,6 +82,10 @@
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/latency/latency_info.h"
 
+namespace base {
+class ReadOnlySharedMemoryRegion;
+}
+
 namespace gfx {
 class PointF;
 }
@@ -96,7 +100,7 @@ class NamedTrack;
 
 namespace cc {
 
-class BrowserControlsOffsetManager;
+class BrowserControlsOffsetManagerInterface;
 class CompositorFrameReportingController;
 class RasterDarkModeFilter;
 class DebugRectHistory;
@@ -696,7 +700,7 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
   viz::ClientResourceProvider* resource_provider() {
     return resource_provider_.get();
   }
-  BrowserControlsOffsetManager* browser_controls_manager() {
+  BrowserControlsOffsetManagerInterface* browser_controls_manager() {
     return browser_controls_offset_manager_.get();
   }
   const GlobalStateThatImpactsTilePriority& global_tile_state() {
@@ -849,6 +853,9 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
       const {
     return compositor_frame_reporting_controller_.get();
   }
+
+  // See CompositorFrameReportingController.
+  base::ReadOnlySharedMemoryRegion TakeScrollTimingBufferRegion();
 
   void set_pending_tree_fully_painted_for_testing(bool painted) {
     pending_tree_fully_painted_ = painted;
@@ -1166,7 +1173,7 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
 
   TileManager tile_manager_;
 
-  std::unique_ptr<BrowserControlsOffsetManager>
+  std::unique_ptr<BrowserControlsOffsetManagerInterface>
       browser_controls_offset_manager_;
 
   std::unique_ptr<PageScaleAnimation> page_scale_animation_;

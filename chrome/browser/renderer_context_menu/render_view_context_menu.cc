@@ -146,7 +146,6 @@
 #include "chrome/browser/ui/tabs/page_context_eligibility_helper.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
-#include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/translate/partial_translate_bubble_model.h"
 #include "chrome/browser/ui/translate/translate_controller.h"
@@ -507,6 +506,22 @@ ui::ImageModel GetLensContextMenuIcon() {
           : vector_icons::kSearchChromeRefreshOldIcon
 #endif
   );
+}
+
+// Returns the `ReadingListModel` for `browser_context` if it is loaded and
+// supports `url`, or `nullptr` otherwise.
+ReadingListModel* GetLoadedReadingListModelForUrl(
+    content::BrowserContext* browser_context,
+    const GURL& url) {
+  if (!url.is_valid()) {
+    return nullptr;
+  }
+  ReadingListModel* model =
+      ReadingListModelFactory::GetForBrowserContext(browser_context);
+  if (!model || !model->loaded() || !model->IsUrlSupported(url)) {
+    return nullptr;
+  }
+  return model;
 }
 
 enum class UmaEnumIdLookupType {
@@ -1769,8 +1784,7 @@ void RenderViewContextMenu::RecordUsedItem(int id) {
                chrome::kChromeSearchMostVisitedUrl) {
       base::RecordAction(
           base::UserMetricsAction("MostVisited_ClickedFromContextMenu"));
-    } else if (doc_url.DeprecatedGetOriginAsURL() ==
-                   chrome::ChromeUINewTabPageURLAsGURL() ||
+    } else if (search::IsNewTabPageOrigin(doc_url) ||
                doc_url.DeprecatedGetOriginAsURL() ==
                    GURL(chrome::kChromeUIUntrustedNewTabPageUrl)) {
       base::RecordAction(base::UserMetricsAction(
@@ -2074,22 +2088,10 @@ void RenderViewContextMenu::AppendLinkItems() {
         auto [string_id, icon] =
             GetOpenLinkInSplitStringAndIcon(tab, GetBrowser());
 
-        if (tabs::kSplitViewHorizontalDirectAccess.Get() &&
-            !(tab && tab->IsSplit())) {
-          split_layout_submenu_ = std::make_unique<SplitViewLayoutMenuModel>(
-              base::BindOnce(&RenderViewContextMenu::OpenLinkInSplitView,
-                             base::Unretained(this)));
-          menu_model_.AddSubMenuWithStringIdAndIcon(
-              IDC_CONTENT_CONTEXT_OPENLINKSPLITVIEW, string_id,
-              split_layout_submenu_.get(),
-              ui::ImageModel::FromVectorIcon(*icon, ui::kColorMenuIcon,
-                                             kTabMenuIconSize));
-        } else {
-          menu_model_.AddItemWithStringIdAndIcon(
-              IDC_CONTENT_CONTEXT_OPENLINKSPLITVIEW, string_id,
-              ui::ImageModel::FromVectorIcon(*icon, ui::kColorMenuIcon,
-                                             kTabMenuIconSize));
-        }
+        menu_model_.AddItemWithStringIdAndIcon(
+            IDC_CONTENT_CONTEXT_OPENLINKSPLITVIEW, string_id,
+            ui::ImageModel::FromVectorIcon(*icon, ui::kColorMenuIcon,
+                                           kTabMenuIconSize));
 
         const int command_index =
             menu_model_
@@ -2252,7 +2254,8 @@ void RenderViewContextMenu::AppendCopyLinkLocationItem() {
                                   params_.link_url.SchemeIs(url::kMailToScheme)
                                       ? IDS_CONTENT_CONTEXT_COPYEMAILADDRESS
                                       : IDS_CONTENT_CONTEXT_COPYLINKLOCATION);
-  if (features::IsMenuSimplificationEnabled() && !params_.has_image_contents) {
+  if (features::IsMenuSimplificationEnabled() && !params_.has_image_contents &&
+      GetLoadedReadingListModelForUrl(browser_context_, params_.link_url)) {
     menu_model_.AddItemWithStringIdAndIcon(
         IDC_CONTENT_CONTEXT_ADD_LINK_TO_READING_LIST,
         IDS_CONTENT_CONTEXT_ADD_LINK_TO_READING_LIST,
@@ -3657,7 +3660,8 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
       return params_.unfiltered_link_url.is_valid();
 
     case IDC_CONTENT_CONTEXT_ADD_LINK_TO_READING_LIST:
-      return params_.link_url.is_valid();
+      return GetLoadedReadingListModelForUrl(browser_context_,
+                                             params_.link_url) != nullptr;
 
     case IDC_CONTENT_CONTEXT_COPYLINKTEXT:
       return true;
@@ -4044,7 +4048,7 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
 
     case IDC_CONTENT_CONTEXT_OPENLINKSPLITVIEW:
 #if !BUILDFLAG(IS_ANDROID)
-      OpenLinkInSplitView(split_tabs::SplitTabLayout::kSideBySide);
+      OpenLinkInSplitView();
 #endif  // !BUILDFLAG(IS_ANDROID)
       break;
     case IDC_CONTENT_CONTEXT_SAVELINKAS:
@@ -4063,18 +4067,18 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
 
     case IDC_CONTENT_CONTEXT_ADD_LINK_TO_READING_LIST: {
       ReadingListModel* model =
-          ReadingListModelFactory::GetForBrowserContext(browser_context_);
-      if (model) {
-        std::u16string title = params_.link_text;
-        if (title.empty()) {
-          title = base::UTF8ToUTF16(params_.link_url.spec());
-        }
-        model->AddOrReplaceEntry(
-            params_.link_url, base::UTF16ToUTF8(title),
-            reading_list::EntrySource::ADDED_VIA_CURRENT_APP,
-            /*estimated_read_time=*/std::nullopt,
-            /*creation_time=*/std::nullopt);
+          GetLoadedReadingListModelForUrl(browser_context_, params_.link_url);
+      if (!model) {
+        break;
       }
+      std::u16string title = params_.link_text;
+      if (title.empty()) {
+        title = base::UTF8ToUTF16(params_.link_url.spec());
+      }
+      model->AddOrReplaceEntry(params_.link_url, base::UTF16ToUTF8(title),
+                               reading_list::EntrySource::ADDED_VIA_CURRENT_APP,
+                               /*estimated_read_time=*/std::nullopt,
+                               /*creation_time=*/std::nullopt);
       break;
     }
 
@@ -4184,7 +4188,8 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
     case IDC_CONTENT_CONTEXT_ASK_GOOGLE_ABOUT_THIS_PAGE:
       chrome::ExecAskGoogleAboutThisPage(
           GetBrowser(),
-          lens::LensOverlayInvocationSource::kContentAreaContextMenuPage,
+          lens::LensOverlayInvocationSource::
+              kContentAreaContextMenuPageAskGoogle,
           omnibox::ChromeAimEntryPoint::
               DESKTOP_CHROME_PAGE_CONTEXT_MENU_ASK_GOOGLE);
       break;
@@ -5414,6 +5419,8 @@ void RenderViewContextMenu::ExecGlicSmartSuggestion() {
     return;
   }
 
+  UserEducationService::MaybeNotifyNewBadgeFeatureUsed(
+      GetBrowserContext(), features::kGlicSuggestionContextMenu);
   glic::GlicContextMenuInvocationHelper::HandleSmartSuggestionClick(
       *source_frame, params_);
 }
@@ -5984,6 +5991,10 @@ void RenderViewContextMenu::MaybeAppendGlicSmartSuggestionItem() {
                                          ? kTextAnalysisIcon
                                          : kTextAnalysisOldIcon,
                                      ui::kColorMenuIcon, kTabMenuIconSize));
+  menu_model_.SetIsNewFeatureAt(
+      menu_model_.GetItemCount() - 1,
+      UserEducationService::MaybeShowNewBadge(
+          GetBrowserContext(), features::kGlicSuggestionContextMenu));
   menu_model_.AddSeparator(ui::NORMAL_SEPARATOR);
 }
 
@@ -6221,8 +6232,7 @@ void RenderViewContextMenu::ShowClipboardHistoryMenu(int event_flags) {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_ANDROID)
-void RenderViewContextMenu::OpenLinkInSplitView(
-    split_tabs::SplitTabLayout layout) {
+void RenderViewContextMenu::OpenLinkInSplitView() {
   BrowserWindowInterface* const browser = GetBrowser();
   CHECK(browser);
   CHECK(browser->GetType() == BrowserWindowInterface::TYPE_NORMAL);
@@ -6275,7 +6285,7 @@ void RenderViewContextMenu::OpenLinkInSplitView(
 
     // Create split and activate new tab.
     tab_strip_model->AddToNewSplit(
-        {new_tab_index}, split_tabs::SplitTabVisualData(layout),
+        {new_tab_index}, split_tabs::SplitTabVisualData(),
         split_tabs::SplitTabCreatedSource::kLinkContextMenu);
     tab_strip_model->ActivateTabAt(
         tab_strip_model->GetIndexOfWebContents(new_web_contents));

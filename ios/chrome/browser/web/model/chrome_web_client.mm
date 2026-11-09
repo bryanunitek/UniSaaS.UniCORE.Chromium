@@ -46,12 +46,12 @@
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_java_script_feature.h"
 #import "ios/chrome/browser/browser_content/model/edit_menu_tab_helper.h"
 #import "ios/chrome/browser/cobrowse/model/aim_cobrowse_java_script_feature.h"
-#import "ios/chrome/browser/cobrowse/model/cobrowse_util.h"
 #import "ios/chrome/browser/content_settings/model/host_content_settings_map_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_java_script_feature.h"
 #import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_util.h"
 #import "ios/chrome/browser/enterprise/connectors/ios_enterprise_interstitial.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/ios_reporting_event_router_factory.h"
+#import "ios/chrome/browser/enterprise/proxy/model/enterprise_proxy_error.h"
 #import "ios/chrome/browser/flags/chrome_switches.h"
 #import "ios/chrome/browser/https_upgrades/model/https_upgrade_service_factory.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/action_target_java_script_feature.h"
@@ -103,6 +103,7 @@
 #import "ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h"
 #import "ios/chrome/browser/web/model/chrome_main_parts.h"
 #import "ios/chrome/browser/web/model/dark_mode_detection/dark_mode_detection_java_script_feature.h"
+#import "ios/chrome/browser/web/model/enterprise_proxy_error_page_util.h"
 #import "ios/chrome/browser/web/model/error_page_util.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_java_script_feature.h"
 #import "ios/chrome/browser/web/model/image_fetch/image_fetch_java_script_feature.h"
@@ -511,7 +512,11 @@ std::vector<web::JavaScriptFeature*> ChromeWebClient::GetJavaScriptFeatures(
     }
   }
 
-  if (IsAimCobrowseEligible(profile)) {
+  // Register the feature regardless of `IsAimCobrowseEligible()`: JavaScript
+  // features are configured only once per profile, but eligibility can change
+  // during the session (e.g. after sign-in or once the AIM eligibility
+  // response arrives). Cobrowse entry points check eligibility before use.
+  if (!profile->IsOffTheRecord() && IsAimCobrowseEnabled()) {
     features.push_back(AimCobrowseJavaScriptFeature::GetInstance());
   }
 
@@ -555,6 +560,10 @@ void ChromeWebClient::PrepareErrorPage(
     DCHECK_EQ(kHttpsOnlyModeErrorCode, final_underlying_error.code);
     std::move(callback).Run(
         GetHttpsOnlyModeErrorPageHtml(web_state, navigation_id));
+  } else if ([final_underlying_error.domain
+                 isEqualToString:kEnterpriseProxyErrorDomain]) {
+    std::move(callback).Run(GetEnterpriseProxyErrorPageHtml(
+        web_state, url, error, is_post, is_off_the_record, navigation_id));
   } else if (ssl_info.has_value()) {
     IOSSSLErrorHandler::HandleSSLError(
         web_state, net::MapCertStatusToNetError(ssl_info.value().cert_status),

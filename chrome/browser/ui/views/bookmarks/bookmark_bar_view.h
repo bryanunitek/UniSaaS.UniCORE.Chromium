@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_BAR_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_BAR_VIEW_H_
 
+#include <map>
 #include <memory>
 #include <set>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_observer.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
@@ -27,7 +30,6 @@
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
-#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/views/accessible_pane_view.h"
@@ -90,6 +92,9 @@ class BookmarkBarView
 
  public:
   class ButtonSeparatorView;
+
+  static constexpr base::TimeDelta kFaviconUpdateDelay =
+      base::Milliseconds(500);
 
   // `controller` carries out the bar's browser actions. It must not be null;
   // the view owns it. |browser_view| can be NULL during tests.
@@ -198,6 +203,7 @@ class BookmarkBarView
   void VisibilityChanged(views::View* starting_from, bool is_visible) override;
   void ChildPreferredSizeChanged(views::View* child) override;
   void AddedToWidget() override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
 
   // views::AnimationDelegateViews:
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -207,6 +213,7 @@ class BookmarkBarView
   void OnDisplayOptionsChanged(
       const bookmark_bar_api::mojom::DisplayOptions& options) override;
   void OnContextMenuClosed() override;
+  void ShowFolderMenu(const bookmark_bar_api::mojom::NodeId& folder) override;
 
   // BookmarkMenuControllerObserver:
   void BookmarkMenuControllerDeleted(
@@ -276,6 +283,19 @@ class BookmarkBarView
   // Creates recent bookmark button and when visible button as well as
   // calculating the preferred height.
   void Init();
+
+  // Visible buttons of the Pre-buttons (Apps shortcut and Managed Bookmarks)
+  // and Bookmarks areas, in visual order.
+  std::vector<views::View*> GetVisiblePreButtons() const;
+  std::vector<views::View*> GetVisibleBookmarkButtons() const;
+
+  // Visible buttons of the keyboard navigation area (Pre-buttons, Saved Tab
+  // Groups, or Bookmarks) containing `view`, in visual order.
+  std::vector<views::View*> GetAreaForView(const views::View* view) const;
+
+  // Sets focus behaviors for the Pre-buttons and Bookmarks areas. The Tab
+  // Groups area is handled in SavedTabGroupBar::Layout(), which runs later.
+  void UpdateAreaFocusBehaviors();
 
   void AppsPageShortcutPressed(const ui::Event& event);
   void OnButtonPressed(const bookmarks::BookmarkNode* node,
@@ -347,6 +367,9 @@ class BookmarkBarView
   // appropriately.
   void BookmarkNodeChangedImpl(const bookmarks::BookmarkNode* node);
 
+  void OnBookmarkButtonVisibilityChanged(views::LabelButton* button);
+  void OnFaviconUpdateTimerFired(const bookmarks::BookmarkNode* node);
+
   // Shows the menu used during drag and drop for the specified folder.
   void ShowDropFolderForNode(const BookmarkParentFolder& folder);
 
@@ -365,17 +388,8 @@ class BookmarkBarView
   // model is mutated and a drop is in progress.
   void InvalidateDrop();
 
-  // Shows a menu for the provided folder.
-  void ShowFolderMenuForFolder(const BookmarkParentFolder& folder);
-
   // Hides the folder menu for the provided folder (idempotent).
   void HideFolderMenuForFolder(const BookmarkParentFolder& folder);
-
-  // Handles a press on a folder: shows its menu for the current tab, or opens
-  // everything in it for any other disposition. This decision is expected to
-  // move into a shared bookmark bar UI controller.
-  void OnFolderPressed(const BookmarkParentFolder& folder,
-                       ui::mojom::WindowOpenDisposition disposition);
 
   // Apply the browser's display options, pushed by `controller_`.
   void SetAppsPageShortcutVisibility(bool visible);
@@ -492,6 +506,9 @@ class BookmarkBarView
 
   std::map<raw_ptr<const views::LabelButton>, base::CallbackListSubscription>
       button_visibility_changed_callbacks_;
+
+  std::map<raw_ptr<const bookmarks::BookmarkNode>, base::OneShotTimer>
+      favicon_update_timers_;
 
   // The index of the bookmark bar's first hidden node.
   // This is used to populate the overflow bookmarks button.

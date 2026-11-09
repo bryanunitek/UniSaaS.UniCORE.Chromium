@@ -64,7 +64,7 @@ export {SettingsAiInfoCardElement} from './ai_page/ai_info_card.js';
 export {SettingsAiLoggingInfoBulletElement} from './ai_page/ai_logging_info_bullet.js';
 export {SettingsAiPageElement} from './ai_page/ai_page.js';
 export {SettingsAiPageIndexElement} from './ai_page/ai_page_index.js';
-export {ChromeSuggestionsSettingsValue, ModelExecutionEnterprisePolicyValue} from './ai_page/constants.js';
+export {ChromeSuggestionsSettingsValue, GlicAssistantSelection, ModelExecutionEnterprisePolicyValue} from './ai_page/constants.js';
 export {AppearanceBrowserProxyImpl} from './appearance_page/appearance_browser_proxy.js';
 export type {AppearanceBrowserProxy} from './appearance_page/appearance_browser_proxy.js';
 export {SettingsAppearancePageElement, SystemTheme} from './appearance_page/appearance_page.js';
@@ -93,7 +93,7 @@ export {loadTimeData} from './i18n_setup.js';
 // <if expr="not is_chromeos">
 export {convertLanguageCodeForChrome, convertLanguageCodeForTranslate, getBaseLanguage, isTranslateBaseLanguage} from './languages_page/languages_util.js';
 // </if>
-export {AiPageComposeInteractions, AiPageInteractions, AiPageSuggestionsInteractions, AutofillSettingsReferrer, CardBenefitsUserAction, CvcDeletionUserAction, DeleteBrowsingDataAction, MetricsBrowserProxyImpl, PrivacyElementInteractions, PrivacyGuideInteractions, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached, SafeBrowsingInteractions, SafetyCheckUnusedSitePermissionsModuleInteractions, SafetyHubCardState, SafetyHubEntryPoint, SafetyHubModuleType, SafetyHubSurfaces, SettingsSearchExitReasonDesktop, SuggestionsFromGeminiAction, SuggestionsFromGeminiEntryPoint, YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from './metrics_browser_proxy.js';
+export {AiPageComposeInteractions, AiPageInteractions, AiPageSuggestionsInteractions, AutofillAiWalletNoticeFunnelEvents, AutofillSettingsReferrer, CardBenefitsUserAction, CvcDeletionUserAction, DeleteBrowsingDataAction, MetricsBrowserProxyImpl, PrivacyElementInteractions, PrivacyGuideInteractions, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached, SafeBrowsingInteractions, SafetyCheckUnusedSitePermissionsModuleInteractions, SafetyHubCardState, SafetyHubEntryPoint, SafetyHubModuleType, SafetyHubSurfaces, SettingsSearchExitReasonDesktop, SuggestionsFromGeminiAction, SuggestionsFromGeminiEntryPoint, YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from './metrics_browser_proxy.js';
 export type {MetricsBrowserProxy} from './metrics_browser_proxy.js';
 export {OnStartupBrowserProxyImpl} from './on_startup_page/on_startup_browser_proxy.js';
 export type {NtpExtension, OnStartupBrowserProxy} from './on_startup_page/on_startup_browser_proxy.js';
@@ -141,6 +141,9 @@ export {SettingsResetProfileBannerElement} from './reset_page/reset_profile_bann
 export {AiSettingsSection, buildRouter, getTopLevelRoute, resetRouterForTesting, routes} from './route.js';
 export {Route, Router} from './router.js';
 export type {SettingsRoutes} from './router.js';
+export {SettingsSearchDropdownElement} from './search/settings_search_dropdown.js';
+export {MAX_SEARCH_RESULTS, SettingsSearchManagerImpl} from './search/settings_search_manager.js';
+export type {SettingsSearchManager, SettingsSearchRequest} from './search/settings_search_manager.js';
 export {MAX_DWELL_TIME_MS, QUERY_SUBMITTED_DELAY_MS, SearchMetricsRecorder} from './search_metrics_recorder.js';
 export {ExtensionControlledMessageElement} from './search_page/extension_controlled_message.js';
 export {FeatureShortcutsPageElement} from './search_page/feature_shortcuts_page.js';
@@ -157,6 +160,7 @@ export {SettingsSearchPageIndexElement} from './search_page/search_page_index.js
 export {SiteShortcutsPageElement} from './search_page/site_shortcuts_page.js';
 export {getSearchManager, SearchRequest, setSearchManagerForTesting, showBubble} from './search_settings.js';
 export type {SearchManager} from './search_settings.js';
+export {SettingId} from './setting_id.mojom-webui.js';
 export {SettingsMainElement} from './settings_main/settings_main.js';
 export {SettingsMenuElement} from './settings_menu/settings_menu.js';
 export {SearchableViewContainerMixin} from './settings_page/searchable_view_container_mixin.js';
@@ -164,6 +168,8 @@ export {SearchableViewContainerMixinLit} from './settings_page/searchable_view_c
 export {SettingsSectionElement} from './settings_page/settings_section.js';
 export {SettingsViewMixin} from './settings_page/settings_view_mixin.js';
 export {SettingsViewMixinLit} from './settings_page/settings_view_mixin_lit.js';
+export {browserProxyFactory as settingsSearchBrowserProxyFactory} from './settings_search.mojom-webui.js';
+export type {SearchResult, SettingsSearchHandlerInterface} from './settings_search.mojom-webui.js';
 export {MAX_QUERY_LENGTH, SettingsUiElement} from './settings_ui/settings_ui.js';
 export {SiteFaviconElement} from './site_favicon.js';
 export {convertDateToWindowsEpoch} from './time.js';

@@ -20,13 +20,13 @@ import org.chromium.base.SelectionActionMenuClientWrapper.MenuType;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.glic.GlicContextMenuUtils;
 import org.chromium.chrome.browser.glic.GlicKeyedService.GlicInvocationSource;
 import org.chromium.chrome.browser.glic.GlicKeyedServiceHandler;
 import org.chromium.chrome.browser.glic.GlicMetrics;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.reader_mode.ReaderModeManager;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.share.link_to_text.LinkToTextCoordinator;
 import org.chromium.chrome.browser.tab.Tab;
@@ -188,7 +188,7 @@ public class TextSelectionActionMenuDelegate implements SelectionActionMenuDeleg
             GURL url = mTab.getUrl();
             boolean isNtp = url != null && UrlUtilities.isNtpUrl(url);
             GlicMetrics.recordEntryPointClick(
-                    profile, GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU, isNtp);
+                    profile, GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU_TEXT_SELECTION, isNtp);
             if (GlicContextMenuUtils.shouldSendSelectedText()) {
                 String text = GlicContextMenuUtils.sanitizeSelectedText(mSelectedText);
                 if (!text.isEmpty()) {
@@ -200,13 +200,13 @@ public class TextSelectionActionMenuDelegate implements SelectionActionMenuDeleg
                                             ? null
                                             : webContents.getFocusedFrame(),
                                     text,
-                                    GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU);
+                                    GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU_TEXT_SELECTION);
                     GlicMetrics.recordSendSelectedTextSucceeded(profile, sent);
                     return sent;
                 }
             }
             return GlicKeyedServiceHandler.invoke(
-                    profile, mTab, GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU);
+                    profile, mTab, GlicInvocationSource.WEB_CONTENTS_CONTEXT_MENU_TEXT_SELECTION);
         }
         return false;
     }

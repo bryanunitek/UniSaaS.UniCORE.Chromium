@@ -9,7 +9,6 @@
 <translation id="1013952917065545813">Galite grįžę čia atidaryti neseniai uždarytus skirtukus iš naujo</translation>
 <translation id="1016495303386450659">Elementas atnaujintas</translation>
 <translation id="1018804590490383958">Nuskaityti ir automatiškai užpildyti</translation>
-<translation id="1019990162050689579">„Gemini Apps“ veikla</translation>
 <translation id="102471647093736603">Paspauskite ir palaikykite, kad perkeltumėte</translation>
 <translation id="102645702181682900">Užduotis pradėta</translation>
 <translation id="102916930470544692">Prieigos raktas</translation>
@@ -51,6 +50,7 @@
 <translation id="1122068467107743258">Darbas</translation>
 <translation id="1126696498560056882">Tvarkyti paskyras šiame įrenginyje</translation>
 <translation id="1126809382673880764">Neapsaugo jūsų nuo pavojingų svetainių, atsisiuntimų ir plėtinių. Kai yra galimybė, vis tiek gausite saugaus naršymo pranešimus kitose „Google“ paslaugose, pvz., „Gmail“ ir paieškoje.</translation>
+<translation id="112943553659469376">„<ph name="PROMPT" />“</translation>
 <translation id="1133418583142946603">Pridėti dabartinį skirtuką</translation>
 <translation id="1136104150802877429">Rodomi atsiliepimai apie produktą</translation>
 <translation id="1142371195993008685">Išjungti pranešimus apie „<ph name="FEATURE_NAME" />“</translation>
@@ -386,6 +386,7 @@
 <translation id="2104436223719117661">Populiarios paieškos</translation>
 <translation id="21133533946938348">Pažymėti skirtuką</translation>
 <translation id="2117650889962717098">Toliau naršykite privačiai perjungę į inkognito režimą</translation>
+<translation id="2119126821484134587">Kad galėtų teikti pritaikytą pagalbą, „Gemini“ bendrina kai kuriuos jūsų duomenis (pvz., pokalbių dalis, vietovės ir kitą susijusią informaciją) su kitomis „Google“ paslaugomis, pvz., Žemėlapiais ir Skrydžiais. Šios paslaugos gali naudoti šią informaciją tobulinimo tikslu, net jei vėliau ištrinsite „Gemini Apps“ istoriją. Sužinokite daugiau <ph name="BEGIN_LINK" />„Gemini Apps“ privatumo pagalbos centre<ph name="END_LINK" />.</translation>
 <translation id="2119636449201577317">Atidaryti…</translation>
 <translation id="2119962645034852864">Kai kurios paslaugos jūsų paskyroje nepasiekiamos</translation>
 <translation id="2120553909046681540">Organizacija išjungė privatų naršymą.</translation>
@@ -507,6 +508,7 @@
 <translation id="2496180316473517155">Naršymo istorija</translation>
 <translation id="2496626742194544812">Eiti į pirmą skirtuką</translation>
 <translation id="2499505845365628575">Visą naršymo istoriją galite rasti čia: „<ph name="HISTORY_BUTTON_ACCESSIBILITY_LABEL" />“.</translation>
+<translation id="2499948218922929716">Gaukite pranešimus apie saugos naujinius, tinkintas temas ir kt.</translation>
 <translation id="251033673027346551">Apsilankykite „Google Wallet“, kad galėtumėte tvarkyti <ph name="BEGIN_LINK" />duomenų ir privatumo nuostatas<ph name="END_LINK" />.</translation>
 <translation id="2511117522375201202">Turite pažeistų slaptažodžių (iš viso: <ph name="NUMBER_OF_PASSWORDS" />), dėl kurių gali kilti saugos pavojus.</translation>
 <translation id="2512709994717613803"><ph name="LEVEL_NUMBER" /> lygis</translation>
@@ -670,6 +672,7 @@
 <translation id="3038136505713492417">Patvirtinkite savo tapatybę, kad galėtumėte naudoti prieigos raktus šiame įrenginyje</translation>
 <translation id="3039671569659952257">Ištrinti aplanką</translation>
 <translation id="3041835740069544003">Dabar „Chrome“ gali aptikti ir užpildyti daugiau formų, naudodama išmanesnį formų atpažinimą. Kad tai būtų galima padaryti, puslapio turinys ir URL gali būti apdorojami privačioje erdvėje debesyje. Tvarkykite nustatymuose.</translation>
+<translation id="3042118633250374317">„Google“ naudoja jūsų istoriją, kad galėtų teikti paslaugas, apsaugoti „Google“, jos naudotojus ir visuomenę, taip pat kurti ir tobulinti paslaugas, padedant tikrinantiems žmonėms. Neįtraukite informacijos, kurios nenorite leisti peržiūrėti ar naudoti.</translation>
 <translation id="3050988301648974170">Atidarykite Slaptažodžio tikrinimo funkciją</translation>
 <translation id="3053332585453689122">Siunčia URL, kuriais lankotės, ir nedidelį puslapio turinio, atsisiuntimų, plėtinių veiklos ir sistemos informacijos pavyzdį „Google“ saugaus naršymo paslaugai, kad patikrintų, ar jie yra žalingi.</translation>
 <translation id="3055102495753300780">Informacijos saugykla</translation>
@@ -954,6 +957,7 @@
 <translation id="3967822245660637423">Atsisiuntimas baigtas</translation>
 <translation id="3973560090698854095">Bus ištrinti adresai, išsaugoti „Google“ paskyroje <ph name="USER_EMAIL" />.</translation>
 <translation id="398604237578616937">Prisijungta kaip <ph name="USER_EMAIL" />. Atidaryti paskyros meniu.</translation>
+<translation id="3986082989454912832">Atsakyti</translation>
 <translation id="3986739045730058129">Eikite į skirtuką</translation>
 <translation id="3992684624889376114">Apie šį puslapį</translation>
 <translation id="3993594519743675442">Slėpti priminimo nustatymą</translation>
@@ -1113,6 +1117,7 @@
 <translation id="4488754974567924717">Jei jūsų slaptažodžiai bus pažeisti, informuosime jus apie tai</translation>
 <translation id="4489536976005181779">{count,plural, =1{Puslapis pridėtas prie skaitymo sąrašo paskyroje ({email})}one{Puslapiai pridėtas prie skaitymo sąrašo paskyroje ({email})}few{Puslapiai pridėtas prie skaitymo sąrašo paskyroje ({email})}many{Puslapiai pridėtas prie skaitymo sąrašo paskyroje ({email})}other{Puslapiai pridėtas prie skaitymo sąrašo paskyroje ({email})}}</translation>
 <translation id="4493604894403585654">Esate prisijungę kaip <ph name="USER_EMAIL" />. Galite bet kada sustabdyti sinchronizavimą skiltyje „Nustatymai“. „Google“ gali suasmeninti Paiešką ir kitas paslaugas pagal jūsų istoriją.</translation>
+<translation id="4495251723189610737">Pokalbiai bus išsaugoti „Gemini“ istorijoje. Istorija apima jūsų garso įrašus, „Gemini Live“ vaizdo įrašus ir bendrinamus ekrano vaizdus, tai, ką bendrinate su „Gemini“ (pvz., užklausas, <ph name="BEGIN_LINK" />įkėlimus<ph name="END_LINK" /> ir <ph name="BEGIN_LINK" />ekranus<ph name="END_LINK" />), „Gemini“ atsakymus, užduotis ir įrankių skambučius, atsiliepimus, informaciją iš svetainių, kuriose lankotės naudodami „Gemini“, produktų naudojimo duomenis, bendrąją įrenginio vietovę, IP adresą ir „Google“ paskyroje nurodytus namų ar darbo adresus. Ji taip pat gali apimti duomenis iš programų, kurias susiejate su „Gemini“.</translation>
 <translation id="4502423230170890588">Pašalinti iš šio įrenginio</translation>
 <translation id="4508486880075514067">Išskleisti viso ekrano režimu</translation>
 <translation id="4508750114462689118">Uždaryti prisijungimo reklamą</translation>
@@ -1217,6 +1222,7 @@
 <translation id="4808744395915275922">Naujiniai</translation>
 <translation id="4813345808229079766">Ryšys</translation>
 <translation id="4821595350501541683">Skirtukai uždaryti ir naršymo duomenys ištrinti</translation>
+<translation id="4821645169621230110">Kaip naudojama jūsų istorija</translation>
 <translation id="4823322556950229674">Galite paspausti ir palaikyti, kad perkeltumėte adreso juostą ir mygtuką „Atgal“ į apačią</translation>
 <translation id="4824480232751123840">Garsumas</translation>
 <translation id="4824497107140370669">{count,plural, =0{{domain}}=1{{domain} ir dar 1}one{{domain} ir dar {count}}few{{domain} ir dar {count}}many{{domain} ir dar {count}}other{{domain} ir dar {count}}}</translation>
@@ -1244,6 +1250,7 @@
 <translation id="4877597489778380935">Priminti vėliau</translation>
 <translation id="4881695831933465202">Atidaryti</translation>
 <translation id="4883766694719903356">Inkognito skirtukų tinklelis</translation>
+<translation id="4884205780547482830">Jūsų duomenys padeda mokyti generatyvinį DI</translation>
 <translation id="4884937942297374058">Sustiprinta apsauga išjungta</translation>
 <translation id="4887391901725877182">Uždarų antraščių pateikimas</translation>
 <translation id="488785315393301722">Rodyti išsamią informaciją</translation>
@@ -1695,7 +1702,6 @@ Be to, reikia įgalinti „Handoff“ nustatymų skiltyje „Bendrieji“, o įr
 <translation id="628251768213143684">Visada galite valdyti, kas išsaugoma jūsų „Google“ paskyroje</translation>
 <translation id="6284652193729350524">Siūlyti versti <ph name="LANGUAGE" /></translation>
 <translation id="6293101329759844770">Jei norite įjungti saugų naršymą, atidarykite skiltį <ph name="BEGIN_LINK" />„Google“ paslaugos“<ph name="END_LINK" /> ir palieskite „Saugus naršymas“.</translation>
-<translation id="6295140892595702619">Naudokite mikrofoną, kad galėtumėte kalbėtis su „Gemini“. Kai kalbate su „Gemini“, garso įrašas saugomas „Gemini Apps“ veikloje (jei ji įjungta). Jūsų duomenys nenaudojami generatyviniams DI modeliams tobulinti</translation>
 <translation id="6295751040240588413">Netinkamas kortelės slapyvardis</translation>
 <translation id="629730747756840877">Paskyra</translation>
 <translation id="6301104306974789820">Gaukite kainų stebėjimo pranešimus</translation>
@@ -1890,6 +1896,7 @@ Be to, reikia įgalinti „Handoff“ nustatymų skiltyje „Bendrieji“, o įr
 <translation id="6830728435402077660">Nesaugu</translation>
 <translation id="6831043979455480757">Vertėjas</translation>
 <translation id="6842136130964845393">Kad užtikrintumėte galimybę visada pasiekti išsaugotus slaptažodžius, patvirtinkite savo tapatybę</translation>
+<translation id="6843744036364481304">Kokia pokalbių istorija išsaugoma</translation>
 <translation id="6844773122575789617">Įjungti DI režimą</translation>
 <translation id="6851516051005285358">Užklausa dėl kompiuteriui skirtos svetainės versijos</translation>
 <translation id="6857446173140146664">Ištrinti foną</translation>
@@ -1945,7 +1952,6 @@ Jei norite tęsti kompiuteryje, perjunkite į <ph name="OTHER_EMAIL" />. Gausite
 <translation id="6979737339423435258">Visas laikotarpis</translation>
 <translation id="6980507581230208647">Rožinė tema</translation>
 <translation id="6983306615164277634">Be to, jei norite pakeisti poziciją, galite paliesti ir palaikyti adreso juostą.</translation>
-<translation id="6987201788018524855">Peržiūrėkite naudingas funkcijas, kurias praleidote</translation>
 <translation id="6989636517316575338">Klauskite apie bet kurį puslapį</translation>
 <translation id="6990519590575500580">Facetime</translation>
 <translation id="6998236305642926573">Visos užduotys</translation>
@@ -2014,6 +2020,7 @@ Jei norite tęsti kompiuteryje, perjunkite į <ph name="OTHER_EMAIL" />. Gausite
 <translation id="7223134495231529579">Išsaugoti atsisiuntimuose</translation>
 <translation id="722339453342442311">Tikrinti dabar</translation>
 <translation id="7227235818314667565">Bendrinimo tvarkymas</translation>
+<translation id="7232376892719594461">Nei jūsų pokalbių su „Gemini“, nei <ph name="BEGIN_LINK" />„Google Workspace“ duomenų<ph name="END_LINK" /> neperžiūrės tikrinantys žmonės ir šis turinys nebus naudojamas generatyviniams DI modeliams mokyti.</translation>
 <translation id="7233006041370588369">Pasirinkite slaptažodį, kuris turi būti įrašytas užpildytas automatiškai.</translation>
 <translation id="7238074332967840767">Saugumas</translation>
 <translation id="723874023660911012">Perjungti profilius</translation>
@@ -2095,6 +2102,7 @@ Galite bet kada paleisti iš naujo.</translation>
 <translation id="7486006552035434095">Įrenginių sinchronizavimas</translation>
 <translation id="7491131399623468277">Eikite į skiltį „Nustatymai“…</translation>
 <translation id="7491161827858509164">Jei norite peržiūrėti ankstesnius atsisiuntimus, atidarykite <ph name="BEGIN_LINK" />Failų<ph name="END_LINK" /> programą</translation>
+<translation id="7496554840683586365">Ši svetainė bando atidaryti „App Store“. Taip išeisite iš inkognito režimo.</translation>
 <translation id="7498234416455752244">Toliau redaguoti</translation>
 <translation id="7500244509706269886">Automatiškai užpildyti formą</translation>
 <translation id="750493650310597496">Pasirinkta: 0</translation>
@@ -2524,6 +2532,7 @@ Galite bet kada paleisti iš naujo.</translation>
 <translation id="8746155870861185046">Bendrinti paryškinimą</translation>
 <translation id="8748678031495824833">Atidaryti puslapio DI įrankius</translation>
 <translation id="8750037785291841318">Čia rasite skirtukus</translation>
+<translation id="8751126814549746156">Istorija automatiškai ištrinama po 18 mėnesių. Šį laikotarpį galite pakeisti skiltyje „Nustatymai“. Paslaugų teikėjų peržiūrėti pokalbiai atskiriami nuo jūsų paskyros ir saugomi iki trejų metų. Galite bet kada <ph name="BEGIN_LINK" />išjungti<ph name="END_LINK" /> istorijos nustatymą.</translation>
 <translation id="8756969031206844760">Atnaujinti slaptažodį?</translation>
 <translation id="8763613688786959833">Eiti į paskutinį skirtuką</translation>
 <translation id="8766790350274092814"><ph name="WEBSITE" /> ir <ph name="SECOND_WEBSITE" /> slaptažodžiai bus ištrinti. Jūsų paskyros nebus ištrintos.</translation>
@@ -2569,6 +2578,7 @@ Galite bet kada paleisti iš naujo.</translation>
 <translation id="8893208530912252670">Vaizdo įrašai</translation>
 <translation id="890009681345348416">Automatiškai užpildyta daugiau nei 40 slaptažodžių</translation>
 <translation id="8900845556227858314">Naršyklės programa</translation>
+<translation id="8903042868629070803">Jei esate 18 metų ar vyresni, „Google“ taip pat naudoja jūsų istoriją <ph name="BEGIN_LINK" />generatyviniams DI modeliams mokyti<ph name="END_LINK" />. Galite bet kada <ph name="BEGIN_LINK" />išjungti šią funkciją<ph name="END_LINK" /> būsimiems pokalbiams.</translation>
 <translation id="890565330728586731">Atgal</translation>
 <translation id="8907722425137681851">Rasti puslapyje…</translation>
 <translation id="8909135823018751308">Bendrinti…</translation>

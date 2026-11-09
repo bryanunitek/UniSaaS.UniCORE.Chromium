@@ -121,6 +121,24 @@ absl::flat_hash_set<ClientTagHash> GetClientTagHashes(
   return client_tag_hashes;
 }
 
+// Aborts any in-flight attachment uploads in `entity_tracker` while retaining
+// `pending_upload` metadata and staging files so uploads can be resumed later.
+void PausePendingAttachmentUploads(ProcessorEntityTracker& entity_tracker) {
+  for (ProcessorEntity* entity :
+       entity_tracker.GetEntitiesWithPendingAttachmentUploads()) {
+    entity->PauseAttachmentUpload();
+  }
+}
+
+// Aborts any in-flight attachment uploads in `entity_tracker`, clears
+// `pending_upload` metadata, and deletes staging files on disk.
+void ClearPendingAttachmentUploads(ProcessorEntityTracker& entity_tracker) {
+  for (ProcessorEntity* entity :
+       entity_tracker.GetEntitiesWithPendingAttachmentUploads()) {
+    entity->ClearPendingAttachmentUpload();
+  }
+}
+
 }  // namespace
 
 ClientTagBasedDataTypeProcessor::ClientTagBasedDataTypeProcessor(
@@ -489,6 +507,7 @@ void ClientTagBasedDataTypeProcessor::ConnectSync(
 
   worker_ = std::move(worker);
 
+  StartOrResumePendingAttachmentUploads();
   NudgeForCommitIfNeeded();
 }
 
@@ -505,6 +524,7 @@ void ClientTagBasedDataTypeProcessor::DisconnectSync() {
 
   if (entity_tracker_) {
     entity_tracker_->ClearTransientSyncState();
+    PausePendingAttachmentUploads(*entity_tracker_);
   }
 }
 
@@ -615,7 +635,7 @@ void ClientTagBasedDataTypeProcessor::PutImpl(
         UMA_HISTOGRAM_ENUMERATION("Sync.DataTypeOrphanMetadata.Put",
                                   DataTypeHistogramValue(type_));
       }
-      entity->RecordAttachmentUploadCancelled();
+      entity->ClearPendingAttachmentUpload();
       // Remove the old storage key from the tracker and the corresponding
       // metadata record.
       metadata_change_list->ClearMetadata(entity->storage_key());
@@ -811,9 +831,11 @@ void ClientTagBasedDataTypeProcessor::NudgeForCommitIfNeeded() {
 
 void ClientTagBasedDataTypeProcessor::GetLocalChanges(
     size_t max_entries,
+    size_t max_target_specifics_bytes,
     GetLocalChangesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK_GT(max_entries, 0U);
+  CHECK_GT(max_target_specifics_bytes, 0U);
   CHECK(IsConnected());
   CHECK(!model_error_);
 
@@ -825,7 +847,8 @@ void ClientTagBasedDataTypeProcessor::GetLocalChanges(
   // In some cases local changes may be requested before entity tracker is
   // loaded. Just invoke the callback with empty list.
   if (!entity_tracker_) {
-    std::move(callback).Run(CommitRequestDataList());
+    std::move(callback).Run(CommitRequestDataList(),
+                            /*has_more_local_changes=*/false);
     return;
   }
 
@@ -853,7 +876,8 @@ void ClientTagBasedDataTypeProcessor::GetLocalChanges(
     ConsumeDataBatch(std::move(storage_keys_to_load), std::move(data_batch));
   }
 
-  CommitLocalChanges(max_entries, std::move(callback));
+  CommitLocalChanges(max_entries, max_target_specifics_bytes,
+                     std::move(callback));
 }
 
 void ClientTagBasedDataTypeProcessor::OnCommitCompleted(
@@ -1337,12 +1361,14 @@ void ClientTagBasedDataTypeProcessor::ConsumeDataBatch(
 
 void ClientTagBasedDataTypeProcessor::CommitLocalChanges(
     size_t max_entries,
+    size_t max_target_specifics_bytes,
     GetLocalChangesCallback callback) {
   CHECK(!model_error_);
   CHECK(entity_tracker_);
   // Prepares entities commit request data for entities which are
   // out of sync with the sync thread.
   CommitRequestDataList commit_requests;
+  size_t specifics_bytes = 0;
   // TODO(rlarocque): Do something smarter than iterate here.
   std::vector<ProcessorEntity*> entities =
       entity_tracker_->GetEntitiesWithLocalChanges(max_entries);
@@ -1350,13 +1376,17 @@ void ClientTagBasedDataTypeProcessor::CommitLocalChanges(
     if (entity->RequiresCommitRequest() && !entity->RequiresCommitData()) {
       auto request = std::make_unique<CommitRequestData>();
       entity->InitializeCommitRequestData(request.get());
+      specifics_bytes += request->entity->specifics.ByteSizeLong();
       commit_requests.push_back(std::move(request));
-      if (commit_requests.size() >= max_entries) {
+      if (commit_requests.size() >= max_entries ||
+          specifics_bytes >= max_target_specifics_bytes) {
         break;
       }
     }
   }
-  std::move(callback).Run(std::move(commit_requests));
+  std::move(callback).Run(
+      std::move(commit_requests),
+      /*has_more_local_changes=*/entity_tracker_->HasLocalChanges());
 }
 
 size_t ClientTagBasedDataTypeProcessor::EstimateMemoryUsage() const {
@@ -1397,13 +1427,7 @@ void ClientTagBasedDataTypeProcessor::ExpireAllEntries(
   CHECK(metadata_changes);
   CHECK(entity_tracker_);
 
-  std::vector<std::string> storage_key_to_be_deleted;
-  for (const ProcessorEntity* entity :
-       entity_tracker_->GetAllEntitiesIncludingTombstones()) {
-    storage_key_to_be_deleted.push_back(entity->storage_key());
-  }
-
-  for (const std::string& key : storage_key_to_be_deleted) {
+  for (const std::string& key : entity_tracker_->GetAllStorageKeys()) {
     RemoveEntity(key, metadata_changes);
   }
 }
@@ -1424,6 +1448,11 @@ void ClientTagBasedDataTypeProcessor::ResetState(
     case KEEP_METADATA:
       break;
     case CLEAR_METADATA:
+      if (entity_tracker_) {
+        // Abort any in-flight attachment uploads and delete their staged files
+        // on disk before destroying `entity_tracker_`.
+        ClearPendingAttachmentUploads(*entity_tracker_);
+      }
       entity_tracker_.reset();
       break;
   }
@@ -1911,15 +1940,13 @@ void ClientTagBasedDataTypeProcessor::
 
 void ClientTagBasedDataTypeProcessor::StartOrResumePendingAttachmentUploads() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!entity_tracker_ || !attachment_uploader_) {
+  if (model_error_.has_value() || !entity_tracker_ || !attachment_uploader_) {
     return;
   }
 
-  for (const std::string& storage_key : entity_tracker_->GetAllStorageKeys()) {
-    ProcessorEntity* entity =
-        entity_tracker_->GetEntityForStorageKey(storage_key);
-    if (entity && entity->HasPendingAttachmentUpload() &&
-        !entity->HasAttachmentUploadInProgress()) {
+  for (ProcessorEntity* entity :
+       entity_tracker_->GetEntitiesWithPendingAttachmentUploads()) {
+    if (!entity->HasAttachmentUploadInProgress()) {
       StartOrResumeAttachmentUpload(*entity);
     }
   }
@@ -1952,21 +1979,21 @@ void ClientTagBasedDataTypeProcessor::StartOrResumeAttachmentUpload(
       &ClientTagBasedDataTypeProcessor::OnAttachmentUploadCompleted,
       weak_ptr_factory_for_controller_.GetWeakPtr(), storage_key);
 
-  base::OnceClosure cancel_attachment_upload_callback;
+  base::OnceClosure abort_attachment_upload_callback;
   if (existing_upload_url.is_empty()) {
     AttachmentUploader::UploadUrlCallback upload_url_callback = base::BindOnce(
         &ClientTagBasedDataTypeProcessor::OnAttachmentUploadResumeUrlReceived,
         weak_ptr_factory_for_controller_.GetWeakPtr(), storage_key);
-    cancel_attachment_upload_callback = attachment_uploader_->StartUpload(
+    abort_attachment_upload_callback = attachment_uploader_->StartUpload(
         file_path, std::move(upload_url_callback),
         std::move(completion_callback));
   } else {
-    cancel_attachment_upload_callback = attachment_uploader_->ResumeUpload(
+    abort_attachment_upload_callback = attachment_uploader_->ResumeUpload(
         file_path, existing_upload_url, std::move(completion_callback));
   }
 
   entity.RecordAttachmentUploadStarted(
-      std::move(cancel_attachment_upload_callback));
+      std::move(abort_attachment_upload_callback));
 }
 
 void ClientTagBasedDataTypeProcessor::OnAttachmentUploadResumeUrlReceived(

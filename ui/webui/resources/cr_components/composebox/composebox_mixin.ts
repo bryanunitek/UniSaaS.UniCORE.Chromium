@@ -22,7 +22,7 @@ import type {BigBuffer} from '//resources/mojo/mojo/public/mojom/base/big_buffer
 import type {UnguessableToken} from '//resources/mojo/mojo/public/mojom/base/unguessable_token.mojom-webui.js';
 import type {Url} from '//resources/mojo/url/mojom/url.mojom-webui.js';
 
-import {ComposeboxFile, ComposeboxFileValidationError, ComposeboxInputModel, ContextType, ContextualSearchInputStateDeletionType, FILE_VALIDATION_ERRORS_MAP, getLoadTimeBoolean, isContextUploadStatusTerminal, isValidTabId, ProcessFilesError, recordBoolean, recordContextAdditionMethod, recordContextualElementClickedMetric, recordEnumerationValue, recordInputTypeShown, recordModelModeSelection, recordModelModeShown, recordRichImageSuggestClicked, recordSingleTabMenuItemAction, recordToolModeSelection, recordToolModeShown, recordUserAction, SingleTabMenuItemAction, SingleTabType, SubmitButtonIconType, TabSuggestionsState, VoiceSearchAction} from './common.js';
+import {ComposeboxFile, ComposeboxFileValidationError, ComposeboxInputModel, ContextType, ContextualSearchInputStateDeletionType, FILE_VALIDATION_ERRORS_MAP, getFileMimeType, getLoadTimeBoolean, isContextUploadStatusTerminal, isValidTabId, ProcessFilesError, recordBoolean, recordContextAdditionMethod, recordContextualElementClickedMetric, recordEnumerationValue, recordInputTypeShown, recordModelModeSelection, recordModelModeShown, recordRichImageSuggestClicked, recordSingleTabMenuItemAction, recordToolModeSelection, recordToolModeShown, recordUserAction, SingleTabMenuItemAction, SingleTabType, SubmitButtonIconType, TabSuggestionsState, VoiceSearchAction} from './common.js';
 import type {BrowserFileUpload, ComposeboxFuseboxActionRequest, ComposeboxState, ContextualUpload, DriveUpload, TabUpload} from './common.js';
 import type {PageHandlerRemote} from './composebox.mojom-webui.js';
 import {AimButtonMode} from './composebox_aim_button.js';
@@ -255,8 +255,9 @@ export const ComposeboxEmbedderMixin =
             loadTimeData.getBoolean('tabFaviconChipsToCoinsEnabled');
         accessor energyEffectEnabled: boolean = false;
         accessor energyEffectAnimationEnabled: boolean = false;
-        accessor willFulfillInAim: boolean =
-            !getLoadTimeBoolean('dynamicAimFulfillmentEnabled', false);
+        dynamicAimFulfillmentEnabled: boolean =
+            getLoadTimeBoolean('dynamicAimFulfillmentEnabled', false);
+        accessor willFulfillInAim: boolean = !this.dynamicAimFulfillmentEnabled;
 
         browserTabContextAdded: boolean = false;
         pendingAutomaticActiveTabUrl: string = '';
@@ -331,9 +332,9 @@ export const ComposeboxEmbedderMixin =
         accessor fileUploadsComplete: boolean = true;
         accessor hasAllowedInputs: boolean = false;
         accessor input: string = '';
-        accessor inputPlaceholder: string =
-            loadTimeData.getString('searchboxComposePlaceholder');
         accessor inputState: InputState|null = null;
+        accessor inputPlaceholder: string =
+            this.getDefaultComposePlaceholder_();
         accessor inToolMode: boolean = false;
         accessor submitButtonIconType: SubmitButtonIconType =
             SubmitButtonIconType.UPWARD;
@@ -634,6 +635,12 @@ export const ComposeboxEmbedderMixin =
             if (this.hasContent()) {
               this.suggestInventory = null;
             }
+          }
+
+          if (changedPrivateProperties.has('attachedContext') ||
+              changedPrivateProperties.has('inputState') ||
+              changedPrivateProperties.has('inputState.activeTool') ||
+              changedPrivateProperties.has('willFulfillInAim')) {
             this.updateInputPlaceholder();
           }
 
@@ -1331,6 +1338,16 @@ export const ComposeboxEmbedderMixin =
           handlers[e.key]!(e);
         }
 
+        private getDefaultComposePlaceholder_(): string {
+          if (!this.willFulfillInAim) {
+            return loadTimeData.valueExists('searchboxSrpComposePlaceholder') ?
+                loadTimeData.getString('searchboxSrpComposePlaceholder') :
+                loadTimeData.getString('searchboxComposePlaceholder');
+          }
+          return this.inputState?.hintText ||
+              loadTimeData.getString('searchboxComposePlaceholder');
+        }
+
         updateInputPlaceholder() {
           if (this.fuseboxChipHint_ !== null) {
             this.inputPlaceholder = this.fuseboxChipHint_;
@@ -1344,6 +1361,16 @@ export const ComposeboxEmbedderMixin =
                 this.inputPlaceholder = config.hintText;
                 return;
               }
+              if (this.inputState.activeTool === ToolMode.kDeepSearch) {
+                this.inputPlaceholder =
+                    loadTimeData.getString('composeDeepSearchPlaceholder');
+                return;
+              }
+              if (this.inputState.activeTool === ToolMode.kImageGen) {
+                this.inputPlaceholder =
+                    loadTimeData.getString('composeCreateImagePlaceholder');
+                return;
+              }
             }
 
             if (this.inputState.activeModel !== ModelMode.kUnspecified) {
@@ -1354,22 +1381,8 @@ export const ComposeboxEmbedderMixin =
                 return;
               }
             }
-
-            if (this.inputState.hintText) {
-              this.inputPlaceholder = this.inputState.hintText;
-              return;
-            }
           }
-          if (this.inputState?.activeTool === ToolMode.kDeepSearch) {
-            this.inputPlaceholder =
-                loadTimeData.getString('composeDeepSearchPlaceholder');
-          } else if (this.inputState?.activeTool === ToolMode.kImageGen) {
-            this.inputPlaceholder =
-                loadTimeData.getString('composeCreateImagePlaceholder');
-          } else {
-            this.inputPlaceholder =
-                loadTimeData.getString('searchboxComposePlaceholder');
-          }
+          this.inputPlaceholder = this.getDefaultComposePlaceholder_();
         }
 
         isTogglingOff(tool: ToolMode): boolean {
@@ -1892,10 +1905,11 @@ export const ComposeboxEmbedderMixin =
             this.handleToolClick(mode, /*allowToggleOff=*/ false);
           }
 
-          if (!!this.inputState && model === ModelMode.kUnspecified &&
-              this.inputState.allowedModels.length > 0) {
-            model = this.inputState.allowedModels[0]!;
+          if (model === ModelMode.kUnspecified) {
+            model = this.getDefaultModel_(state.enterAimMode);
           }
+          // With dynamic AIM fulfillment, a model enters AI Mode and no model
+          // leaves it, including AI Mode left over from an outside-click close.
           this.getSearchboxHandler().setActiveModelMode(
               model, /*isSetByAim=*/ false);
           this.updateInputPlaceholder();
@@ -2395,17 +2409,28 @@ export const ComposeboxEmbedderMixin =
           this.hasCachedSubmittedTabsThisTurn = false;
         }
 
+        // Returns the default model if one should be selected: always without
+        // dynamic AIM fulfillment, otherwise only to enter AI Mode (e.g. from
+        // the AI Mode button).
+        private getDefaultModel_(enterAimMode: boolean = false): ModelMode {
+          if ((!this.dynamicAimFulfillmentEnabled || enterAimMode) &&
+              this.inputState && this.inputState.allowedModels.length > 0) {
+            return this.inputState.allowedModels[0]!;
+          }
+          return ModelMode.kUnspecified;
+        }
+
+        // Re-applies the active model, or selects the default if one should be
+        // auto-selected (not with dynamic AIM fulfillment).
         setDefaultModel() {
-          if (this.inputState?.activeModel &&
-              (this.inputState.activeModel as ModelMode) !==
-                  ModelMode.kUnspecified) {
+          const model = (this.inputState?.activeModel &&
+                         (this.inputState.activeModel as ModelMode) !==
+                             ModelMode.kUnspecified) ?
+              this.inputState.activeModel :
+              this.getDefaultModel_();
+          if (model !== ModelMode.kUnspecified) {
             this.getSearchboxHandler().setActiveModelMode(
-                this.inputState.activeModel, /*isSetByAim=*/ false);
-          } else if (
-              this.inputState?.allowedModels &&
-              this.inputState.allowedModels.length > 0) {
-            this.getSearchboxHandler().setActiveModelMode(
-                this.inputState.allowedModels[0]!, /*isSetByAim=*/ false);
+                model, /*isSetByAim=*/ false);
           }
         }
 
@@ -2433,6 +2458,8 @@ export const ComposeboxEmbedderMixin =
           this.resetModes();
           this.getSearchboxHandler().clearFiles(
               /*shouldBlockAutoSuggestedTabs=*/ false);
+          // With dynamic AIM fulfillment, clearing the model (after the files)
+          // leaves AI Mode.
           this.resetToolsAndModels();
           this.suggestInventory = null;
           // <if expr="not is_android">
@@ -2761,6 +2788,7 @@ export const ComposeboxEmbedderMixin =
               new Map();
           for (const file of files) {
             let token: UnguessableToken;
+            const mimeType = getFileMimeType(file);
             try {
               const fileBuffer = await file.arrayBuffer();
               const bigBuffer: BigBuffer = {
@@ -2770,7 +2798,7 @@ export const ComposeboxEmbedderMixin =
                   {
                     fileName: file.name,
                     imageDataUrl: null,
-                    mimeType: file.type,
+                    mimeType,
                     isDeletable: true,
                     selectionTime: new Date(),
                     thumbnailUrl: null,
@@ -2785,10 +2813,11 @@ export const ComposeboxEmbedderMixin =
             }
 
             const attachment = ComposeboxFile.createFromFile(
-                token, file, ContextUploadStatus.kNotUploaded, {
+                token, {name: file.name, type: mimeType},
+                ContextUploadStatus.kNotUploaded, {
                   dataUrl: null,
-                  objectUrl: (file.type.includes('image') ||
-                              file.type.includes('video')) ?
+                  objectUrl: (mimeType.includes('image') ||
+                              mimeType.includes('video')) ?
                       URL.createObjectURL(file) :
                       null,
                   iconName: null,
@@ -2976,10 +3005,11 @@ export const ComposeboxEmbedderMixin =
           }
 
           for (const file of files) {
-            const inputType = this.getInputType(file.type);
+            const fileType = getFileMimeType(file);
+            const inputType = this.getInputType(fileType);
             const currentTypeCount = counts.get(inputType) || 0;
             const error = this.getValidationError(
-                inputType, file.type, file.size, totalCount, currentTypeCount);
+                inputType, fileType, file.size, totalCount, currentTypeCount);
 
             if (error !== ProcessFilesError.NONE) {
               errorToDisplay = Math.max(errorToDisplay, error);
@@ -3122,7 +3152,7 @@ export const ComposeboxEmbedderMixin =
             while (this.pendingTabSuggestionNeedsRefresh_) {
               this.pendingTabSuggestionNeedsRefresh_ = false;
               const {tabs} = await this.getSearchboxHandler().getRecentTabs();
-              this.recentTabId = tabs[0]?.tabId ?? null;
+              this.recentTabId = tabs.find(t => t.recentTab)?.tabId ?? null;
 
               const openTabsMap = new Map(tabs.map(t => [t.tabId, t]));
 
@@ -3524,6 +3554,7 @@ export interface ComposeboxEmbedderMixinInterface extends I18nMixinLitInterface,
   voiceSearchCoherenceEnabled: boolean;
   energyEffectEnabled: boolean;
   energyEffectAnimationEnabled: boolean;
+  dynamicAimFulfillmentEnabled: boolean;
   willFulfillInAim: boolean;
   updateComplete: Promise<boolean>;
   pendingAutomaticActiveTabUrl: string;

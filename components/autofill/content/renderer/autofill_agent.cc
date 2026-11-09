@@ -47,6 +47,7 @@
 #include "base/android/device_info.h"
 #endif
 #include "components/autofill/content/renderer/a11y_util.h"
+#include "components/autofill/content/renderer/custom_form_control_script_executor.h"
 #include "components/autofill/content/renderer/form_autofill_issues.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/form_cache.h"
@@ -591,6 +592,16 @@ void AutofillAgent::BindPendingReceiver(
   receiver_.Bind(std::move(pending_receiver));
 }
 
+void AutofillAgent::EnableCustomFormControlScripts(int32_t world_id) {
+  CHECK(base::FeatureList::IsEnabled(
+      features::kAutofillCustomFormControlScripts));
+  CHECK(!custom_form_control_script_executor_);
+  // Destroyed in `OnDestruct()`, so that it doesn't outlive the frame.
+  custom_form_control_script_executor_ =
+      std::make_unique<CustomFormControlScriptExecutor>(
+          CHECK_DEREF(unsafe_render_frame()), world_id);
+}
+
 void AutofillAgent::DidCommitProvisionalLoad(ui::PageTransition transition) {
   Reset();
 }
@@ -873,6 +884,9 @@ void AutofillAgent::HandleCaretMovedInFormField(WebElement element,
 // triggered by JavaScript, which in turn may be triggered by AutofillAgent.
 void AutofillAgent::OnDestruct() {
   receiver_.reset();
+  // Unlike this agent, the executor is destroyed right away, so that it never
+  // outlives the frame.
+  custom_form_control_script_executor_.reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
   javascript_autofill_tracker_.Reset();
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
@@ -1399,8 +1413,21 @@ void AutofillAgent::ApplyFieldAction(
   }
 
   if (WebFormControlElement form_control =
-          form_util::GetFormControlByRendererId(field_id);
-      form_control && form_util::IsTextAreaElementOrTextInput(form_control)) {
+          form_util::GetFormControlByRendererId(field_id)) {
+    switch (action_type) {
+      case mojom::FieldActionType::kReplaceAll:
+        if (!form_util::IsAutofillableElement(form_control)) {
+          return;
+        }
+        break;
+      case mojom::FieldActionType::kReplaceSelection:
+      case mojom::FieldActionType::kReplaceSelectionForAtMemory:
+      case mojom::FieldActionType::kSelectAll:
+        if (!form_util::IsTextAreaElementOrTextInput(form_control)) {
+          return;
+        }
+        break;
+    }
     DCHECK(
         form_util::MaybeWasOwnedByFrame(form_control, unsafe_render_frame()));
     ClearPreviewedForm();
@@ -1871,18 +1898,21 @@ void AutofillAgent::ScrollFieldIntoView(FieldRendererId field_id) {
   element.ScrollIntoViewIfNeeded();
 }
 
-void AutofillAgent::TriggerFormExtraction() {
+void AutofillAgent::TriggerFormExtraction(bool force) {
+  if (force) {
+    form_cache_.ClearCache();
+  }
   ExtractForms(process_forms_form_extraction_timer_, /*callback=*/{});
 }
 
 void AutofillAgent::TriggerFormExtractionWithResponse(
+    bool force,
     base::OnceCallback<void(bool)> callback) {
+  if (force) {
+    form_cache_.ClearCache();
+  }
   ExtractForms(process_forms_form_extraction_with_response_timer_,
                std::move(callback));
-}
-
-void AutofillAgent::ClearFormCache() {
-  form_cache_.ClearCache();
 }
 
 void AutofillAgent::ExtractFormWithField(

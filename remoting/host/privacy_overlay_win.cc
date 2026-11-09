@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,10 +16,14 @@
 
 #include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/win/current_module.h"
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/scoped_hdc.h"
@@ -30,6 +35,8 @@
 #include "remoting/host/win/core_resource.h"
 #include "remoting/host/win/host_window_win_util.h"
 #include "remoting/host/win/input_extra_info.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
+#include "ui/events/event.h"
 
 namespace remoting {
 
@@ -74,14 +81,21 @@ bool RegisterPrivacyOverlayClass(WNDPROC wnd_proc) {
 //    desktop capture sees right through the overlay to the underlying desktop
 //    applications, and remote mouse/touch inputs pass straight through without
 //    obstruction.
-// 2. Floating Disconnect Button Dialog (`hwnd_`):
+// 2. On-Demand Floating Disconnect Button Dialog (`hwnd_`):
 //    A single topmost dialog created from the localized `IDD_DISCONNECT`
 //    resource and resized to wrap only the "Stop Sharing" button
 //    (`IDC_DISCONNECT`). In its idle state, `hwnd_` is hidden and click-through
 //    (`WS_EX_TRANSPARENT`, alpha = 0) so remote clicks at the button's screen
-//    coordinates cannot accidentally disconnect the session. As
-//    defense-in-depth, any `WM_COMMAND(IDC_DISCONNECT)` message tagged with
-//    `kCrdInputExtraInfo` (synthesized by CRD's input injector) is ignored.
+//    coordinates cannot accidentally disconnect the session. When local
+//    physical pointer or keyboard input is detected via `local_input_monitor_`,
+//    `hwnd_` becomes visible and clickable on the target monitor for
+//    `kAutoHideTimeout` (10s). As defense-in-depth, any
+//    `WM_COMMAND(IDC_DISCONNECT)` message tagged with `kCrdInputExtraInfo`
+//    (synthesized by CRD's input injector) is ignored.
+//
+// Inherits from `DisconnectWindowBase` to share client email formatting,
+// session disconnection callbacks, and anti-displacement
+// (`WM_WINDOWPOSCHANGING`) logic.
 class PrivacyOverlayWin : public DisconnectWindowBase {
  public:
   explicit PrivacyOverlayWin(
@@ -128,7 +142,7 @@ class PrivacyOverlayWin : public DisconnectWindowBase {
   bool BeginOverlay();
 
   // Destroys all backdrop and button windows, unregisters the disconnect
-  // hotkey, and releases cached GDI resources.
+  // hotkey, stops the auto-hide timer, and releases cached GDI resources.
   void EndOverlay();
 
   // Returns `control`'s bounding rectangle in `hwnd_`'s client coordinates.
@@ -143,6 +157,11 @@ class PrivacyOverlayWin : public DisconnectWindowBase {
   // inserting them into `backdrop_dpi_cache_` if not yet present.
   const BackdropDpiResources& GetBackdropResourcesForDpi(UINT dpi);
 
+  // Measures the wrapped pixel height of `sharing_with_text_` for a monitor of
+  // `monitor_width` and `dpi` so `PositionDisconnectButton()` can place the
+  // floating button below multi-line wrapped text without overlapping it.
+  int MeasureSharingTextHeight(int monitor_width, UINT dpi);
+
   // Draws the background and contrasting rounded border of the Disconnect
   // button dialog into `hdc`.
   void PaintButtonDialog(HWND hwnd, HDC hdc);
@@ -151,9 +170,30 @@ class PrivacyOverlayWin : public DisconnectWindowBase {
   // all active physical displays.
   bool UpdateBackdrops();
 
+  // Positions and DPI-scales the Disconnect button window on the monitor
+  // containing `screen_point`. If `explicit_dpi` is non-zero and `screen_point`
+  // is on `hwnd_`'s current monitor, `explicit_dpi` overrides the queried
+  // monitor DPI.
+  void PositionDisconnectButton(POINT screen_point, UINT explicit_dpi = 0);
+
+  // Shows and enables click-targeting on the Disconnect button window in
+  // response to local physical pointer, touch, or keyboard activity.
+  void ActivateDisconnectButton(POINT screen_point);
+
   // Hides and restores click-through (`WS_EX_TRANSPARENT`) on the Disconnect
-  // button window.
+  // button window when the active timeout expires.
   void DeactivateDisconnectButton();
+
+  // Permanently reveals the Disconnect button if local input monitoring fails.
+  void StopAutoHideBehavior();
+
+  // Called when a local mouse or touch event is observed by
+  // `local_input_monitor_`.
+  void OnLocalMouseEvent(const webrtc::DesktopVector& position,
+                         ui::EventType type);
+
+  // Called when a local keyboard event is observed by `local_input_monitor_`.
+  void OnLocalKeyPressed(uint32_t usb_keycode);
 
   // Renders the privacy overlay backdrop content (icon, localized product
   // title, and localized sharing message) into `hdc` using an offscreen double
@@ -166,19 +206,36 @@ class PrivacyOverlayWin : public DisconnectWindowBase {
                                           WPARAM wparam,
                                           LPARAM lparam);
 
-  // Retained for subsequent CL that hooks local input monitoring.
+  // Monitors local hardware mouse, touch, and keyboard input to wake the
+  // Disconnect button on demand.
   std::unique_ptr<LocalInputMonitor> local_input_monitor_;
 
   // Re-entrancy guard preventing `EndOverlay()` from running twice when
   // `DestroyWindow()` synchronously dispatches `WM_DESTROY`.
   bool is_ending_ = false;
 
+  // True when `hwnd_` is in its hidden, click-through idle state.
+  bool is_button_hidden_ = false;
+
+  // True once `mouse_position_` has been initialized from either
+  // `GetCursorPos()` or the first local pointer event.
+  bool has_initial_mouse_position_ = false;
   // True if the localized dialog resource or process UI language uses a
   // right-to-left (RTL) reading layout.
   bool is_rtl_ = false;
 
+  // Timer that returns the Disconnect button to its hidden click-through state
+  // after `kAutoHideTimeout` of local input inactivity.
+  base::OneShotTimer auto_hide_timer_;
+
   // The floating Disconnect button dialog created from `IDD_DISCONNECT`.
   HWND hwnd_ = nullptr;
+
+  // The monitor on which `hwnd_` is currently positioned and its cached screen
+  // rectangle (used to avoid redundant `MonitorFromPoint()` calls on every
+  // pointer movement within the same monitor).
+  HMONITOR active_button_monitor_ = nullptr;
+  RECT active_button_monitor_rect_ = {0, 0, 0, 0};
 
   // The DPI for which `hwnd_`'s current size, font, border pen, and rounded
   // region were computed.
@@ -212,6 +269,11 @@ class PrivacyOverlayWin : public DisconnectWindowBase {
   std::wstring product_name_text_;
   std::wstring sharing_with_text_;
   std::wstring button_text_;
+
+  // Last observed local cursor position in virtual-screen coordinates.
+  webrtc::DesktopVector mouse_position_;
+
+  base::WeakPtrFactory<PrivacyOverlayWin> weak_factory_{this};
 };
 
 PrivacyOverlayWin::BackdropDpiResources::BackdropDpiResources() = default;
@@ -241,6 +303,19 @@ void PrivacyOverlayWin::Start(
   if (!BeginOverlay()) {
     EndOverlay();
     DisconnectSession("Failed to initialize Privacy Overlay.");
+    return;
+  }
+
+  if (local_input_monitor_) {
+    local_input_monitor_->StartMonitoring(
+        base::BindRepeating(&PrivacyOverlayWin::OnLocalMouseEvent,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(&PrivacyOverlayWin::OnLocalKeyPressed,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(&PrivacyOverlayWin::StopAutoHideBehavior,
+                            weak_factory_.GetWeakPtr()));
+  } else {
+    StopAutoHideBehavior();
   }
 }
 
@@ -307,6 +382,94 @@ BOOL PrivacyOverlayWin::OnDialogMessage(HWND hwnd,
       EndOverlay();
       DisconnectSession("Disconnect window closed.");
       return TRUE;
+
+    // Intercept position changes to keep the button window anchored on its
+    // target monitor.
+    case WM_WINDOWPOSCHANGING: {
+      WINDOWPOS* pos = reinterpret_cast<WINDOWPOS*>(lparam);
+      if (pos && !(pos->flags & SWP_NOMOVE) && expected_x().has_value() &&
+          expected_y().has_value()) {
+        if (ShouldRepositionOnDisplacement(pos->x, pos->y)) {
+          pos->x = *expected_x();
+          pos->y = *expected_y();
+        }
+      }
+      return FALSE;
+    }
+
+    // Block attempts to move or minimize the window via system commands.
+    case WM_SYSCOMMAND:
+      if ((wparam & 0xFFF0) == SC_MOVE || (wparam & 0xFFF0) == SC_MINIMIZE) {
+        return TRUE;
+      }
+      return FALSE;
+
+    // Restore the window if it somehow gets minimized (e.g. via Show Desktop /
+    // Win+D). If the button is currently in its idle hidden state, clear
+    // `WS_MINIMIZE` first via `SW_SHOWNOACTIVATE` (safe without visual flash
+    // while `LWA_ALPHA` is 0 and `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` are
+    // set) and then hide the window again.
+    case WM_SIZE:
+      if (wparam == SIZE_MINIMIZED) {
+        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        if (is_button_hidden_) {
+          ShowWindow(hwnd_, SW_HIDE);
+        }
+        ResetRepositionAttempts();
+        active_button_monitor_ = nullptr;
+        active_button_dpi_ = 0;
+        POINT pt = {mouse_position_.x(), mouse_position_.y()};
+        PositionDisconnectButton(pt);
+        if (!is_button_hidden_) {
+          SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        return TRUE;
+      }
+      return FALSE;
+
+    // Update per-monitor privacy overlays and button geometry if the display
+    // dimensions, monitor topology, or per-monitor DPI change.
+    case WM_DISPLAYCHANGE:
+    case WM_DPICHANGED: {
+      ResetRepositionAttempts();
+      UINT explicit_dpi =
+          (message == WM_DPICHANGED) ? static_cast<UINT>(LOWORD(wparam)) : 0;
+      if (!UpdateBackdrops()) {
+        EndOverlay();
+        DisconnectSession("Failed to update Privacy Overlay backdrops.");
+        return TRUE;
+      }
+      POINT pt = {mouse_position_.x(), mouse_position_.y()};
+      PositionDisconnectButton(pt, explicit_dpi);
+      if (!is_button_hidden_) {
+        SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+      }
+      return TRUE;
+    }
+
+    // Refresh the overlay and invalidate cached fonts/pens if the user toggles
+    // Windows High Contrast mode or updates system display/font metrics.
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE: {
+      backdrop_dpi_cache_.clear();
+      UINT dpi_to_restore = active_button_dpi_;
+      active_button_monitor_ = nullptr;
+      active_button_dpi_ = 0;
+      button_border_pen_.reset();
+      POINT pt = {mouse_position_.x(), mouse_position_.y()};
+      PositionDisconnectButton(pt, dpi_to_restore);
+      for (HWND backdrop_hwnd : backdrop_hwnds_) {
+        if (backdrop_hwnd && IsWindow(backdrop_hwnd)) {
+          InvalidateRect(backdrop_hwnd, nullptr, FALSE);
+        }
+      }
+      if (hwnd_ && IsWindow(hwnd_)) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+      }
+      return TRUE;
+    }
 
     // Handle the Ctrl+Alt+Esc disconnect hot-key.
     case WM_HOTKEY:
@@ -487,6 +650,13 @@ bool PrivacyOverlayWin::BeginOverlay() {
     return false;
   }
 
+  POINT cursor_pos = {0, 0};
+  if (GetCursorPos(&cursor_pos)) {
+    mouse_position_ = webrtc::DesktopVector(cursor_pos.x, cursor_pos.y);
+    has_initial_mouse_position_ = true;
+  }
+
+  PositionDisconnectButton(cursor_pos);
   DeactivateDisconnectButton();
   return true;
 }
@@ -498,6 +668,9 @@ void PrivacyOverlayWin::EndOverlay() {
     return;
   }
   is_ending_ = true;
+
+  auto_hide_timer_.Stop();
+  local_input_monitor_.reset();
 
   if (hotkey_registered_ && hwnd_) {
     UnregisterHotKey(hwnd_, kDisconnectHotkeyId);
@@ -511,6 +684,8 @@ void PrivacyOverlayWin::EndOverlay() {
       DestroyWindow(backdrop_hwnd);
     }
   }
+  active_button_monitor_ = nullptr;
+  active_button_monitor_rect_ = {0, 0, 0, 0};
   active_button_dpi_ = 0;
 
   backdrop_dpi_cache_.clear();
@@ -622,6 +797,42 @@ PrivacyOverlayWin::GetBackdropResourcesForDpi(UINT dpi) {
   return inserted_it->second;
 }
 
+int PrivacyOverlayWin::MeasureSharingTextHeight(int monitor_width, UINT dpi) {
+  int spacing = ScaleForDpi(kBaseVerticalSpacing, dpi);
+  int default_height = ScaleForDpi(kBaseBodyFontSize, dpi) + spacing;
+  if (sharing_with_text_.empty() || monitor_width <= 0) {
+    return default_height;
+  }
+
+  const BackdropDpiResources& resources = GetBackdropResourcesForDpi(dpi);
+  if (!resources.body_font.is_valid()) {
+    return default_height;
+  }
+
+  base::win::ScopedGetDC screen_dc(hwnd_);
+  if (!screen_dc) {
+    return default_height;
+  }
+
+  int max_text_width = std::max(
+      1, (monitor_width * kMaxTextWidthNumerator) / kMaxTextWidthDenominator);
+  RECT calc_rect = {0, 0, max_text_width, 0};
+  UINT draw_text_flags = DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL |
+                         DT_EXTERNALLEADING | DT_NOPREFIX | DT_CALCRECT;
+  if (is_rtl_) {
+    draw_text_flags |= DT_RTLREADING;
+  }
+
+  base::win::ScopedSelectObject select_font(screen_dc,
+                                            resources.body_font.get());
+  if (DrawTextW(screen_dc, sharing_with_text_.c_str(), -1, &calc_rect,
+                draw_text_flags)) {
+    return std::max(default_height,
+                    static_cast<int>(calc_rect.bottom - calc_rect.top));
+  }
+  return default_height;
+}
+
 void PrivacyOverlayWin::PaintButtonDialog(HWND hwnd, HDC hdc) {
   RECT rect;
   if (!GetClientRect(hwnd, &rect)) {
@@ -636,8 +847,9 @@ void PrivacyOverlayWin::PaintButtonDialog(HWND hwnd, HDC hdc) {
 
   FillRect(hdc, &rect, bg_brush);
 
-  UINT dpi = active_button_dpi_ > 0 ? active_button_dpi_
-                                    : GetMonitorDpi(nullptr, hwnd);
+  UINT dpi = active_button_dpi_ > 0
+                 ? active_button_dpi_
+                 : GetMonitorDpi(active_button_monitor_, hwnd);
   int border_width = std::max(1, ScaleForDpi(kBaseButtonBorderWidth, dpi));
   int border_radius = ScaleForDpi(kBaseWindowBorderRadius, dpi);
 
@@ -660,6 +872,11 @@ void PrivacyOverlayWin::PaintButtonDialog(HWND hwnd, HDC hdc) {
 
 bool PrivacyOverlayWin::UpdateBackdrops() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Invalidate the cached active button monitor so `PositionDisconnectButton()`
+  // recomputes the button coordinates for updated monitor geometry or DPI.
+  active_button_monitor_ = nullptr;
+  active_button_monitor_rect_ = {0, 0, 0, 0};
 
   std::vector<RECT> monitor_rects = GetActiveMonitorRects();
   if (monitor_rects.empty()) {
@@ -743,6 +960,99 @@ bool PrivacyOverlayWin::UpdateBackdrops() {
   return true;
 }
 
+void PrivacyOverlayWin::PositionDisconnectButton(POINT screen_point,
+                                                 UINT explicit_dpi) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!hwnd_) {
+    return;
+  }
+
+  HMONITOR monitor = MonitorFromPoint(screen_point, MONITOR_DEFAULTTONEAREST);
+  UINT dpi = (explicit_dpi > 0 &&
+              monitor == MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST))
+                 ? explicit_dpi
+                 : GetMonitorDpi(monitor, hwnd_);
+  if (monitor && monitor == active_button_monitor_ &&
+      dpi == active_button_dpi_) {
+    return;
+  }
+
+  UpdateButtonLayoutForDpi(dpi);
+
+  MONITORINFO monitor_info = {sizeof(monitor_info)};
+  RECT window_rect;
+  if (!GetMonitorInfo(monitor, &monitor_info) ||
+      !GetWindowRect(hwnd_, &window_rect)) {
+    return;
+  }
+
+  active_button_monitor_ = monitor;
+  active_button_monitor_rect_ = monitor_info.rcMonitor;
+
+  int window_width = window_rect.right - window_rect.left;
+  int window_height = window_rect.bottom - window_rect.top;
+  int monitor_width =
+      monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+  int monitor_height =
+      monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+
+  int left = monitor_info.rcMonitor.left + (monitor_width - window_width) / 2;
+  int center_y = monitor_info.rcMonitor.top + monitor_height / 2;
+  int spacing = ScaleForDpi(kBaseVerticalSpacing, dpi);
+  int min_offset = ScaleForDpi(kBaseButtonTopOffset, dpi);
+  int text_offset = MeasureSharingTextHeight(monitor_width, dpi) + spacing;
+  int top = center_y + std::max(min_offset, text_offset);
+
+  // Clamp `top` so the button never clips off the bottom of the monitor.
+  int max_top = std::max(static_cast<int>(monitor_info.rcMonitor.top),
+                         static_cast<int>(monitor_info.rcMonitor.bottom) -
+                             window_height - spacing);
+  top = std::min(top, max_top);
+
+  SetExpectedPosition(left, top);
+  SetWindowPos(hwnd_, HWND_TOPMOST, left, top, 0, 0,
+               SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void PrivacyOverlayWin::ActivateDisconnectButton(POINT screen_point) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!hwnd_) {
+    return;
+  }
+
+  if (is_button_hidden_ || !active_button_monitor_ ||
+      !PtInRect(&active_button_monitor_rect_, screen_point)) {
+    PositionDisconnectButton(screen_point);
+  }
+
+  if (is_button_hidden_) {
+    LONG_PTR ex_style = GetWindowLongPtr(hwnd_, GWL_EXSTYLE);
+    ex_style &= ~WS_EX_TRANSPARENT;
+    ex_style |=
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE;
+    SetWindowLongPtr(hwnd_, GWL_EXSTYLE, ex_style);
+    SetLayeredWindowAttributes(hwnd_, 0, 255, LWA_ALPHA);
+    SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    is_button_hidden_ = false;
+    NotifyWinEvent(EVENT_OBJECT_SHOW, hwnd_, OBJID_WINDOW, CHILDID_SELF);
+  } else {
+    // Ensure `hwnd_` stays at the top of the `HWND_TOPMOST` Z-order band above
+    // all backdrop windows and any newly-opened topmost windows.
+    SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+
+  if (local_input_monitor_) {
+    // `base::Unretained` is safe because `auto_hide_timer_` is a member owned
+    // by `this` and is stopped in `EndOverlay()` and on destruction.
+    auto_hide_timer_.Start(
+        FROM_HERE, kAutoHideTimeout,
+        base::BindOnce(&PrivacyOverlayWin::DeactivateDisconnectButton,
+                       base::Unretained(this)));
+  }
+}
+
 void PrivacyOverlayWin::DeactivateDisconnectButton() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!hwnd_) {
@@ -755,6 +1065,50 @@ void PrivacyOverlayWin::DeactivateDisconnectButton() {
   SetWindowLongPtr(hwnd_, GWL_EXSTYLE, ex_style);
   SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
   ShowWindow(hwnd_, SW_HIDE);
+  is_button_hidden_ = true;
+}
+
+void PrivacyOverlayWin::StopAutoHideBehavior() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto_hide_timer_.Stop();
+  local_input_monitor_.reset();
+
+  // Reveal the Disconnect button permanently since `local_input_monitor_` has
+  // been reset above and `ActivateDisconnectButton()` only starts
+  // `auto_hide_timer_` when `local_input_monitor_` is non-null.
+  POINT pt = {mouse_position_.x(), mouse_position_.y()};
+  ActivateDisconnectButton(pt);
+}
+
+void PrivacyOverlayWin::OnLocalMouseEvent(const webrtc::DesktopVector& position,
+                                          ui::EventType type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!has_initial_mouse_position_) {
+    has_initial_mouse_position_ = true;
+    mouse_position_ = position;
+    POINT pt = {position.x(), position.y()};
+    ActivateDisconnectButton(pt);
+    return;
+  }
+
+  // Ignore movements of <= `kMouseJitterThresholdPx` (1px) in both directions
+  // to avoid showing the Disconnect button due to hardware/software cursor
+  // drift or small vibrations in the environment around the remote host.
+  if (std::abs(position.x() - mouse_position_.x()) > kMouseJitterThresholdPx ||
+      std::abs(position.y() - mouse_position_.y()) > kMouseJitterThresholdPx) {
+    mouse_position_ = position;
+    POINT pt = {position.x(), position.y()};
+    ActivateDisconnectButton(pt);
+  }
+}
+
+void PrivacyOverlayWin::OnLocalKeyPressed(uint32_t usb_keycode) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Reveal the Disconnect button on local keyboard activity (matching
+  // `DisconnectWindowWin::OnLocalKeyPressed`) so keyboard-only and
+  // screen-reader users can discover and interact with the Disconnect button.
+  POINT pt = {mouse_position_.x(), mouse_position_.y()};
+  ActivateDisconnectButton(pt);
 }
 
 void PrivacyOverlayWin::PaintBackdrop(HWND hwnd, HDC hdc) {
@@ -977,10 +1331,17 @@ LRESULT CALLBACK PrivacyOverlayWin::BackdropWndProc(HWND hwnd,
       return 0;
     }
 
-      // TODO(crbug.com/451238243): Handle WM_DISPLAYCHANGE, WM_DPICHANGED,
-      // WM_SETTINGCHANGE, and WM_SYSCOLORCHANGE in a follow-up CL so backdrops
-      // dynamically update when display topology, DPI, or High Contrast
-      // settings change during an active session.
+    // Forward per-monitor DPI changes on backdrop windows to `hwnd_` as an
+    // asynchronous `WM_DISPLAYCHANGE` notification (avoiding forwarding
+    // `WM_DPICHANGED`'s stack-allocated `RECT*` in `lparam` via `PostMessage`).
+    // `WM_DISPLAYCHANGE` itself is already broadcast by Windows to all
+    // top-level windows including `hwnd_`.
+    case WM_DPICHANGED:
+      InvalidateRect(hwnd, nullptr, FALSE);
+      if (self && self->hwnd_) {
+        PostMessage(self->hwnd_, WM_DISPLAYCHANGE, 0, 0);
+      }
+      return 0;
   }
 
   return DefWindowProc(hwnd, message, wparam, lparam);

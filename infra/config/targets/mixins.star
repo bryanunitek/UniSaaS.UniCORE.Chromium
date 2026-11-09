@@ -1033,6 +1033,22 @@ targets.mixin(
     ],
 )
 
+targets.mixin(
+    name = "gpu_force_webgl_on_webgpu",
+    args = [
+        # --enable-unsafe-webgpu bypasses the WebGPU adapter blocklist so the
+        # suite can run on bots whose GPU/driver isn't allowlisted yet.
+        "--extra-browser-args=--enable-features=WebGLOnWebGPU --enable-unsafe-webgpu",
+    ],
+    linux_args = [
+        # Linux defaults to GL SharedImages, and webgpu_on_vk_via_gl_interop is
+        # blocklisted on AMD and Intel < Gen12. Enable Vulkan so Dawn can get a
+        # WebGPU adapter on all Linux GPU bots (Telemetry merges multiple
+        # --enable-features flags).
+        "--extra-browser-args=--enable-features=Vulkan",
+    ],
+)
+
 # Use of this mixin signals to the recipe that the test uploads its results
 # to result-sink and doesn't need to be wrapped by result_adapter.
 targets.mixin(
@@ -1149,6 +1165,18 @@ targets.mixin(
             swarming.cache(
                 name = "runtime_ios_27_2",
                 path = "Runtime-ios-27.2",
+            ),
+        ],
+    ),
+)
+
+targets.mixin(
+    name = "ios_runtime_cache_27_3",
+    swarming = targets.swarming(
+        named_caches = [
+            swarming.cache(
+                name = "runtime_ios_27_3",
+                path = "Runtime-ios-27.3",
             ),
         ],
     ),
@@ -1423,6 +1451,19 @@ targets.mixin(
 )
 
 targets.mixin(
+    name = "linux_intel_uhd_770_wayland_stable",
+    swarming = targets.swarming(
+        dimensions = {
+            "gpu": "8086:4680-26.0.8",
+            "os": "Ubuntu-26.04",
+            "display_attached": "1",
+            "display_server": "wayland",
+            "pool": "chromium.tests.gpu",
+        },
+    ),
+)
+
+targets.mixin(
     name = "linux_nvidia_gtx_1660_experimental",
     swarming = targets.swarming(
         dimensions = {
@@ -1439,8 +1480,8 @@ targets.mixin(
     swarming = targets.swarming(
         dimensions = {
             "display_server": "x11",
-            "gpu": "10de:2184-535.183.01",
-            "os": "Ubuntu-22.04",
+            "gpu": "10de:2184-535.183.01|10de:2184-595.104.02",
+            "os": "Ubuntu-22.04|Ubuntu-24.04",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -2412,12 +2453,12 @@ targets.mixin(
     name = "xcode_27_beta",
     args = [
         "--xcode-build-version",
-        "27b48",
+        "27c5020n",
     ],
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "xcode_ios_27b48",
+                name = "xcode_ios_27c5020n",
                 path = "Xcode.app",
             ),
         ],

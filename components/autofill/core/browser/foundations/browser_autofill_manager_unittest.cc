@@ -1014,6 +1014,10 @@ class BrowserAutofillManagerTest : public testing::Test,
                                        TestBrowserAutofillManager,
                                        NiceMock<MockPaymentsAutofillClient>> {
  public:
+  explicit BrowserAutofillManagerTest(
+      const std::vector<base::test::FeatureRef>& enabled_features = {})
+      : scoped_feature_list_(enabled_features, /*disabled_features=*/{}) {}
+
   void SetUp() override {
     // Advance the mock clock to a fixed, arbitrary, somewhat recent date.
     base::Time year2020;
@@ -1109,19 +1113,17 @@ class BrowserAutofillManagerTest : public testing::Test,
         std::nullopt, AutofillManagerTestApi::pass_key());
     if (const AutofillProfile* profile =
             personal_data().address_data_manager().GetProfileByGUID(guid)) {
-      autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill,
-                                           form.global_id(), field.global_id(),
-                                           profile, trigger_source,
-                                           /*require_user_confirmation=*/false,
-                                           /*blocked_fields=*/{});
+      autofill_manager().FillOrPreviewForm(
+          mojom::ActionPersistence::kFill, form.global_id(), field.global_id(),
+          FillingProduct::kAddress, profile, trigger_source,
+          /*require_user_confirmation=*/false, /*blocked_fields=*/{});
     } else if (const CreditCard* card =
                    personal_data().payments_data_manager().GetCreditCardByGUID(
                        guid)) {
-      autofill_manager().FillOrPreviewForm(mojom::ActionPersistence::kFill,
-                                           form.global_id(), field.global_id(),
-                                           card, trigger_source,
-                                           /*require_user_confirmation=*/false,
-                                           /*blocked_fields=*/{});
+      autofill_manager().FillOrPreviewForm(
+          mojom::ActionPersistence::kFill, form.global_id(), field.global_id(),
+          FillingProduct::kCreditCard, card, trigger_source,
+          /*require_user_confirmation=*/false, /*blocked_fields=*/{});
     }
   }
 
@@ -1220,8 +1222,8 @@ class BrowserAutofillManagerTest : public testing::Test,
     EXPECT_CALL(autofill_driver(), ApplyFormAction).Times(AtLeast(1));
     autofill_manager().FillOrPreviewForm(
         mojom::ActionPersistence::kFill, form->global_id(),
-        form->fields()[0].global_id(), &card, AutofillTriggerSource::kPopup,
-        /*require_user_confirmation=*/false,
+        form->fields()[0].global_id(), FillingProduct::kCreditCard, &card,
+        AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
         /*blocked_fields=*/{});
   }
 
@@ -1400,6 +1402,10 @@ class BrowserAutofillManagerTest : public testing::Test,
     personal_data().payments_data_manager().AddCreditCard(credit_card3);
   }
 
+  // The feature list must be destroyed after `task_environment_` to avoid race
+  // conditions in base/threading/platform_thread_android.cc:
+  // crbug.com/582602077
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   test::AutofillUnitTestEnvironment autofill_test_environment_;
@@ -2714,9 +2720,9 @@ TEST_F(BrowserAutofillManagerTest,
   FormsSeen({form});
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &local_card,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      form.fields().front().global_id(), FillingProduct::kCreditCard,
+      &local_card, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 }
 
 TEST_F(BrowserAutofillManagerTest,
@@ -2731,9 +2737,9 @@ TEST_F(BrowserAutofillManagerTest,
   FormsSeen({form});
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &server_card,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      form.fields().front().global_id(), FillingProduct::kCreditCard,
+      &server_card, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 }
 
 TEST_F(BrowserAutofillManagerTest,
@@ -2758,9 +2764,9 @@ TEST_F(BrowserAutofillManagerTest,
   FormsSeen({form});
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &filled_card,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      form.fields().front().global_id(), FillingProduct::kCreditCard,
+      &filled_card, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -2799,8 +2805,8 @@ TEST_F(BrowserAutofillManagerTest, FillOrPreviewForm_CreditCard_Bnpl) {
   FormsSeen({form});
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &bnpl_virtual_card,
-      AutofillTriggerSource::kPopup,
+      form.fields().front().global_id(), FillingProduct::kCreditCard,
+      &bnpl_virtual_card, AutofillTriggerSource::kPopup,
       /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 }
@@ -2832,8 +2838,8 @@ TEST_F(BrowserAutofillManagerTest,
   CreditCard card = test::GetMaskedServerCard();
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &card, AutofillTriggerSource::kPopup,
-      /*require_user_confirmation=*/false,
+      form.fields().front().global_id(), FillingProduct::kCreditCard, &card,
+      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 }
 
@@ -2864,9 +2870,9 @@ TEST_F(BrowserAutofillManagerTest,
   FormsSeen({form});
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields().front().global_id(), &credit_card,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      form.fields().front().global_id(), FillingProduct::kCreditCard,
+      &credit_card, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
@@ -5443,47 +5449,58 @@ TEST_F(BrowserAutofillManagerTest, PageLanguageGetsCorrectlySet) {
   EXPECT_EQ(autofill_manager().GetCurrentPageLanguage(), LanguageCode("zh"));
 }
 
-// Test language detection on frames depending on whether the frame is active or
-// not.
+// Test language detection on frames depending on whether the frame is the
+// outermost active main frame.
 class BrowserAutofillManagerTestPageLanguageDetection
     : public BrowserAutofillManagerTest,
-      public WithParamInterface<bool> {
+      public WithParamInterface<std::tuple<bool, bool, bool>> {
  public:
-  BrowserAutofillManagerTestPageLanguageDetection() {
-    scoped_features_.InitWithFeatures(
-        /*enabled_features=*/{features::kAutofillPageLanguageDetection},
-        /*disabled_features=*/{});
+  BrowserAutofillManagerTestPageLanguageDetection()
+      : BrowserAutofillManagerTest({features::kAutofillPageLanguageDetection}) {
   }
 
-  bool is_active() const { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList scoped_features_;
+  bool is_active() const { return std::get<0>(GetParam()); }
+  bool has_parent() const { return std::get<1>(GetParam()); }
+  bool is_embedded() const { return std::get<2>(GetParam()); }
 };
 
 TEST_P(BrowserAutofillManagerTestPageLanguageDetection, GetsCorrectlyDetected) {
-  FormData form = CreateTestAddressFormData();
+  MockAutofillManagerObserver observer;
+  base::ScopedObservation<AutofillManager, MockAutofillManagerObserver>
+      observation{&observer};
+  observation.Observe(&autofill_manager());
 
+  MockFunction<void()> check;
+  {
+    InSequence s;
+    EXPECT_CALL(observer, OnBeforeFormsSeen);
+    EXPECT_CALL(check, Call);
+    EXPECT_CALL(observer, OnBeforeFormsSeen)
+        .Times(is_active() && !has_parent() && !is_embedded());
+  }
+
+  FormData form = CreateTestAddressFormData();
   autofill_manager().OnFormsSeen({form}, {},
                                  AutofillManagerTestApi::pass_key());
+
+  check.Call();
 
   translate::LanguageDetectionDetails language_detection_details;
   language_detection_details.adopted_language = "hu";
   autofill_client().GetLanguageState()->SetCurrentLanguage("hu");
 
-  MockAutofillManagerObserver observer;
-  base::ScopedObservation<AutofillManager, MockAutofillManagerObserver>
-      observation{&observer};
-  observation.Observe(&autofill_manager());
-  EXPECT_CALL(observer, OnBeforeLanguageDetermined).Times(is_active());
-
   autofill_driver().SetIsActive(is_active());
+  autofill_driver().SetParent(has_parent() ? &autofill_driver() : nullptr);
+  autofill_driver().SetIsEmbedded(is_embedded());
   autofill_manager().OnLanguageDetermined(language_detection_details);
+  autofill_driver().SetParent(nullptr);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
                          BrowserAutofillManagerTestPageLanguageDetection,
-                         testing::Bool());
+                         testing::Combine(testing::Bool(),
+                                          testing::Bool(),
+                                          testing::Bool()));
 
 // BrowserAutofillManagerTest with different browser profile types.
 class BrowserAutofillManagerProfileMetricsTest
@@ -7403,9 +7420,9 @@ TEST_F(BrowserAutofillManagerOtpSuggestionsTest, OtpFilling) {
   // Ask to fill the form.
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields()[0].global_id(), &otp_fill_data,
-      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
-      /*blocked_fields=*/{});
+      form.fields()[0].global_id(), FillingProduct::kOneTimePassword,
+      &otp_fill_data, AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false, /*blocked_fields=*/{});
 
   // Verify that the right data is sent to the renderer.
   ASSERT_EQ(1u, filled_fields.size());
@@ -7591,8 +7608,9 @@ TEST_F(BrowserAutofillManagerTest, FillOrPreviewForm_BlockedFields) {
 
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields()[0].global_id(), &profile, AutofillTriggerSource::kPopup,
-      /*require_user_confirmation=*/false, blocked_fields);
+      form.fields()[0].global_id(), FillingProduct::kAddress, &profile,
+      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
+      blocked_fields);
 }
 
 // Tests that blocked_fields are preserved through the asynchronous credit
@@ -7626,8 +7644,9 @@ TEST_F(BrowserAutofillManagerTest,
 
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form.global_id(),
-      form.fields()[0].global_id(), &card, AutofillTriggerSource::kPopup,
-      /*require_user_confirmation=*/true, blocked_fields);
+      form.fields()[0].global_id(), FillingProduct::kCreditCard, &card,
+      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/true,
+      blocked_fields);
 }
 
 class BrowserAutofillManagerSuggestionMergingTest

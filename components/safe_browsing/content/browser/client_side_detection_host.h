@@ -19,7 +19,7 @@
 #include "base/unguessable_token.h"
 #include "components/autofill/core/browser/foundations/scoped_autofill_managers_observation.h"
 #include "components/permissions/permission_request_manager.h"
-#include "components/safe_browsing/content/browser/async_check_tracker.h"
+#include "components/safe_browsing/content/browser/url_checker/async_check_tracker.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
 #include "components/safe_browsing/core/browser/client_side_detection_host_base.h"
 #include "components/safe_browsing/core/browser/credit_card_form_event.h"
@@ -34,7 +34,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "components/safe_browsing/core/browser/referring_app_info.h"  // nogncheck
+#include "components/safe_browsing/core/browser/referring_app_info/referring_app_info.h"  // nogncheck
 #endif
 
 class PrefService;
@@ -76,6 +76,7 @@ class ClientSideDetectionHost
   bool IsErrorDocument() override;
   std::optional<double> GetSiteEngagementScore(const GURL& url) const override;
   void GetInnerText(HostInnerTextCallback callback) override;
+  std::string GetPageTitle() const override;
   void MaybeStartImageEmbedding(
       std::unique_ptr<ClientPhishingRequest> verdict,
       std::optional<bool> did_match_high_confidence_allowlist,
@@ -249,6 +250,7 @@ class ClientSideDetectionHost
   friend class ClientSideDetectionHostClipboardDataTest;
   friend class ClientSideDetectionHostGeminiAntiscamProtectionTest;
   friend class ClientSideDetectionHostPriorityTest;
+  friend class ClientSideDetectionHostKeyboardLockUniformImageDelayTest;
   friend class ClientSideDetectionHostPrerenderBrowserTest;
   friend class ClientSideDetectionHostPrerenderBrowserTest_Screenshot;
   class ShouldClassifyUrlRequest;
@@ -405,6 +407,7 @@ class ClientSideDetectionHost
       std::optional<bool> did_match_high_confidence_allowlist,
       bool is_invalid_ip,
       std::string inner_text,
+      base::TimeTicks capture_start_time,
       const content::CopyFromSurfaceResult& result);
 
   // Called when the captured screenshot has been encoded into PNG bytes on a

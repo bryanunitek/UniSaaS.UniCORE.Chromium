@@ -4,7 +4,10 @@
 
 #include "partition_alloc/scheduler_loop_quarantine.h"
 
+#include <array>
+#include <limits>
 #include <thread>
+#include <vector>
 
 #include "partition_alloc/buildflags.h"
 #include "partition_alloc/extended_api.h"
@@ -129,7 +132,6 @@ struct SchedulerLoopQuarantineTestParamSmall {
   constexpr static QuarantineConfig kConfig = {
       .branch_capacity_in_bytes = 256,
       .enable_quarantine = true,
-      .enable_zapping = true,
       .max_quarantine_size = 1024,
   };
 };
@@ -138,7 +140,6 @@ struct SchedulerLoopQuarantineTestParamLarge {
   constexpr static QuarantineConfig kConfig = {
       .branch_capacity_in_bytes = 2048,
       .enable_quarantine = true,
-      .enable_zapping = true,
       .max_quarantine_size = 1024,
   };
 };
@@ -147,7 +148,6 @@ struct SchedulerLoopQuarantineTestParamSmallThreadBound {
   constexpr static QuarantineConfig kConfig = {
       .branch_capacity_in_bytes = 256,
       .enable_quarantine = true,
-      .enable_zapping = true,
       .max_quarantine_size = 1024,
   };
 };
@@ -156,7 +156,6 @@ struct SchedulerLoopQuarantineTestParamLargeThreadBound {
   constexpr static QuarantineConfig kConfig = {
       .branch_capacity_in_bytes = 2048,
       .enable_quarantine = true,
-      .enable_zapping = true,
       .max_quarantine_size = 1024,
   };
 };
@@ -300,6 +299,74 @@ TYPED_TEST(SchedulerLoopQuarantineTest, TooLargeAllocation) {
   this->Quarantine(object);
 
   ASSERT_TRUE(this->GetQuarantineBranch()->IsQuarantinedForTesting(object));
+}
+
+TYPED_TEST(SchedulerLoopQuarantineTest, ZapMax) {
+  constexpr size_t kZapMax = 8;
+  constexpr size_t kObjectSize = 64;
+  constexpr unsigned char kInitialByte = 0xab;
+  static_assert(kInitialByte != internal::kFreedByte);
+
+  QuarantineConfig config = this->GetConfig();
+  config.zap_max = kZapMax;
+  this->GetQuarantineBranch()->Configure(*this->GetQuarantineRoot(), config);
+
+  auto& object = *static_cast<std::array<unsigned char, kObjectSize>*>(
+      this->GetPartitionRoot()->Alloc(kObjectSize));
+  object.fill(kInitialByte);
+
+  this->Quarantine(&object);
+  ASSERT_TRUE(this->GetQuarantineBranch()->IsQuarantinedForTesting(&object));
+
+  for (size_t i = 0; i < kZapMax; ++i) {
+    EXPECT_EQ(internal::kFreedByte, object[i]);
+  }
+  for (size_t i = kZapMax; i < kObjectSize; ++i) {
+    EXPECT_EQ(kInitialByte, object[i]);
+  }
+}
+
+TYPED_TEST(SchedulerLoopQuarantineTest, CapacityUnlimited) {
+  QuarantineConfig config = this->GetConfig();
+  config.branch_capacity_in_bytes = 0;
+  config.capacity_unlimited = true;
+  this->GetQuarantineBranch()->Configure(*this->GetQuarantineRoot(), config);
+  EXPECT_TRUE(this->GetQuarantineBranch()->IsCapacityUnlimitedForTesting());
+  EXPECT_EQ(std::numeric_limits<size_t>::max(),
+            this->GetQuarantineBranch()->GetCapacityInBytes());
+
+  constexpr size_t kObjectSize = 64;
+  constexpr unsigned char kInitialByte = 0xab;
+  static_assert(kInitialByte != internal::kFreedByte);
+  constexpr size_t kCount = 100;
+  std::vector<void*> objects;
+  objects.reserve(kCount);
+  for (size_t i = 0; i < kCount; ++i) {
+    auto* object = static_cast<std::array<unsigned char, kObjectSize>*>(
+        this->GetPartitionRoot()->Alloc(kObjectSize));
+    object->fill(kInitialByte);
+    auto* slot_span = internal::SlotSpanMetadata::FromSlotStart(
+        SlotStart::Unchecked(object).Untag(), this->GetPartitionRoot());
+    EXPECT_TRUE(this->GetQuarantineBranch()->IsQuarantineTarget(
+        this->GetPartitionRoot()->SlotSpanToBucketSizeDetails(slot_span)));
+    objects.push_back(object);
+    this->Quarantine(object);
+  }
+
+  for (void* object : objects) {
+    EXPECT_TRUE(this->GetQuarantineBranch()->IsQuarantinedForTesting(object));
+    EXPECT_EQ(internal::kFreedByte, *static_cast<const unsigned char*>(object));
+  }
+  auto stats = this->GetStats();
+  EXPECT_EQ(kCount, stats.count);
+  EXPECT_EQ(0u, stats.quarantine_miss_count);
+
+  // Reconfiguring back to bounded capacity restores the configured limit.
+  config = this->GetConfig();
+  this->GetQuarantineBranch()->Configure(*this->GetQuarantineRoot(), config);
+  EXPECT_FALSE(this->GetQuarantineBranch()->IsCapacityUnlimitedForTesting());
+  EXPECT_EQ(config.branch_capacity_in_bytes,
+            this->GetQuarantineBranch()->GetCapacityInBytes());
 }
 
 TYPED_TEST(SchedulerLoopQuarantineTest, ScopedOptOut) {

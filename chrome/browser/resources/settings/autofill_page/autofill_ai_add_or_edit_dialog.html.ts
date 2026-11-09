@@ -17,10 +17,8 @@ export function getHtml(this: SettingsAutofillAiAddOrEditDialogElement) {
 <if expr="_google_chrome">
       ${this.shouldShowStandaloneWalletIcon_() ? html`
         <div class="title-icon-container-standalone">
-          <img
-              srcset="${this.getScaledSrcSet_(
-                  'chrome://theme/IDR_AUTOFILL_GOOGLE_WALLET_ICON')}"
-              alt="" role="presentation">
+          <img srcset="${this.getWalletIconSrcSet_()}" alt=""
+              role="presentation">
         </div>
       ` : html`
         <div class="title-icon-container">
@@ -177,7 +175,7 @@ export function getHtml(this: SettingsAutofillAiAddOrEditDialogElement) {
       ` : ''}
     `)}
     <div id="footer" ?hidden="${this.shouldHideFooterText_()}"
-        .innerHTML="${this.footerText_}">
+        @click="${this.onFooterClick_}" .innerHTML="${this.footerText_}">
     </div>
   </div>
   <div slot="button-container">

@@ -746,6 +746,10 @@ HorizontalTabStripRegionViewNew::HorizontalTabStripRegionViewNew(
         TabStripControlButton::kIconSize,
         TabStripControlButton::kButtonSize.width() / 2.0f);
     new_tab_button->SetPaintTransparent(true);
+    new_tab_button_pressed_subscription_ =
+        new_tab_button->RegisterWillInvokeActionCallback(base::BindRepeating(
+            &HorizontalTabStripRegionViewNew::RecordNewTabButtonPressed,
+            base::Unretained(this)));
     new_tab_button_ = AddChildView(std::move(new_tab_button));
     new_tab_button_->SetProperty(views::kCrossAxisAlignmentKey,
                                  views::LayoutAlignment::kCenter);
@@ -787,6 +791,11 @@ bool HorizontalTabStripRegionViewNew::IsPositionInWindowCaption(
     return false;
   }
   if (combo_button_ && IsHitInView(combo_button_, point)) {
+    return false;
+  }
+  if (tab_strip_action_container_ &&
+      tab_strip_action_container_->GetVisible() &&
+      IsHitInView(tab_strip_action_container_, point)) {
     return false;
   }
   if (tab_strip_view() && IsHitInView(tab_strip_view(), point)) {

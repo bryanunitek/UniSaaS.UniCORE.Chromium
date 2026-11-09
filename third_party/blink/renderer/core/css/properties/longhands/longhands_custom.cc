@@ -1045,6 +1045,10 @@ const CSSValue* BackgroundAttachment::CSSValueFromComputedStyleInternal(
   return list;
 }
 
+const CSSValue* BackgroundAttachment::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kScroll);
+}
+
 const CSSValue* BackgroundBlendMode::ParseSingleValue(
     CSSParserTokenStream& stream,
     const CSSParserContext&,
@@ -1165,6 +1169,10 @@ void BackgroundClip::ApplyValue(StyleResolverState& state,
   }
 }
 
+const CSSValue* BackgroundClip::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kBorderBox);
+}
+
 const blink::Color BackgroundColor::ColorIncludingFallback(
     bool visited_link,
     const ComputedStyle& style,
@@ -1213,6 +1221,10 @@ bool BackgroundColor::IsAffectedByCurrentColor(
   return style.BackgroundColor().DependsOnCurrentColor();
 }
 
+const CSSValue* BackgroundColor::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kTransparent);
+}
+
 const CSSValue* BackgroundImage::ParseSingleValue(
     CSSParserTokenStream& stream,
     const CSSParserContext& context,
@@ -1239,6 +1251,10 @@ bool BackgroundImage::IsAffectedByCurrentColor(
   return style.BackgroundInternal().AnyLayerUsesCurrentColor();
 }
 
+const CSSValue* BackgroundImage::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kNone);
+}
+
 const CSSValue* BackgroundOrigin::ParseSingleValue(
     CSSParserTokenStream& stream,
     const CSSParserContext&,
@@ -1262,6 +1278,10 @@ const CSSValue* BackgroundOrigin::CSSValueFromComputedStyleInternal(
   return list;
 }
 
+const CSSValue* BackgroundOrigin::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kPaddingBox);
+}
+
 const CSSValue* BackgroundPositionX::ParseSingleValue(
     CSSParserTokenStream& stream,
     const CSSParserContext& context,
@@ -1280,6 +1300,11 @@ const CSSValue* BackgroundPositionX::CSSValueFromComputedStyleInternal(
   const FillLayer* curr_layer = &style.BackgroundLayers();
   return ComputedStyleUtils::BackgroundPositionXOrWebkitMaskPositionX(
       style, curr_layer);
+}
+
+const CSSValue* BackgroundPositionX::InitialValue() const {
+  return CSSNumericLiteralValue::Create(
+      0, CSSPrimitiveValue::UnitType::kPercentage);
 }
 
 const CSSValue* BackgroundPositionY::ParseSingleValue(
@@ -1302,6 +1327,11 @@ const CSSValue* BackgroundPositionY::CSSValueFromComputedStyleInternal(
       style, curr_layer);
 }
 
+const CSSValue* BackgroundPositionY::InitialValue() const {
+  return CSSNumericLiteralValue::Create(
+      0, CSSPrimitiveValue::UnitType::kPercentage);
+}
+
 const CSSValue* BackgroundSize::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
     const LayoutObject*,
@@ -1309,6 +1339,10 @@ const CSSValue* BackgroundSize::CSSValueFromComputedStyleInternal(
     CSSValuePhase value_phase) const {
   const FillLayer& fill_layer = style.BackgroundLayers();
   return ComputedStyleUtils::BackgroundSizeOrMaskSize(style, fill_layer);
+}
+
+const CSSValue* BackgroundSize::InitialValue() const {
+  return CSSIdentifierValue::Create(CSSValueID::kAuto);
 }
 
 const CSSValue* BackgroundRepeat::ParseSingleValue(
@@ -1324,6 +1358,13 @@ const CSSValue* BackgroundRepeat::CSSValueFromComputedStyleInternal(
     bool allow_visited_style,
     CSSValuePhase value_phase) const {
   return ComputedStyleUtils::RepeatStyle(&style.BackgroundLayers());
+}
+
+const CSSValue* BackgroundRepeat::InitialValue() const {
+  DEFINE_STATIC_LOCAL(const Persistent<CSSValue>, value,
+                      (MakeGarbageCollected<CSSRepeatStyleValue>(
+                          CSSIdentifierValue::Create(CSSValueID::kRepeat))));
+  return value;
 }
 
 const CSSValue* BaselineSource::CSSValueFromComputedStyleInternal(
@@ -2210,12 +2251,11 @@ const CSSValue* CaretColor::ParseSingleValue(
     CSSParserTokenStream& stream,
     const CSSParserContext& context,
     CSSParserLocalContext& local_context) const {
-  const CSSValue* first;
   if (stream.Peek().Id() == CSSValueID::kAuto) {
-    first = css_parsing_utils::ConsumeIdent(stream);
-  } else {
-    first = css_parsing_utils::ConsumeColor(stream, context, local_context);
+    return css_parsing_utils::ConsumeIdent(stream);
   }
+  const CSSValue* first =
+      css_parsing_utils::ConsumeColor(stream, context, local_context);
   if (!first) {
     return nullptr;
   }
@@ -7644,7 +7684,7 @@ const CSSValue* Order::CSSValueFromComputedStyleInternal(
     bool allow_visited_style,
     CSSValuePhase value_phase) const {
   return CSSNumericLiteralValue::Create(style.Order(),
-                                        CSSPrimitiveValue::UnitType::kNumber);
+                                        CSSPrimitiveValue::UnitType::kInteger);
 }
 
 const CSSValue* OriginTrialTestProperty::CSSValueFromComputedStyleInternal(
@@ -8660,7 +8700,7 @@ const CSSValue* ReadingOrder::CSSValueFromComputedStyleInternal(
     bool,
     CSSValuePhase) const {
   return CSSNumericLiteralValue::Create(style.ReadingOrder(),
-                                        CSSPrimitiveValue::UnitType::kNumber);
+                                        CSSPrimitiveValue::UnitType::kInteger);
 }
 
 const CSSValue* Resize::CSSValueFromComputedStyleInternal(
@@ -11480,7 +11520,7 @@ const CSSValue* WebkitLineClamp::CSSValueFromComputedStyleInternal(
     return CSSIdentifierValue::Create(CSSValueID::kNone);
   }
   return CSSNumericLiteralValue::Create(style.WebkitLineClamp(),
-                                        CSSPrimitiveValue::UnitType::kNumber);
+                                        CSSPrimitiveValue::UnitType::kInteger);
 }
 
 const CSSValue* AlternativeWebkitLineClampLonghand::ParseSingleValue(
@@ -11860,8 +11900,10 @@ const CSSValue* MaskRepeat::CSSValueFromComputedStyleInternal(
 }
 
 const CSSValue* MaskRepeat::InitialValue() const {
-  return MakeGarbageCollected<CSSRepeatStyleValue>(
-      CSSIdentifierValue::Create(CSSValueID::kRepeat));
+  DEFINE_STATIC_LOCAL(const Persistent<CSSValue>, value,
+                      (MakeGarbageCollected<CSSRepeatStyleValue>(
+                          CSSIdentifierValue::Create(CSSValueID::kRepeat))));
+  return value;
 }
 
 const CSSValue* MaskSize::CSSValueFromComputedStyleInternal(
@@ -12907,8 +12949,7 @@ const CSSValue* ZIndex::ParseSingleValue(
     return css_parsing_utils::ConsumeIdent(stream);
   }
   return css_parsing_utils::ConsumeInteger(
-      stream, context, local_context,
-      /* minimum_value */ -std::numeric_limits<double>::max(),
+      stream, context, local_context, CSSPrimitiveValue::ValueRange::kInteger,
       /* is_percentage_allowed */ false);
 }
 

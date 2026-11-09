@@ -67,6 +67,7 @@
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 #include "net/disk_cache/disk_cache.h"
+#include "net/disk_cache/disk_cache_test_util.h"
 #include "net/disk_cache/memory_entry_data_hints.h"
 #include "net/disk_cache/simple/simple_util.h"
 #include "net/disk_cache/trivial_cache_entry_hasher.h"
@@ -3830,7 +3831,6 @@ TEST_F(HttpCacheRangeGetTest, ParallelValidationRestartDoneHeaders) {
   }
 
   // Let 1st transaction complete headers phase for ranges 40-59.
-  std::string first_read;
   transaction.request_headers = "Range: bytes = 40-59\r\n" EXTRA_HEADER;
   MockHttpRequest request1(transaction);
   {
@@ -3850,9 +3850,6 @@ TEST_F(HttpCacheRangeGetTest, ParallelValidationRestartDoneHeaders) {
     ReleaseBufferCompletionCallback cb(buffer.get());
     c->result = c->trans->Read(buffer.get(), kBufferSize, cb.callback());
     EXPECT_EQ(kBufferSize, cb.GetResult(c->result));
-
-    std::string data_read(buffer->data(), kBufferSize);
-    first_read = data_read;
 
     EXPECT_EQ(LOAD_STATE_IDLE, c->trans->GetLoadState());
   }
@@ -10864,7 +10861,6 @@ TEST_F(HttpCacheGetTest, IncompleteResource3) {
   CreateTruncatedEntry(raw_headers, &cache);
 
   // Now make a regular request.
-  std::string headers;
   MockTransaction transaction(kRangeGET_TransactionOK);
   transaction.request_headers = EXTRA_HEADER;
   transaction.data = kFullRangeData;
@@ -12927,7 +12923,6 @@ TEST_F(HttpCacheTest, SetPriorityNewTransaction) {
   CreateTruncatedEntry(raw_headers, &cache);
 
   // Now make a regular request.
-  std::string headers;
   MockTransaction transaction(kRangeGET_TransactionOK);
   transaction.request_headers = EXTRA_HEADER;
   transaction.data = kFullRangeData;
@@ -14701,6 +14696,16 @@ class HttpCacheNoVarySearchTestBase
     return cache_key;
   }
 
+  MockTransaction* GetMockTransaction(std::string_view query) {
+    GURL url(base::StrCat({kBaseURL, query}));
+    for (auto& trans : scoped_mock_transactions_) {
+      if (trans.url == url) {
+        return &trans;
+      }
+    }
+    return nullptr;
+  }
+
   void RewriteCachedResponseInfo(
       const std::string& cache_key,
       std::string_view raw_headers,
@@ -15113,6 +15118,70 @@ TEST_P(HttpCacheNoVarySearchStaleEntryTest, InMemoryHintDoesNotTriggerErase) {
       "q=fred&a=77", LOAD_SKIP_CACHE_VALIDATION);
   EXPECT_TRUE(info2.was_cached);
   EXPECT_FALSE(info2.network_accessed);
+}
+
+// Make sure that NVS restarts don't end up with leftover bits in
+// HttpResponseInfo. See crbug.com/578664961
+TEST_P(HttpCacheNoVarySearchStaleEntryTest, NoStaleResponseInfo) {
+  // Disallow rejection based on memory hints. This isn't strictly necessary,
+  // but it makes it easier to produce the relevant scenario within this
+  // fixture.
+  mock_disk_cache()->set_support_in_memory_entry_data(false);
+
+  std::string cache_key_1 = FetchIntoCache("q=fred&a=1", "params=(\"a\")",
+                                           kMaxAgeZero, kNoEtagHeader);
+  std::string cache_key_77 = FetchIntoCache("q=fred&a=77", "params=(\"a\")",
+                                            kMaxAgeOneDay, kNoEtagHeader);
+
+  // Add in VaryData to cache_key_77 HttpResponseInfo. This is just a field
+  // that doesn't get written unconditionally.
+  {
+    TestEntryResultCompletionCallback cb;
+    disk_cache::EntryResult result =
+        mock_disk_cache()->OpenEntry(cache_key_77, HIGHEST, cb.callback());
+    result = cb.GetResult(std::move(result));
+    ASSERT_EQ(result.net_error(), net::OK);
+    disk_cache::ScopedEntryPtr entry(result.ReleaseEntry());
+
+    HttpResponseInfo cached_response;
+    bool was_truncated = false;
+    ASSERT_TRUE(MockHttpCache::ReadResponseInfo(entry.get(), &cached_response,
+                                                &was_truncated));
+
+    auto fake_response =
+        HttpResponseHeaders::Builder(HttpVersion(1, 1), "200 OK")
+            .AddHeader("Vary", "Cow")
+            .Build();
+    HttpRequestHeaders fake_request;
+    fake_request.SetHeader("Cow", "Spotted");
+
+    cached_response.vary_data.Init(fake_request, *fake_response);
+    ASSERT_TRUE(MockHttpCache::WriteResponseInfo(
+        entry.get(), &cached_response, /*skip_transient_headers=*/true,
+        was_truncated));
+  }
+
+  auto* mock_trans = GetMockTransaction("q=fred&a=1");
+  ASSERT_TRUE(mock_trans);
+  MockHttpRequest request(*mock_trans);
+
+  // Check the ResponseInfo at connect callback time, before HTTP fetch
+  // overwrites it.
+  std::unique_ptr<HttpTransaction> trans =
+      cache()->CreateTransaction(DEFAULT_PRIORITY);
+  ASSERT_TRUE(trans.get());
+  trans->SetConnectedCallback(base::BindLambdaForTesting(
+      [&](const TransportInfo& info, CompletionOnceCallback callback) -> int {
+        // This should not have any stale info from a failed attempt to reuse
+        // a=77 entry.
+        EXPECT_FALSE(trans->GetResponseInfo()->vary_data.is_valid());
+        return net::ERR_FAILED;
+      }));
+
+  TestCompletionCallback callback;
+  EXPECT_EQ(net::ERR_FAILED,
+            callback.GetResult(trans->Start(&request, callback.callback(),
+                                            NetLogWithSource())));
 }
 
 // A GoogleMock action to quit a base::RunLoop. This is not defined using the

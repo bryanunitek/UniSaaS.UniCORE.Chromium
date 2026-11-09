@@ -246,6 +246,12 @@ class ContextualSearchboxHandler
     return screenshare_controller_.get();
   }
 
+  // Whether the page waits for the Drive picker, which runs for the browser
+  // window that embeds the WebUI.
+  bool IsDriveUploadPending() const {
+    return !drive_upload_click_callback_.is_null();
+  }
+
 #if !BUILDFLAG(IS_ANDROID)
   bool has_drive_picker_deactivation_blocker_for_testing() const {
     return drive_picker_deactivation_blocker_ != nullptr;
@@ -375,6 +381,10 @@ class ContextualSearchboxHandler
 
   void set_screenshare_delegate_for_testing(
       ContextualSearchboxScreenshareController::Delegate* screenshare_delegate);
+
+  // Turns on dynamic AIM fulfillment for each input state model this handler
+  // uses. Called by the NTP and Omnibox popup when their feature is enabled.
+  void OptInToDynamicAimFulfillment();
 
   // Map of context tokens (frontend) to tab IDs (backend);
   // used for determining which tabs to underline based on frontend changes, and
@@ -582,6 +592,9 @@ class ContextualSearchboxHandler
 
   std::unique_ptr<ContextualSearchboxTabFaviconHelper> tab_favicon_helper_;
   base::CallbackListSubscription aim_eligibility_subscription_;
+
+  // Whether `OptInToDynamicAimFulfillment()` was called.
+  bool opted_in_to_dynamic_aim_fulfillment_ = false;
 
  protected:
   std::optional<bool> smart_tab_sharing_active_for_thread_;

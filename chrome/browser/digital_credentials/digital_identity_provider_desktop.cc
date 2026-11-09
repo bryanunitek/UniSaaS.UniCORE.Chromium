@@ -344,7 +344,7 @@ void DigitalIdentityProviderDesktop::ShowConnectingToPhoneDialog() {
       IDS_WEB_DIGITAL_CREDENTIALS_CABLEV2_CONNECTING_TITLE);
   auto illustration = std::make_unique<views::ThemeTrackingAnimatedImageView>(
       IDR_WEBAUTHN_HYBRID_CONNECTING_LIGHT, IDR_WEBAUTHN_HYBRID_CONNECTING_DARK,
-      dialog->GetBackgroundColorCallback());
+      dialog->GetBackgroundColor());
 
   dialog->TryShow(
       /*accept_button=*/std::nullopt, base::OnceClosure(),
@@ -368,7 +368,7 @@ void DigitalIdentityProviderDesktop::ShowContinueStepsOnThePhoneDialog() {
   auto illustration = std::make_unique<ThemeTrackingNonAccessibleImageView>(
       ui::ImageModel::FromVectorIcon(kPasskeyPhoneCustomIcon),
       ui::ImageModel::FromVectorIcon(kPasskeyPhoneDarkCustomIcon),
-      dialog->GetBackgroundColorCallback().Run());
+      dialog->GetBackgroundColor());
 
   dialog->TryShow(
       /*accept_button=*/std::nullopt, base::OnceClosure(),

@@ -91,11 +91,11 @@ class GlicSidePanelUi
   bool IsShowing() const override;
   bool IsShowingOrBackgrounded() const override;
   void ClosePanel() override;
-  void OnReload() override;
   void OnMicrophoneStatusChanged(mojom::MicrophoneStatus status) override {}
 
   // Host::Observer:
   void ActiveWebContentsChanged(content::WebContents* new_contents) override;
+  void ContentsCreated() override;
 
   // web_contents_delegate_android::WebContentsDelegateAndroid and
   // pwc::PrivilegedWebContents::EmbedderDelegate:
@@ -231,6 +231,8 @@ class GlicSidePanelUi
   // Notifies the delegate if the embedder window is no longer active. Used to
   // catch up on deactivations suppressed during a permission prompt.
   void SyncEmbedderWindowActivation();
+
+  void OnNativeFreAccepted();
 
   base::CallbackListSubscription panel_visibility_subscription_;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>

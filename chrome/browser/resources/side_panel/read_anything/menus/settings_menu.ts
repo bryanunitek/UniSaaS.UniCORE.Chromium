@@ -19,6 +19,8 @@ import {browserProxyFactory as userEducationProxyFactory} from '//resources/mojo
 
 import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
 import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
+import type {ContentBrowserProxy} from '../content/content_browser_proxy.js';
+import {ContentBrowserProxyImpl} from '../content/content_browser_proxy.js';
 import {SettingsOption, ToolbarEvent} from '../content/read_anything_types.js';
 import {openMenu} from '../shared/common.js';
 import {isActivationKey, isBackwardArrow, isForwardArrow, isVerticalArrow} from '../shared/keyboard_util.js';
@@ -238,6 +240,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   private pointerEventCallback_: (e: Event) => void = () => {};
   private keyDownCallback_: (e: KeyboardEvent) => void = () => {};
   private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
+  private contentBrowserProxy_: ContentBrowserProxy =
+      ContentBrowserProxyImpl.getInstance();
   private visualBrowserProxy_: VisualBrowserProxy =
       VisualBrowserProxyImpl.getInstance();
 
@@ -286,11 +290,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       SettingsOption.LETTER_SPACING,
       SettingsOption.VOICE_SELECTION,
       SettingsOption.VOICE_HIGHLIGHT,
+      SettingsOption.LINE_FOCUS,
     ];
-
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      optionIDs.push(SettingsOption.LINE_FOCUS);
-    }
 
     optionIDs.push(SettingsOption.PRESENTATION);
     if (this.visualBrowserProxy_.isReadAnythingTranslateEntryPointEnabled()) {
@@ -303,7 +304,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       optionIDs.push(SettingsOption.PINNED_TO_TOOLBAR);
     }
 
-    if (this.visualBrowserProxy_.isReadAnythingSendFeedbackEnabled()) {
+    if (this.contentBrowserProxy_.isReadAnythingSendFeedbackEnabled() &&
+        loadTimeData.getBoolean('canShowFeedback')) {
       optionIDs.push(SettingsOption.SEND_FEEDBACK);
     }
 
@@ -316,11 +318,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       SettingsOption.MEDIA,
       SettingsOption.TEXT,
       SettingsOption.AUDIO,
+      SettingsOption.LINE_FOCUS,
     ];
-
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      optionIDs.push(SettingsOption.LINE_FOCUS);
-    }
 
     if (this.visualBrowserProxy_.isReadAnythingTranslateEntryPointEnabled()) {
       optionIDs.push(SettingsOption.TRANSLATION_REQUESTED);
@@ -330,7 +329,8 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       optionIDs.push(SettingsOption.PINNED_TO_TOOLBAR);
     }
 
-    if (this.visualBrowserProxy_.isReadAnythingSendFeedbackEnabled()) {
+    if (this.contentBrowserProxy_.isReadAnythingSendFeedbackEnabled() &&
+        loadTimeData.getBoolean('canShowFeedback')) {
       optionIDs.push(SettingsOption.SEND_FEEDBACK);
     }
 
@@ -638,13 +638,11 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   }
 
   open(anchor: HTMLElement) {
-    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
-      userEducationProxyFactory.getInstance()
-          .handler.maybeShowNewBadgeFor(LINE_FOCUS_FEATURE_NAME)
-          .then(({shouldShow}) => {
-            this.showLineFocusNewBadge = shouldShow;
-          });
-    }
+    userEducationProxyFactory.getInstance()
+        .handler.maybeShowNewBadgeFor(LINE_FOCUS_FEATURE_NAME)
+        .then(({shouldShow}) => {
+          this.showLineFocusNewBadge = shouldShow;
+        });
     const menu = this.$.lazyMenu.get();
     // Start in keyboard-nav mode so a stationary cursor resting where the menu
     // opens does not trigger hover behavior. This does not impact mouse users

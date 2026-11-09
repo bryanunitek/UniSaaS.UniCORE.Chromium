@@ -143,6 +143,7 @@
 #include "chrome/browser/payments/payment_request_display_manager_factory.h"
 #include "chrome/browser/performance_manager/public/chrome_browser_main_extra_parts_performance_manager.h"
 #include "chrome/browser/performance_manager/public/chrome_content_browser_client_performance_manager_part.h"
+#include "chrome/browser/permissions/system/system_permission_settings.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/picture_in_picture/scoped_tuck_picture_in_picture.h"
@@ -329,15 +330,15 @@
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
-#include "components/safe_browsing/content/browser/async_check_tracker.h"
-#include "components/safe_browsing/content/browser/browser_url_loader_throttle.h"
+#include "components/safe_browsing/content/browser/interstitials/ui_manager.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_commit_deferring_condition.h"
-#include "components/safe_browsing/content/browser/ui_manager.h"
+#include "components/safe_browsing/content/browser/url_checker/async_check_tracker.h"
+#include "components/safe_browsing/content/browser/url_checker/browser_url_loader_throttle.h"
 #include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_service.h"
 #include "components/safe_browsing/core/browser/realtime/policy_engine.h"
 #include "components/safe_browsing/core/browser/realtime/url_lookup_service.h"
-#include "components/safe_browsing/core/browser/referring_app_info.h"
-#include "components/safe_browsing/core/browser/url_checker_delegate.h"
+#include "components/safe_browsing/core/browser/referring_app_info/referring_app_info.h"
+#include "components/safe_browsing/core/browser/url_checker/url_checker_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -757,13 +758,13 @@
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
-#include "chrome/browser/safe_browsing/chrome_enterprise_url_lookup_service_factory.h"
-#include "chrome/browser/safe_browsing/chrome_ping_manager_factory.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
+#include "chrome/browser/safe_browsing/db/v5_get_hash_protocol_manager_factory.h"
 #include "chrome/browser/safe_browsing/password_protection/chrome_password_protection_service.h"
+#include "chrome/browser/safe_browsing/ping_manager/chrome_ping_manager_factory.h"
+#include "chrome/browser/safe_browsing/realtime/chrome_enterprise_url_lookup_service_factory.h"
+#include "chrome/browser/safe_browsing/realtime/url_lookup_service_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/safe_browsing/url_lookup_service_factory.h"
-#include "chrome/browser/safe_browsing/v5_get_hash_protocol_manager_factory.h"
 #include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "components/safe_browsing/core/browser/realtime/chrome_enterprise_url_lookup_service.h"
 #endif
@@ -948,8 +949,7 @@ bool IsIsolatedWebAppUrl(const GURL& url) {
 bool HandleNewTabPageLocationOverride(
     GURL* url,
     content::BrowserContext* browser_context) {
-  if (!url->SchemeIs(content::kChromeUIScheme) ||
-      url->host() != chrome::kChromeUINewTabHost) {
+  if (!search::IsNewTabOrigin(*url)) {
     return false;
   }
 
@@ -1980,12 +1980,9 @@ bool ChromeContentBrowserClient::ShouldUseProcessPerSite(
 
   // NTP should use process-per-site.  This is a performance optimization to
   // reduce process count associated with NTP tabs.
-  if (security_principal.SchemeIs(content::kChromeUIScheme)) {
-    const std::string_view host = security_principal.GetHost();
-    if (host == chrome::kChromeUINewTabHost ||
-        host == chrome::kChromeUINewTabPageHost) {
-      return true;
-    }
+  if (search::IsNewTabSecurityPrincipal(security_principal) ||
+      search::IsNewTabPageSecurityPrincipal(security_principal)) {
+    return true;
   }
 
 #if BUILDFLAG(ENABLE_WEBUI_NTP)
@@ -2093,6 +2090,16 @@ bool ChromeContentBrowserClient::ShouldUseSpareRenderProcessHost(
   }
 #endif
   return true;
+}
+
+bool ChromeContentBrowserClient::CanBrowserContextUseSpareRenderProcessHost(
+    content::BrowserContext* browser_context) {
+  // Navigations in TopChromeWebUIProfile never use a spare, since
+  // ShouldUseSpareRenderProcessHost() refuses it for that profile. Warming up
+  // a spare for it would replace the spare of the profile that the user
+  // browses with.
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  return !profile || !profile->IsTopChromeWebUIProfile();
 }
 
 bool ChromeContentBrowserClient::DoesSiteRequireDedicatedProcess(
@@ -3754,29 +3761,14 @@ bool ChromeContentBrowserClient::AllowWorkerWriteToClipboard(
 
 bool ChromeContentBrowserClient::IsPrivacySandboxReportingDestinationAttested(
     content::BrowserContext* browser_context,
-    const url::Origin& destination_origin,
-    content::PrivacySandboxInvokingAPI invoking_api) {
+    const url::Origin& destination_origin) {
   Profile* profile = Profile::FromBrowserContext(browser_context);
   auto* privacy_sandbox_settings =
       PrivacySandboxSettingsFactory::GetForProfile(profile);
   CHECK(privacy_sandbox_settings, base::NotFatalUntil::M163);
 
-  privacy_sandbox::PrivacySandboxAttestationsGatedAPI gated_api;
-  switch (invoking_api) {
-    case content::PrivacySandboxInvokingAPI::kProtectedAudience:
-      gated_api = privacy_sandbox::PrivacySandboxAttestationsGatedAPI::
-          kProtectedAudience;
-      break;
-    case content::PrivacySandboxInvokingAPI::kSharedStorage:
-      gated_api =
-          privacy_sandbox::PrivacySandboxAttestationsGatedAPI::kSharedStorage;
-      break;
-    default:
-      NOTREACHED();
-  }
-
   return privacy_sandbox_settings->IsEventReportingDestinationAttested(
-      destination_origin, gated_api);
+      destination_origin);
 }
 
 bool ChromeContentBrowserClient::IsFullCookieAccessAllowed(
@@ -3902,6 +3894,18 @@ std::string ChromeContentBrowserClient::GetGeolocationApiKey() {
 device::GeolocationSystemPermissionManager*
 ChromeContentBrowserClient::GetGeolocationSystemPermissionManager() {
   return device::GeolocationSystemPermissionManager::GetInstance();
+}
+#endif
+
+#if BUILDFLAG(IS_WIN)
+bool ChromeContentBrowserClient::SystemMayPromptForVideoCapture() {
+  // CanPrompt() is hard-coded to false for camera permission on Windows. So we
+  // check both the allowed and denied states to determine if the system may
+  // prompt.
+  return !system_permission_settings::IsAllowed(
+             ContentSettingsType::MEDIASTREAM_CAMERA) &&
+         !system_permission_settings::IsDenied(
+             ContentSettingsType::MEDIASTREAM_CAMERA);
 }
 #endif
 
@@ -4482,7 +4486,7 @@ bool ChromeContentBrowserClient::IsUnboundedElementAllowedForSubframesOf(
   // Allowlist of outermost main frames whose subframes may use the Unbounded
   // Element API.
   // TODO(crbug.com/571879162): Remove this temporary allowlist.
-  return origin.IsSameOriginWith(GURL(chrome::kChromeUINewTabPageURL));
+  return search::IsNewTabPageOrigin(origin);
 }
 
 bool ChromeContentBrowserClient::CanCreateWindow(
@@ -4625,8 +4629,9 @@ bool ChromeContentBrowserClient::CanCreateWindow(
     }
   }
 
-  if (disposition == WindowOpenDisposition::kNewSplitView && !user_gesture) {
-    disposition = WindowOpenDisposition::kNewForegroundTab;
+  if (disposition == ui::mojom::WindowOpenDisposition::kNewSplitView &&
+      !user_gesture) {
+    disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
   }
 
   const BlockedWindowParams blocked_params(
@@ -5800,6 +5805,14 @@ ChromeContentBrowserClient::CreateCommitDeferringConditionsForNavigation(
     content::CommitDeferringCondition::NavigationType navigation_type) {
   std::vector<std::unique_ptr<content::CommitDeferringCondition>> conditions;
 
+  // TopChromeWebUIProfile only hosts Top Chrome WebUIs, and does not have the
+  // keyed services and prefs that the conditions below depend on.
+  if (Profile::FromBrowserContext(
+          navigation_handle->GetWebContents()->GetBrowserContext())
+          ->IsTopChromeWebUIProfile()) {
+    return conditions;
+  }
+
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   MaybeAddCondition(
       safe_browsing::MaybeCreateCommitDeferringCondition(*navigation_handle),
@@ -5975,18 +5988,21 @@ void ChromeContentBrowserClient::InitOnUIThread() {
     network_contexts_parent_directory_.push_back(*cache_dir);
   }
 
-  // If the cache location has been overridden by a switch or policy to a
-  // directory outside `user_data_dir` and `cache_dir`, include that as well.
+  // If the cache location has been overridden by a switch or policy, record it
+  // in `network_contexts_cache_directory_`. Also include it in
+  // `network_contexts_parent_directory_` if it is outside `user_data_dir` and
+  // `cache_dir`.
   const base::FilePath pref_cache_dir =
       chrome_browser_net::GetDiskCacheDir(g_browser_process->local_state());
   if (!pref_cache_dir.empty()) {
+    network_contexts_cache_directory_ = pref_cache_dir;
+
     const bool is_inside_existing_dirs =
         pref_cache_dir == network_contexts_data_directory_ ||
         network_contexts_data_directory_.IsParent(pref_cache_dir) ||
         (cache_dir.has_value() &&
          (pref_cache_dir == *cache_dir || cache_dir->IsParent(pref_cache_dir)));
     if (!is_inside_existing_dirs) {
-      network_contexts_cache_directory_ = pref_cache_dir;
       network_contexts_parent_directory_.push_back(pref_cache_dir);
     }
   }
@@ -6242,6 +6258,12 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
   CHECK(browser_context, base::NotFatalUntil::M163);
   Profile* profile = Profile::FromBrowserContext(browser_context);
   CHECK(profile, base::NotFatalUntil::M163);
+
+  // TopChromeWebUIProfile only hosts Top Chrome WebUIs, and does not have the
+  // keyed services and prefs that the throttles below depend on.
+  if (profile->IsTopChromeWebUIProfile()) {
+    return result;
+  }
 
   ChromeNavigationUIData* chrome_navigation_ui_data =
       static_cast<ChromeNavigationUIData*>(navigation_ui_data);
@@ -8238,17 +8260,16 @@ ChromeContentBrowserClient::MaybeOverrideSourceURLForClipboardAccess(
 }
 
 content::BrowserContext* ChromeContentBrowserClient::GetUserBrowserContext(
-    content::RenderFrameHost& render_frame_host) {
+    content::WebContents& web_contents) {
 #if !BUILDFLAG(IS_ANDROID)
   // When the WebContents of a Top Chrome WebUI is in TopChromeWebUIProfile,
   // which is shared by the windows of all profiles, return its user profile.
   // Otherwise, this is the profile of the WebContents.
-  if (Profile* user_profile = webui::GetUserProfile(
-          content::WebContents::FromRenderFrameHost(&render_frame_host))) {
+  if (Profile* user_profile = webui::GetUserProfile(&web_contents)) {
     return user_profile;
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
-  return render_frame_host.GetBrowserContext();
+  return web_contents.GetBrowserContext();
 }
 
 bool ChromeContentBrowserClient::IsClipboardPasteAllowed(
@@ -8896,6 +8917,11 @@ ChromeContentBrowserClient::CreateAnchorElementPreconnectDelegate(
 std::unique_ptr<content::PrefetchServiceDelegate>
 ChromeContentBrowserClient::CreatePrefetchServiceDelegate(
     content::BrowserContext* browser_context) {
+  // TopChromeWebUIProfile only hosts Top Chrome WebUIs, which do not prefetch,
+  // and does not have the prefs that the delegate depends on.
+  if (Profile::FromBrowserContext(browser_context)->IsTopChromeWebUIProfile()) {
+    return nullptr;
+  }
   return std::make_unique<ChromePrefetchServiceDelegate>(browser_context);
 }
 
@@ -9016,7 +9042,7 @@ ChromeContentBrowserClient::GetAlternativeErrorPageOverrideInfo(
       // Use the alternative error page dictionary to override the error page.
       alternative_error_page_override_info->alternative_error_page_params.Set(
           error_page::kOverrideErrorPage, base::Value(true));
-      web_app::TrackOfflinePageVisibility(render_frame_host);
+      web_app::TrackOfflinePageVisibility(navigation_handle);
       return alternative_error_page_override_info;
     }
   }
@@ -9396,7 +9422,7 @@ ChromeContentBrowserClient::GetContainerPolicyOverrideForCommit(
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS) && !BUILDFLAG(IS_ANDROID)
 }
 
-std::unique_ptr<content::ResponsivenessCalculatorDelegate>
+std::unique_ptr<base::ResponsivenessCalculatorDelegate>
 ChromeContentBrowserClient::CreateResponsivenessCalculatorDelegate() {
 #if !BUILDFLAG(IS_ANDROID)
   return ChromeResponsivenessCalculatorDelegate::Create();

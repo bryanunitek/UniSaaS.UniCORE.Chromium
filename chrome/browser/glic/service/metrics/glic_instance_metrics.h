@@ -14,6 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/glic/glic_enums.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/glic_webui.mojom.h"
@@ -86,6 +87,9 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
 
   // Called when the opt-in CTA is shown.
   void OnOptinImpression();
+
+  // Multi-tab tooltip metrics.
+  void OnTooltipImpression(mojom::TooltipImpressionType impression);
 
   // TODO(crbug.com/545714879): Remove OptInShownCallback once
   // OnFreOptInShown is logged directly or via direct profile helpers instead of
@@ -167,6 +171,11 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
 
   // Sets `initial_invocation_source_` if it has not been set yet.
   void MaybeSetInitialInvocationSource(mojom::InvocationSource source);
+
+  // Called before showing the instance to resolve any unseen completed response
+  // and record return source if the instance has conversation history.
+  void OnWillShow(glic::mojom::InvocationSource source,
+                  bool has_conversation_id);
 
   // Called when the UI is shown and it was not already showing for this
   // instance.
@@ -317,6 +326,13 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
   // by the number of attached tabs.
   void RecordResponseLatencyByAttachedTabCount(base::TimeDelta latency);
 
+  // Records whether a multi-tab prompt was submitted after a tooltip
+  // impression.
+  void OnTooltipMultiTabPromptSubmitted();
+
+  // Records whether the panel closed within 10s of a tooltip impression.
+  void RecordTooltipPanelClosedWithin10s();
+
   void RecordSkillsInvokeFunnelStep(SkillsInvokeFunnel invoke_funnel);
   void RecordAndResetAutoOpenPdfMetric();
   void MaybeRecordOptInImpression();
@@ -330,6 +346,29 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
   void MaybeRecordTimeToDismissWhileLoading();
 
   void RecordTimeToActionable(base::TimeTicks end_time);
+
+  bool IsVisible() const;
+
+  // Tracks a response that has finished streaming while the panel was
+  // hidden or in an inactive window, pending resolution when the panel
+  // becomes showing or active (or finalization if the instance is
+  // destroyed first).
+  struct PendingCompletedResponse {
+    base::TimeTicks completion_time;
+    bool is_actor = false;
+    bool was_showing = false;
+    std::optional<mojom::InvocationSource> return_source;
+  };
+
+  void RecordTurnShowingOutcome(bool is_actor, GlicTurnShowingOutcome outcome);
+  void RecordCompletedWhileHiddenShown(bool is_actor,
+                                       mojom::InvocationSource return_source,
+                                       base::TimeDelta time_to_show);
+  void RecordCompletedWhileHiddenDestroyed(
+      bool is_actor,
+      base::TimeDelta time_until_destroyed);
+  void MaybeResolvePendingResponse();
+  void FinalizePendingResponse(base::TimeTicks now);
 
   base::flat_map<GlicInstanceEvent, int> event_counts_;
   EmbedderType current_ui_mode_ = EmbedderType::kUnknown;
@@ -371,6 +410,7 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
   // The last invocation source that was used to show the panel.
   mojom::InvocationSource last_invocation_source_ =
       mojom::InvocationSource::kUnsupported;
+  std::optional<PendingCompletedResponse> pending_completed_response_;
   std::optional<uint64_t> active_invocation_id_ = std::nullopt;
   // When `active_invocation_id_` was set. Null when there is no invocation in
   // flight. Used to report how far into an invocation a failure happened.
@@ -447,6 +487,13 @@ class GlicInstanceMetrics : public GlicInstanceMetricsBackwardsCompatibility {
   // Incremented on user input when current_ui_mode_ is kSidePanel, and logged
   // when the side panel is closed or tab is switched for the first time.
   size_t side_panel_prompt_count_ = 0;
+
+  // Timestamp of the last tooltip impression, used to check whether the panel
+  // closes within 10s of a tooltip showing.
+  base::TimeTicks last_tooltip_impression_time_;
+
+  // Tracks if a tooltip was shown during the current session.
+  bool tooltip_shown_in_session_ = false;
 
   base::WeakPtrFactory<GlicInstanceMetrics> weak_ptr_factory_{this};
 };

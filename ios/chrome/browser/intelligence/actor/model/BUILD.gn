@@ -31,6 +31,8 @@ source_set("model") {
     "//components/actor/core:journal",
     "//components/sessions:session_id",
     "//ios/chrome/browser/intelligence/actor/metrics",
+    "//third_party/abseil-cpp:absl",
+    "//url",
   ]
   deps = [
     ":tab_helper",
@@ -81,8 +83,10 @@ source_set("tab_helper") {
     "actor_tab_helper_observer.h",
     "actor_tab_helper_observer.mm",
   ]
-  public_deps =
-      [ "//ios/chrome/browser/intelligence/actor/public:actor_control_state" ]
+  public_deps = [
+    "//components/actor/core",
+    "//ios/chrome/browser/intelligence/actor/public:actor_control_state",
+  ]
   deps = [
     "//base",
     "//ios/chrome/browser/intelligence/features",
@@ -113,6 +117,7 @@ source_set("unit_tests") {
     "//components/actor/public/mojom:mojo_bindings",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/origin_gating/core",
+    "//components/password_manager/core/browser/actor_login:common",
     "//components/prefs",
     "//components/prefs:test_support",
 
@@ -146,7 +151,6 @@ source_set("unit_tests") {
     "//ios/chrome/browser/snapshots/model:test_utils",
     "//ios/chrome/browser/tab_insertion/model",
     "//ios/chrome/browser/url_loading/model",
-    "//ios/chrome/test:test_support",
     "//ios/web/find_in_page",
     "//ios/web/public/js_messaging",
     "//ios/web/public/test",
@@ -154,6 +158,7 @@ source_set("unit_tests") {
     "//ios/web/public/test/fakes",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/abseil-cpp:absl",
     "//third_party/ocmock",
     "//ui/base",
     "//url",

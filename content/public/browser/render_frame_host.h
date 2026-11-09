@@ -299,8 +299,11 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Associated StoragePartition never changes.
   virtual StoragePartition* GetStoragePartition() = 0;
 
-  // Returns the user browser context associated with this RenderFrameHost.
-  // Associated BrowserContext never changes.
+  // Returns the browser context associated with this RenderFrameHost.
+  // Associated BrowserContext never changes. For user-facing decisions, e.g.
+  // permissions, policies or the off-the-record state, use
+  // content::GetUserBrowserContext() instead. The embedder can show a frame
+  // for a user from a different BrowserContext.
   virtual BrowserContext* GetBrowserContext() = 0;
 
   // Returns the current document's response head. Note that this value will
@@ -1089,6 +1092,26 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
 
   // Returns true if this frame has fired DOMContentLoaded.
   virtual bool IsDOMContentLoaded() = 0;
+
+  enum class ScriptToolsReadyState {
+    // The Document hasn't reached a lifecycle milestone where the ready state
+    // is evaluated.
+    kLoading,
+    // The Document is still updating the tool registry.
+    kWaiting,
+    // The Document's tool registry is stable.
+    kReady,
+    // The frame has no live RenderFrame in the renderer process (e.g. the
+    // renderer process crashed).
+    kNoRenderer,
+  };
+
+  // Returns whether the script tools of this frame's current document are
+  // ready. Changes for a live RenderFrame are notified via
+  // `WebContentsObserver::ScriptToolsReadyStateChanged()`; transitions to and
+  // from `kNoRenderer` are notified via `RenderFrameDeleted()` and
+  // `RenderFrameCreated()`.
+  virtual ScriptToolsReadyState GetScriptToolsReadyState() = 0;
 
   // Marks the frame as an ad frame.
   //

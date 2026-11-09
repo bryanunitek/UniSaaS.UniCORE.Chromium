@@ -25,6 +25,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/background/glic/glic_launcher_configuration.h"
 #include "chrome/browser/browser_process.h"
@@ -56,6 +57,7 @@
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/public/glic_provider_spec.h"
+#include "chrome/browser/glic/public/provider_features.h"
 #include "chrome/browser/glic/service/glic_instance_coordinator_impl.h"
 #include "chrome/browser/glic/service/glic_instance_impl.h"
 #include "chrome/browser/glic/service/metrics/glic_instance_helper_metrics.h"
@@ -263,13 +265,7 @@ class WithTestParams : public testing::WithParamInterface<TestParams> {
     std::vector<base::test::FeatureRefAndParams> enabled_features;
     std::vector<base::test::FeatureRef> disabled_features;
     if (GetParam().geic) {
-      // The Finch guest URL host is allowed as a GE host, so the mock client
-      // on the embedded test server can be configured as the GE guest with
-      // `--geic-guest-url` (see `MaybeAppendGeicSwitches()`). This avoids
-      // `--glic-dev`, which would also relax the guest origin checks.
-      enabled_features.push_back(
-          {features::kGeic,
-           {{features::kGeicGuestURL.name, "https://127.0.0.1/"}}});
+      enabled_features.push_back({features::kGeic, {}});
     }
     if (GetParam().no_webview) {
       enabled_features.push_back({features::kGlicNoWebview, {}});
@@ -564,6 +560,20 @@ using GlicApiMultiProfileActorTest = GlicApiMultiProfileTest;
 // Tests of Chrome sign-in state. GEiC doesn't use the Chrome primary account;
 // see `GlicGeicApiBrowserTest.testSignInPauseStateGeic`.
 using GlicApiConsumerAuthTest = GlicApiTest;
+// Tests of captureRegion, which is consumer-only (not supported by GEiC).
+using GlicApiCaptureRegionTest = GlicApiTest;
+
+// Tests of experimental triggering ("Spark"), which is consumer-only: GEiC
+// doesn't bind `ExperimentalTriggeringClient`.
+class GlicApiExperimentalTriggeringTest : public GlicApiTest {
+ public:
+  GlicApiExperimentalTriggeringTest() {
+    feature_list_.InitAndEnableFeature(features::kGlicExperimentalTriggering);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
 
 class GlicApiTestWithWebContentsWarming : public GlicApiTest {
  public:
@@ -665,7 +675,8 @@ class GlicApiTestWithExperimentalTriggeringScreenshot : public GlicApiTest {
  public:
   GlicApiTestWithExperimentalTriggeringScreenshot() {
     feature_list_.InitWithFeaturesAndParameters(
-        {{features::kGlicExperimentalTriggeringScreenshot, {}},
+        {{features::kGlicExperimentalTriggering, {}},
+         {features::kGlicExperimentalTriggeringScreenshot, {}},
          {features::kGlicActor, {}},
          {features::kGlicActorPolicyControlExemption, {}}},
         {});
@@ -2840,6 +2851,15 @@ IN_PROC_BROWSER_TEST_P(GlicApiTestWithNewTabDaisyChain,
   // 8. Open Glic in the new (third) tab.
   ASSERT_OK_AND_ASSIGN(auto* tab2_instance, WaitForGlicOpen(tab2));
 
+  // In GEiC, daisy-chained tabs are not auto-pinned, and attached mode only
+  // attributes focused-tab input metrics to pinned tabs.
+  if (IsGeic()) {
+    EXPECT_FALSE(
+        tab2_instance->GetSharingManager()->IsTabPinned(tab2->GetHandle()));
+    tab2_instance->GetSharingManager()->PinTabs({tab2->GetHandle()},
+                                                GlicPinTrigger::kContextMenu);
+  }
+
   // 9. Trigger "inputSubmitted" in the third tab's panel.
   ExecuteJsTest(
       {.params = base::Value("inputSubmitted"), .instance = tab2_instance});
@@ -4433,7 +4453,41 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testInvokeWaitsForNotifyPanelWillOpen) {
   ExecuteJsTest();
 }
 
-IN_PROC_BROWSER_TEST_P(GlicApiTest, testGetExperimentalTriggeringUpdates) {
+IN_PROC_BROWSER_TEST_P(GlicApiTest, testInvokeWithActuationSurface) {
+  actor::ActorKeyedService* actor_service =
+      actor::ActorKeyedService::Get(GetProfile());
+  ASSERT_TRUE(actor_service);
+  actor::ScopedHeadlessActorSurface headless_surface =
+      actor_service->CreateHeadlessActorSurface();
+
+  GlicInvokeOptions options(mojom::InvocationSource::kOsButton);
+  options.target.surface = DefaultSurface{
+      GetTabListInterface()->GetActiveTab()->GetBrowserWindowInterface()};
+  options.target.actuation_target = headless_surface.actor_surface_handle();
+  coordinator().Invoke(std::move(options));
+
+  // The client must receive the headless surface ID instead of the tab ID.
+  ExecuteJsTest({.params = base::Value(base::NumberToString(
+                     headless_surface.actor_surface_handle().raw_value()))});
+}
+
+IN_PROC_BROWSER_TEST_P(GlicApiTest,
+                       testInvokeWithTargetSurfaceSendsTabSurfaceId) {
+  tabs::TabInterface* tab = GetTabListInterface()->GetActiveTab();
+  GlicInvokeOptions options(mojom::InvocationSource::kOsButton);
+  options.target.surface = DefaultSurface{tab->GetBrowserWindowInterface()};
+  options.target.actuation_target = mojom::ActuationTarget::kTargetSurface;
+  coordinator().Invoke(std::move(options));
+
+  // Without an explicit actor surface, the client must receive the invoked
+  // tab's surface ID.
+  ExecuteJsTest(
+      {.params = base::Value(base::NumberToString(
+           actor::ActorSurfaceHandle::From(tab->GetHandle()).raw_value()))});
+}
+
+IN_PROC_BROWSER_TEST_P(GlicApiExperimentalTriggeringTest,
+                       testGetExperimentalTriggeringUpdates) {
   ASSERT_OK(OpenGlicForActiveTab());
   GlicInvokeOptions options(mojom::InvocationSource::kOsButton);
   options.target.surface = DefaultSurface{
@@ -4472,7 +4526,8 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testGetExperimentalTriggeringUpdates) {
             mojom::SubscriberObservationType::kComplete);
 }
 
-IN_PROC_BROWSER_TEST_P(GlicApiTest, testGetExperimentalTriggeringUpdatesError) {
+IN_PROC_BROWSER_TEST_P(GlicApiExperimentalTriggeringTest,
+                       testGetExperimentalTriggeringUpdatesError) {
   ASSERT_OK(OpenGlicForActiveTab());
   GlicInvokeOptions options(mojom::InvocationSource::kOsButton);
   options.target.surface = DefaultSurface{
@@ -5163,7 +5218,8 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ(result.error(), ScreenshotResult::Status::kErrorCapture);
 }
 
-IN_PROC_BROWSER_TEST_P(GlicApiTest, testSubmitConfirmationResponse) {
+IN_PROC_BROWSER_TEST_P(GlicApiExperimentalTriggeringTest,
+                       testSubmitConfirmationResponse) {
   ASSERT_OK(OpenGlicForActiveTab());
 
   ASSERT_TRUE(RunUntil(
@@ -5185,7 +5241,7 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testSubmitConfirmationResponse) {
   EXPECT_TRUE(future.Get());
 }
 
-IN_PROC_BROWSER_TEST_P(GlicApiTest,
+IN_PROC_BROWSER_TEST_P(GlicApiExperimentalTriggeringTest,
                        testConfirmationResponseNotAppliedOnDisconnect) {
   ASSERT_OK(OpenGlicForActiveTab());
 
@@ -5275,7 +5331,7 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testSetAudioDucking) {
   ExecuteJsTest();
 }
 
-IN_PROC_BROWSER_TEST_P(GlicApiTest, testCaptureRegionError) {
+IN_PROC_BROWSER_TEST_P(GlicApiCaptureRegionTest, testCaptureRegionError) {
   base::HistogramTester histogram_tester;
   ASSERT_OK(OpenGlicForActiveTab());
   ExecuteJsTest();
@@ -5608,6 +5664,12 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testMetrics) {
       /*expected_bucket_count=*/1));
   ASSERT_OK(
       histogram_tester.WaitForTotalCount("Glic.TabContext.UploadTime", 1));
+  ASSERT_OK(histogram_tester.WaitForBucketCount(
+      "Glic.Tooltip.MultiTab.Impression",
+      mojom::TooltipImpressionType::kTooltip1,
+      /*expected_bucket_count=*/1));
+  ASSERT_OK(histogram_tester.WaitForTotalCount(
+      "Glic.Api.RequestCounts.OnTooltipImpression", 1));
 }
 
 IN_PROC_BROWSER_TEST_P(GlicApiTest, testUserInputSubmittedPromptType) {
@@ -5778,13 +5840,21 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testClientStorage) {
            !storage.contains("initial_key");
   }));
   // Also verify persistence to prefs.
+  const std::string guest_url_key = service()->provider_spec().GetGuestUrlKey();
   service()->client_data_storage().Flush();
   {
-    const base::DictValue& dict =
-        GetProfile()->GetPrefs()->GetDict(prefs::kGlicClientDataStorage);
-    EXPECT_EQ(dict.size(), 2u);
-    EXPECT_EQ(*dict.FindString("k1"), "v1");
-    EXPECT_EQ(*dict.FindString("k2"), "v2");
+    const base::DictValue* dict = GetProfile()
+                                      ->GetPrefs()
+                                      ->GetDict(prefs::kGlicClientDataStorage)
+                                      .FindDict(guest_url_key);
+    ASSERT_TRUE(dict);
+    EXPECT_EQ(dict->size(), 2u);
+    const std::string* k1 = dict->FindString("k1");
+    const std::string* k2 = dict->FindString("k2");
+    ASSERT_TRUE(k1);
+    ASSERT_TRUE(k2);
+    EXPECT_EQ(*k1, "v1");
+    EXPECT_EQ(*k2, "v2");
   }
 
   service()->client_data_storage().SetItem("k1", "v1_updated");
@@ -5795,8 +5865,10 @@ IN_PROC_BROWSER_TEST_P(GlicApiTest, testClientStorage) {
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return service()->client_data_storage().GetAll().empty(); }));
   service()->client_data_storage().Flush();
-  EXPECT_TRUE(
-      GetProfile()->GetPrefs()->GetDict(prefs::kGlicClientDataStorage).empty());
+  EXPECT_FALSE(GetProfile()
+                   ->GetPrefs()
+                   ->GetDict(prefs::kGlicClientDataStorage)
+                   .contains(guest_url_key));
 }
 
 // Runs each test against consumer Gemini, with and without NoWebview, and
@@ -5866,6 +5938,16 @@ INSTANTIATE_TEST_SUITE_P(,
 
 INSTANTIATE_TEST_SUITE_P(,
                          GlicApiConsumerAuthTest,
+                         ConsumerOnlyTestParamSet(),
+                         &WithTestParams::PrintTestVariant);
+
+INSTANTIATE_TEST_SUITE_P(,
+                         GlicApiCaptureRegionTest,
+                         ConsumerOnlyTestParamSet(),
+                         &WithTestParams::PrintTestVariant);
+
+INSTANTIATE_TEST_SUITE_P(,
+                         GlicApiExperimentalTriggeringTest,
                          ConsumerOnlyTestParamSet(),
                          &WithTestParams::PrintTestVariant);
 

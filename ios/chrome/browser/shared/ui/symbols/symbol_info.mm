@@ -53,6 +53,8 @@ SymbolInfo InfoForSymbol(Symbol symbol) {
       return {@"multicolor_chromeball", SymbolType::kCustom};
     case SymbolPageInsights:
       return {@"page_insights", SymbolType::kCustom};
+    case SymbolSparkleTrail:
+      return {@"sparkle_trail", SymbolType::kCustom};
 #else
     case SymbolGeminiNonBrandedLogo:
       return {@"sparkle", SymbolType::kSystem};
@@ -163,6 +165,8 @@ SymbolInfo InfoForSymbol(Symbol symbol) {
       return {@"popup_badge_minus", SymbolType::kCustom};
     case SymbolPrivacy:
       return {@"checkerboard_shield", SymbolType::kCustom};
+    case SymbolPromptSuggestion:
+      return {@"prompt_suggestion", SymbolType::kCustom};
     case SymbolReadingList:
       return {@"square_bullet_square", SymbolType::kCustom};
     case SymbolRecentTabs:
@@ -506,6 +510,8 @@ SymbolInfo InfoForSymbol(Symbol symbol) {
       return {@"arrow.down.to.line.compact", SymbolType::kSystem};
     case SymbolPaperclip:
       return {@"paperclip", SymbolType::kSystem};
+    case SymbolPaperplaneFill:
+      return {@"paperplane.fill", SymbolType::kSystem};
     case SymbolPasteAction:
       return {@"doc.on.clipboard", SymbolType::kSystem};
     case SymbolPauseButton:
@@ -610,6 +616,8 @@ SymbolInfo InfoForSymbol(Symbol symbol) {
       return {@"slider.horizontal.3", SymbolType::kSystem};
     case SymbolSort:
       return {@"arrow.up.arrow.down", SymbolType::kSystem};
+    case SymbolSparkle:
+      return {@"sparkle", SymbolType::kSystem};
     case SymbolSparkles:
       return {@"sparkles", SymbolType::kSystem};
     case SymbolSparkles2:

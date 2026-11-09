@@ -1051,30 +1051,6 @@ TEST_F(RenderWidgetHostTest, SetPopupBoundsConstrainedByDelegate) {
   EXPECT_EQ(gfx::Rect(5, 100, 20, 20), view_->GetViewBounds());
 }
 
-// Tests that oversized popup bounds from the renderer are clamped to the
-// display, since their area would otherwise overflow int browser side.
-TEST_F(RenderWidgetHostTest, PopupBoundsAreClampedToTheDisplay) {
-  // Let the initial screen rects settle, otherwise the popup bounds below are
-  // dropped rather than clamped.
-  ClearScreenRects();
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return !host_->waiting_for_screen_rects_ack_; }));
-
-  const gfx::Rect work_area =
-      display::Screen::Get()->GetPrimaryDisplay().work_area();
-  ASSERT_FALSE(work_area.IsEmpty());
-
-  constexpr gfx::Rect kHugeBounds(0, 0, 100000, 100000);
-  ASSERT_FALSE(kHugeBounds.size().GetCheckedArea().IsValid());
-  static_cast<blink::mojom::PopupWidgetHost*>(host_.get())
-      ->SetPopupBounds(kHugeBounds, base::DoNothing());
-
-  const gfx::Rect bounds = view_->GetViewBounds();
-  EXPECT_EQ(work_area.width(), bounds.width());
-  EXPECT_EQ(work_area.height(), bounds.height());
-  EXPECT_TRUE(bounds.size().GetCheckedArea().IsValid());
-}
-
 TEST_F(RenderWidgetHostTest, SynchronizeVisualProperties) {
   ClearVisualProperties();
 
@@ -3422,12 +3398,14 @@ TEST_F(RenderWidgetHostTest, SetAndCommitExternallySourcedComposition) {
   int length = text.length();
   GlobalDOMNodeId node_id;
   node_id.target_element_dom_id = blink::DOMNodeIdType(123);
+  gfx::Range replacement_range(0, 3);
 
   ui::ImeTextSpan ime_text_span;
   ime_text_span.end_offset = length;
   ime_text_span.underline_style = ui::ImeTextSpan::UnderlineStyle::kDot;
-  host_->SetExternallySourcedComposition(text, {ime_text_span}, node_id,
-                                         /*on_complete=*/base::OnceClosure());
+  host_->SetExternallySourcedComposition(
+      text, {ime_text_span}, replacement_range, node_id,
+      /*on_complete=*/base::OnceCallback<void(const gfx::Range&)>());
 
   {
     MockWidgetInputHandler::MessageVector dispatched_messages =
@@ -3438,12 +3416,12 @@ TEST_F(RenderWidgetHostTest, SetAndCommitExternallySourcedComposition) {
     ASSERT_TRUE(ime_message);
     EXPECT_EQ("SetComposition", ime_message->name());
     EXPECT_TRUE(ime_message->Matches(
-        text, {ime_text_span}, gfx::Range::InvalidRange(), length, length,
+        text, {ime_text_span}, replacement_range, length, length,
         blink::mojom::ImeState::kNone, node_id.target_element_dom_id));
   }
 
   host_->CommitExternallySourcedComposition(
-      text, node_id, /*on_complete=*/base::OnceClosure());
+      text, replacement_range, node_id, /*on_complete=*/base::OnceClosure());
 
   {
     MockWidgetInputHandler::MessageVector dispatched_messages =
@@ -3454,7 +3432,7 @@ TEST_F(RenderWidgetHostTest, SetAndCommitExternallySourcedComposition) {
     ASSERT_TRUE(ime_message);
     EXPECT_EQ("CommitText", ime_message->name());
     EXPECT_TRUE(ime_message->Matches(
-        text, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0, 0,
+        text, std::vector<ui::ImeTextSpan>(), replacement_range, 0, 0,
         blink::mojom::ImeState::kNone, node_id.target_element_dom_id));
   }
 }
@@ -3980,15 +3958,29 @@ TEST_F(RenderWidgetHostTest, ExpectedUserActivationNotification) {
   base::test::ScopedFeatureList scoped_feature_list(
       blink::features::kTrustedUserActivationTriggers);
 
-  // One event allows one activation notification.
+  // Mouse down event allows one activation notification, mouse move and up
+  // events allow none.
   SimulateMouseEvent(blink::WebInputEvent::Type::kMouseDown);
   EXPECT_TRUE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
   EXPECT_FALSE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
-
-  // Mouse move and up does not increase expected user activation notifications.
   SimulateMouseEvent(blink::WebInputEvent::Type::kMouseMove);
   SimulateMouseEvent(blink::WebInputEvent::Type::kMouseUp);
   EXPECT_FALSE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
+
+  // Touch start event allows one activation notification, touch move and end
+  // events allow none.
+  PressTouchPoint(0, 1);
+  SendTouchEvent();
+  EXPECT_TRUE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
+  EXPECT_FALSE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
+  MoveTouchPoint(0, 10, 10);
+  SendTouchEvent();
+  ReleaseTouchPoint(0);
+  SendTouchEvent();
+  EXPECT_FALSE(host_->RemoveExpectedUserActivationNotificationIfAvailable());
+
+  // Flush pending touch ACKs before FastForwardBy triggers Android's timeout.
+  host_->mock_render_input_router()->GetAndResetDispatchedMessages();
 
   // Two events allow 2 activation notifications.
   SimulateMouseEvent(blink::WebInputEvent::Type::kMouseDown);

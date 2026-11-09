@@ -33,8 +33,18 @@ _globally_enabled_crubit_features = [
   # specializations (e.g. `base::IdType64<FooTag>`) used by the C++ headers.
   "template_instantiation",
 
+  # `strong_ordering_traits` makes Crubit implement `Eq` and `Ord` (in addition
+  # to `PartialEq` and `PartialOrd`) for C++ types whose `operator<=>` returns
+  # `std::strong_ordering` (e.g. `GURL` and `url::Origin`).
+  "strong_ordering_traits",
+
+  # `forward_declare` makes Crubit generate bindings for APIs that use
+  # forward-declared (incomplete) C++ types (e.g. `const Foo&` parameter
+  # after `class Foo;`).  Rust code can use `forward_declare::CppCoerce` to
+  # convert between the incomplete and complete types.
+  "forward_declare",
+
   # Other features to consider enabling by default:
-  # TODO(crbug.com/40226863): Consider enabling `forward_declare`.
   # TODO(crbug.com/40226863): Consider enabling `layout_compat_string`.
   # TODO(crbug.com/40226863): Consider enabling `layout_compat_tuple`.
 ]
@@ -399,6 +409,7 @@ template("rust_api_from_cpp") {
 
     configs -= crubit_gn_configs_to_remove
     configs += crubit_gn_support_configs_to_add
+    configs += [ "//build/rust/crubit:rust_api_from_cpp_thunks_config" ]
   }
 
   # Exposing the generated Rust bindings.
@@ -541,13 +552,6 @@ template("rust_api_from_cpp") {
     # (and those may not be inherited via `public_configs` of `bindings_target`)
     configs = default_compiler_configs
     args += [ "--" ] + libclang_args_for_cpp
-
-    # TODO(crbug.com/40226863): Remove after rolling Crubit to a version that
-    # supports the `type_visibility` attribute that libc++ uses on
-    # `namespace std` (without this, Crubit can't generate bindings for any
-    # items in `namespace std` - e.g. for `std::optional`).  See the WIP PR at
-    # https://github.com/google/crubit/pull/2361
-    args += [ "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS" ]
 
     # Clang args that write the `depfile`.  `-MT` sets the target inside the
     # depfile to the first output of the action (as expected by Ninja and

@@ -423,7 +423,6 @@ const base::FeatureParam<int> kNumberPendingFramesUntilThrottle{
     &kNoCompositorFrameAcks, "pending_frames", 1};
 BASE_FEATURE(kNoUndrawnFrameThrottleWhileEmbedderWaits,
              base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kDisplaySchedulerAsClient, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Kill switch for constraining render pass texture sampling to logical content
 // bounds. Remove after the behavior is stable.
@@ -434,7 +433,7 @@ BASE_FEATURE(kRenderPassBackingLogicalBounds, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kBypassOutdatedSurfaceActivation,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// When enabled, a non-mergeable surface's root render pass backing is enlarged
+// When enabled, a non-mergeable surface's root render pass backing is resized
 // to match the scale at which the frame's content was rasterized. This avoids
 // downsampling and then upsampling the content, keeping text sharp
 // (crbug.com/513611535).

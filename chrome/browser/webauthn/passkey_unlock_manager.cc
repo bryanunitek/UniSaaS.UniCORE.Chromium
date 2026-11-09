@@ -20,7 +20,6 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/webauthn/enclave_manager.h"
 #include "chrome/browser/webauthn/enclave_manager_interface.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/service/sync_service.h"
@@ -29,7 +28,6 @@
 #include "content/public/browser/navigation_handle.h"
 #include "device/fido/public/features.h"
 #include "google_apis/gaia/gaia_urls.h"
-#include "ui/base/l10n/l10n_util.h"
 
 namespace webauthn {
 
@@ -159,50 +157,9 @@ void PasskeyUnlockManager::OpenTabWithPasskeyUnlockChallenge(
   }
 }
 
-std::u16string PasskeyUnlockManager::GetPasskeyErrorProfilePillTitle() const {
-  switch (device::kPasskeyUnlockErrorUiExperimentArm.Get()) {
-    case device::PasskeyUnlockErrorUiExperimentArm::kUnlock:
-      return l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_PASSKEYS_ERROR_UNLOCK);
-    case device::PasskeyUnlockErrorUiExperimentArm::kGet:
-      return l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_PASSKEYS_ERROR_GET);
-    case device::PasskeyUnlockErrorUiExperimentArm::kVerify:
-      return l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_PASSKEYS_ERROR_VERIFY);
-  }
-}
-
-std::u16string PasskeyUnlockManager::GetPasskeyErrorProfileMenuDetails() const {
-  switch (device::kPasskeyUnlockErrorUiExperimentArm.Get()) {
-    case device::PasskeyUnlockErrorUiExperimentArm::kUnlock:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_DESCRIPTION_UNLOCK);
-    case device::PasskeyUnlockErrorUiExperimentArm::kGet:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_DESCRIPTION_GET);
-    case device::PasskeyUnlockErrorUiExperimentArm::kVerify:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_DESCRIPTION_VERIFY);
-  }
-}
-
-std::u16string PasskeyUnlockManager::GetPasskeyErrorProfileMenuButtonLabel()
-    const {
-  switch (device::kPasskeyUnlockErrorUiExperimentArm.Get()) {
-    case device::PasskeyUnlockErrorUiExperimentArm::kUnlock:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_BUTTON_UNLOCK);
-    case device::PasskeyUnlockErrorUiExperimentArm::kGet:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_BUTTON_GET);
-    case device::PasskeyUnlockErrorUiExperimentArm::kVerify:
-      return l10n_util::GetStringUTF16(
-          IDS_PROFILE_MENU_PASSKEYS_ERROR_BUTTON_VERIFY);
-  }
-}
-
 // static
 bool PasskeyUnlockManager::IsPasskeyUnlockErrorUiEnabled() {
-  return base::FeatureList::IsEnabled(device::kPasskeyUnlockErrorUi) &&
-         base::FeatureList::IsEnabled(device::kWebAuthnOpportunisticRetrieval);
+  return base::FeatureList::IsEnabled(device::kPasskeyUnlockErrorUi);
 }
 
 void PasskeyUnlockManager::NotifyObserversForTesting() {
@@ -298,9 +255,12 @@ void PasskeyUnlockManager::MaybeStartICloudRecovery() {
   icloud_recovery_state_ = ICloudRecoveryState::kInProgress;
   // TODO(crbug.com/470327407): Share a single security domain download between
   // the GPM PIN check and iCloud Keychain recovery.
-  enclave_manager()->RecoverWithICloudKeychain(base::IgnoreArgs<bool>(
-      base::BindOnce(&PasskeyUnlockManager::OnICloudRecoveryComplete,
-                     weak_ptr_factory_.GetWeakPtr())));
+  enclave_manager()->RecoverWithICloudKeychain(
+      /*account_state=*/std::nullopt,
+      /*account_state_gaia_id=*/std::nullopt,
+      base::IgnoreArgs<bool>(
+          base::BindOnce(&PasskeyUnlockManager::OnICloudRecoveryComplete,
+                         weak_ptr_factory_.GetWeakPtr())));
 }
 
 void PasskeyUnlockManager::OnICloudRecoveryComplete() {

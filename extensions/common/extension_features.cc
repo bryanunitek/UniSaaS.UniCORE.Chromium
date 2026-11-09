@@ -31,6 +31,8 @@ BASE_FEATURE(kApiOdfsConfigPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kApiContextualTasksPrivate, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kApiContextualTasksPrivateAba, base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kApiGlicPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kApiEnterpriseReportingPrivateOnDataMaskingRulesTriggered,
@@ -42,8 +44,7 @@ BASE_FEATURE(kApiEnterpriseReportingPrivateReportForceSaveToCloudEventHandled,
 BASE_FEATURE(kApiGlicAccessFromGoogleWebpage,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiGlicAccessFromPromotionPage,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kApiGlicAccessFromPromotionPage, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kApiGlicAccessFromWebContinuity,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -138,9 +139,8 @@ BASE_FEATURE(kExtensionAutoRejectIncognitoConnectability,
 BASE_FEATURE(kExtensionAsyncListenerRegistration,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// TODO(crbug.com/561948316): Remove this kill switch in M160.
 BASE_FEATURE(kExtensionDebuggerStrictPolicyRestrictions,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // TODO(crbug.com/578677350): Remove this kill switch in M161.
 BASE_FEATURE(kExtensionDownloaderPublisherProofByUpdateUrl,

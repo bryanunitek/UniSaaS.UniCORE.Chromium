@@ -38,7 +38,7 @@
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/password_manager/content/browser/content_password_manager_driver_factory.h"
-#include "components/password_manager/core/common/password_manager_features.h"
+#include "components/password_manager/core/common/remote_actor/remote_actor_features.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
@@ -112,7 +112,6 @@
 #include "chrome/browser/record_replay/chrome_record_replay_client.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_ui.h"
 #include "chrome/common/indigo/indigo.mojom.h"
-#include "chrome/common/password_manager/remote_actor_credential_sharing_policy.h"
 #include "components/record_replay/core/common/record_replay.mojom.h"
 #endif
 
@@ -158,7 +157,7 @@ void MaybeCreateExtensionWebRequestReporterForRenderer(
     int process_id,
     mojo::PendingReceiver<safe_browsing::mojom::ExtensionWebRequestReporter>
         receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
   content::RenderProcessHost* render_process_host =
       content::RenderProcessHost::FromID(process_id);
@@ -177,7 +176,7 @@ void MaybeCreateExtensionWebRequestReporterForRenderer(
 void BindBadgeServiceForServiceWorker(
     const content::ServiceWorkerVersionBaseInfo& info,
     mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
   content::RenderProcessHost* render_process_host =
       content::RenderProcessHost::FromID(info.process_id);
@@ -513,7 +512,7 @@ void ChromeContentBrowserClient::
                                                     render_frame_host);
       },
       &render_frame_host));
-  if (base::FeatureList::IsEnabled(syncer::kSyncEncryptedTabContextContainer)) {
+  if (base::FeatureList::IsEnabled(syncer::kSyncEncryptedTabContext)) {
     associated_registry.AddInterface<
         chrome::mojom::TabContextDecryptionTokenExtension>(base::BindRepeating(
         [](content::RenderFrameHost* render_frame_host,

@@ -1322,6 +1322,12 @@ inline constexpr char kLensFollowupsFullHeightEnabledName[] =
 inline constexpr char kLensFollowupsFullHeightEnabledDescription[] =
     "Enables followups full height in the Lens overlay.";
 
+inline constexpr char kLensHideLoadingWebResultsPanelName[] =
+    "Hide Lens loading web results panel";
+inline constexpr char kLensHideLoadingWebResultsPanelDescription[] =
+    "When enabled, hides the native loading web results panel shown between "
+    "the Lens View Finder and the Lens Web results page.";
+
 inline constexpr char kLensInitialLvfZoomLevel90PercentName[] =
     "Initial Lens camera zoom 90 percent";
 inline constexpr char kLensInitialLvfZoomLevel90PercentDescription[] =
@@ -1519,12 +1525,6 @@ inline constexpr char kNewTabPageUICleanupDescription[] =
 inline constexpr char kNextOldDesignName[] = "NextOldDesign";
 inline constexpr char kNextOldDesignDescription[] =
     "Enables the NextOldDesign feature.";
-
-inline constexpr char kNoAccountWebSigninName[] =
-    "Enable no account web sigin bottom sheet";
-inline constexpr char kNoAccountWebSigninDescription[] =
-    "Surfaces the web sign in bottom sheet when the user attempts to sign in "
-    "to the web.";
 
 inline constexpr char kNonModalSignInPromoName[] = "Non-modal sign-in promo";
 inline constexpr char kNonModalSignInPromoDescription[] =
@@ -1819,6 +1819,13 @@ inline constexpr char kRefactorToolbarsSizeName[] = "Refactor toolbars size";
 inline constexpr char kRefactorToolbarsSizeDescription[] =
     "When enabled, the toolbars size does not use broadcaster but observers.";
 
+inline constexpr char kRemoteActorCredentialSharingName[] =
+    "Enable password sharing with remote actors";
+inline constexpr char kRemoteActorCredentialSharingDescription[] =
+    "Enables remote actors to request passwords from the signed in Google "
+    "account. When requested, the user will be prompted to select a password "
+    "and authenticate.";
+
 inline constexpr char kRemoveExcessNTPsExperimentName[] =
     "Remove extra New Tab Pages";
 inline constexpr char kRemoveExcessNTPsExperimentDescription[] =
@@ -1952,6 +1959,11 @@ inline constexpr char kSyncContextualTaskName[] = "Sync Contextual Task";
 inline constexpr char kSyncContextualTaskDescription[] =
     "Enables syncing of contextual tasks.";
 
+inline constexpr char kSyncEncryptedTabContextName[] =
+    "Sync Encrypted Tab Context";
+inline constexpr char kSyncEncryptedTabContextDescription[] =
+    "Enables syncing of Encrypted Tab Context across devices.";
+
 inline constexpr char kSyncSandboxName[] = "Use Chrome Sync sandbox";
 inline constexpr char kSyncSandboxDescription[] =
     "Connects to the testing server for Chrome Sync.";
@@ -1996,10 +2008,6 @@ inline constexpr char kTabResumptionName[] = "Enable Tab Resumption";
 inline constexpr char kTabResumptionDescription[] =
     "When enabled, offer users with a quick shortcut to resume the last synced "
     "tab from another device.";
-
-inline constexpr char kTaiyakiAllSurfacesName[] = "Taiyaki (all surfaces)";
-inline constexpr char kTaiyakiAllSurfacesDescription[] =
-    "Enables Taiyaki for all surfaces (including post-FRE).";
 
 inline constexpr char kUniversalOptOutExtensionName[] =
     "Universal Opt Out Extension";

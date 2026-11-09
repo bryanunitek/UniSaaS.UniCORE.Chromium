@@ -47,7 +47,7 @@
 #include "components/permissions/permission_manager.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/content/browser/ui_manager.h"
+#include "components/safe_browsing/content/browser/interstitials/ui_manager.h"
 #include "components/security_interstitials/content/stateful_ssl_host_state_delegate.h"
 #include "components/subresource_filter/content/browser/subresource_filter_content_settings_manager.h"
 #include "components/subresource_filter/content/browser/subresource_filter_profile_context.h"
@@ -63,8 +63,8 @@
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/public_buildflags.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/events/event.h"
 #include "url/origin.h"
@@ -93,7 +93,7 @@
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
 #include "chrome/browser/ui/page_info/page_info_infobar_delegate.h"
-#include "chrome/browser/ui/tab_dialogs.h"
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_ui_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -291,17 +291,18 @@ void ChromePageInfoDelegate::RegisterPageInfoInfoBar(
 bool ChromePageInfoDelegate::CreateInfoBarDelegate() {
   if (infobars::IsInfoBarMigrated(
           infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
-    auto* browser_infobar_manager =
-        infobars::BrowserInfoBarManager::From(g_browser_process);
-    if (browser_infobar_manager) {
-      auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents_);
-      if (tab) {
+    if (auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents_)) {
+      auto* browser_infobar_manager =
+          infobars::BrowserInfoBarManager::From(g_browser_process);
+      if (browser_infobar_manager) {
         browser_infobar_manager->Show(
             tab, infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE);
         return true;
       }
+      return false;
     }
-    return false;
+    // TODO(crbug.com/582324173): Support non-tab WebContents in
+    // BrowserInfoBarManager.
   }
 
   infobars::ContentInfoBarManager* infobar_manager =
@@ -396,7 +397,8 @@ void ChromePageInfoDelegate::ShowSyncSettings() {
 
 void ChromePageInfoDelegate::OpenCookiesDialog() {
   FocusWebContents();
-  TabDialogs::FromWebContents(web_contents_)->ShowCollectedCookies();
+  PageSpecificSiteDataDialogController::CreateAndShowForWebContents(
+      web_contents_);
 }
 
 void ChromePageInfoDelegate::OpenCertificateDialog(
@@ -416,7 +418,8 @@ void ChromePageInfoDelegate::OpenConnectionHelpCenterPage(
       content::OpenURLParams::CreateBrowserInitiated(
           GURL(chrome::kPageInfoHelpCenterURL),
           ui::DispositionFromEventFlags(
-              event.flags(), WindowOpenDisposition::kNewForegroundTab),
+              event.flags(),
+              ui::mojom::WindowOpenDisposition::kNewForegroundTab),
           ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
@@ -465,7 +468,7 @@ void ChromePageInfoDelegate::OpenSafeBrowsingHelpCenterPage(
       content::OpenURLParams::CreateBrowserInitiated(
           GURL(url),
           ui::DispositionFromEventFlags(
-              event_flags, WindowOpenDisposition::kNewForegroundTab),
+              event_flags, ui::mojom::WindowOpenDisposition::kNewForegroundTab),
           ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }

@@ -207,10 +207,22 @@ void ConnectorsInternalsPageHandler::GetSignalsReportingState(
       enterprise_connectors::utils::CreateSignalsReportingState(
           profile_prefs, profile_report_scheduler, can_collect_all_signals);
 
+  if (!state->signals_report_enabled) {
+    std::move(callback).Run(std::move(state));
+    return;
+  }
+
+  // Show the signals that were actually uploaded when available. Signals are
+  // only collected on demand as a fallback.
+  if (state->signals) {
+    std::move(callback).Run(std::move(state));
+    return;
+  }
+
   device_signals::SignalsAggregator* signals_aggregator =
       IOSSignalsAggregatorFactory::GetForProfile(profile_);
 
-  if (!state->signals_report_enabled || !signals_aggregator) {
+  if (!signals_aggregator) {
     std::move(callback).Run(std::move(state));
     return;
   }
@@ -247,11 +259,15 @@ void ConnectorsInternalsPageHandler::OnReportGenerated(
                    enterprise_reporting::ReportGenerationError> result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto [error_info, signals_json] =
+  auto [error_info, signals] =
       enterprise_connectors::utils::ProcessReportGenerationResult(
           std::move(result));
   state->error_info = std::move(error_info);
-  state->signals_json = std::move(signals_json);
+  if (signals) {
+    state->signals = connectors_internals::mojom::Signals::New(
+        std::move(*signals),
+        connectors_internals::mojom::SignalsSource::kCollectedOnDemand);
+  }
   request_generator_.reset();
   std::move(callback).Run(std::move(state));
 }

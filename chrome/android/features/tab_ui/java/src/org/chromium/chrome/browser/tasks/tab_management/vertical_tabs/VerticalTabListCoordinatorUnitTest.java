@@ -113,6 +113,7 @@ import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.browser.tabmodel.NextTabPolicy;
 import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
@@ -148,7 +149,6 @@ import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils.WindowWidthBoundary;
-import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -3668,9 +3668,9 @@ public class VerticalTabListCoordinatorUnitTest {
                         eq(TabList.INVALID_TAB_INDEX),
                         eq(true));
         verify(mTabModel)
-                .mergeListOfTabsToGroup(
+                .mergeListOfTabsToExistingGroup(
                         eq(Collections.singletonList(draggedTab)),
-                        eq(childTab),
+                        eq(groupId),
                         eq(0),
                         eq(TabGroupMergeNotificationType.DONT_NOTIFY));
 
@@ -3938,9 +3938,9 @@ public class VerticalTabListCoordinatorUnitTest {
                         eq(TabList.INVALID_TAB_INDEX),
                         eq(true));
         verify(mTabModel)
-                .mergeListOfTabsToGroup(
+                .mergeListOfTabsToExistingGroup(
                         eq(Collections.singletonList(draggedTab)),
-                        eq(childTab),
+                        eq(destGroupId),
                         eq(0),
                         eq(TabGroupMergeNotificationType.DONT_NOTIFY));
 
@@ -4004,9 +4004,9 @@ public class VerticalTabListCoordinatorUnitTest {
                         eq(TabList.INVALID_TAB_INDEX),
                         eq(true));
         verify(mTabModel)
-                .mergeListOfTabsToGroup(
+                .mergeListOfTabsToExistingGroup(
                         eq(Collections.singletonList(draggedTab)),
-                        eq(childTab1),
+                        eq(groupId),
                         eq(1),
                         eq(TabGroupMergeNotificationType.DONT_NOTIFY));
 
@@ -4070,9 +4070,9 @@ public class VerticalTabListCoordinatorUnitTest {
                         eq(TabList.INVALID_TAB_INDEX),
                         eq(true));
         verify(mTabModel)
-                .mergeListOfTabsToGroup(
+                .mergeListOfTabsToExistingGroup(
                         eq(Collections.singletonList(draggedTab)),
-                        eq(childTab1),
+                        eq(groupId),
                         eq(2),
                         eq(TabGroupMergeNotificationType.DONT_NOTIFY));
 

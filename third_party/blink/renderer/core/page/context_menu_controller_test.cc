@@ -1311,6 +1311,7 @@ TEST_F(ContextMenuControllerTest,
   EXPECT_EQ("http://test.png/", context_menu_data.src_url.spec());
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kImage,
             context_menu_data.media_type);
+  EXPECT_EQ(gfx::Rect(0, 0, 100, 100), context_menu_data.image_bounds);
 
   histograms.ExpectBucketCount(
       "Blink.ContextMenu.ImageSelection.Outcome",
@@ -1329,6 +1330,43 @@ TEST_F(ContextMenuControllerTest,
       "Blink.ContextMenu.ImageSelection.Outcome",
       ContextMenuController::ImageSelectionOutcome::kBlockedByCrossFrameNode,
       0);
+}
+
+TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestClippedImageBounds) {
+  RegisterMockedImageURLLoad("http://test.png");
+  ContextMenuAllowedScope context_menu_allowed_scope;
+
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <body>
+      <style>
+        #clip {
+          top: 10px;
+          left: 20px;
+          position: absolute;
+          width: 40px;
+          height: 30px;
+          overflow: hidden;
+        }
+        #target {
+          width: 100px;
+          height: 100px;
+        }
+      </style>
+      <div id="clip">
+        <img id="target" src="http://test.png">
+      </div>
+    </body>
+  )HTML");
+
+  PhysicalOffset location(LayoutUnit(25), LayoutUnit(15));
+  EXPECT_TRUE(
+      ShowContextMenu(location, ui::mojom::blink::MenuSourceType::kLongPress));
+
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ("http://test.png/", context_menu_data.src_url.spec());
+  EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kImage,
+            context_menu_data.media_type);
+  EXPECT_EQ(gfx::Rect(20, 10, 40, 30), context_menu_data.image_bounds);
 }
 
 // Test that image selection can penetrate through a fully transparent div
@@ -1373,6 +1411,7 @@ TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestSucceededPenetrating) {
   EXPECT_EQ("http://test.png/", context_menu_data.src_url.spec());
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kImage,
             context_menu_data.media_type);
+  EXPECT_EQ(gfx::Rect(0, 0, 100, 100), context_menu_data.image_bounds);
 
   histograms.ExpectBucketCount(
       "Blink.ContextMenu.ImageSelection.Outcome",
@@ -2607,7 +2646,38 @@ TEST_F(InterestForTouchscreenTest, LinkWithInterestFor) {
   // Simulate choosing the "Show details" context menu item
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
-  link->ShowInterestNow();
+  document->GetFrame()->ShowInterestInElement(
+      context_menu_data.interest_for_node_id);
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(link->GetInterestState(),
+            Element::InterestState::kExplicitInterest);
+}
+
+TEST_F(InterestForTouchscreenTest, ShowInterestInElementWrongDocument) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"(
+    <a href="foo.html" interestfor=target id=link>Link</a>
+    <div id=target popover>Target</div>
+    <iframe id=iframe></iframe>
+    )");
+  Document* document = GetDocument();
+  Element* link = document->getElementById(AtomicString("link"));
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  ASSERT_TRUE(link);
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
+
+  LocalFrame* main_frame = document->GetFrame();
+  ASSERT_TRUE(main_frame);
+  LocalFrame* child_frame = To<LocalFrame>(main_frame->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+
+  // Calling ShowInterestInElement on a different frame than the element's
+  // document should be a no-op.
+  child_frame->ShowInterestInElement(link->GetDomNodeId());
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  EXPECT_EQ(link->GetInterestState(), Element::InterestState::kNoInterest);
+
+  // Calling ShowInterestInElement on the element's own frame succeeds.
+  main_frame->ShowInterestInElement(link->GetDomNodeId());
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   EXPECT_EQ(link->GetInterestState(),
             Element::InterestState::kExplicitInterest);

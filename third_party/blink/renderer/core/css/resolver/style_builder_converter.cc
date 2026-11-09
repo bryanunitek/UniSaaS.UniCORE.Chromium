@@ -650,7 +650,7 @@ FontVariantEmoji StyleBuilderConverter::ConvertFontVariantEmoji(
   // properties. The auto generated converter does not handle this incoming
   // value.
   if (value.IsPendingSystemFontValue()) {
-    return kNormalVariantEmoji;
+    return FontVariantEmoji::kNormal;
   }
 
   return To<CSSIdentifierValue>(value).ConvertTo<FontVariantEmoji>();
@@ -665,15 +665,15 @@ OpticalSizing StyleBuilderConverter::ConvertFontOpticalSizing(
   // properties. The auto generated converter does not handle this incoming
   // value.
   if (value.IsPendingSystemFontValue()) {
-    return kAutoOpticalSizing;
+    return OpticalSizing::kAuto;
   }
 
   CSSValueID value_id = To<CSSIdentifierValue>(value).GetValueID();
   switch (value_id) {
     case CSSValueID::kAuto:
-      return kAutoOpticalSizing;
+      return OpticalSizing::kAuto;
     case CSSValueID::kNone:
-      return kNoneOpticalSizing;
+      return OpticalSizing::kNone;
     default:
       NOTREACHED();
   }

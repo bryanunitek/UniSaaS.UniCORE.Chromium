@@ -252,6 +252,23 @@ class PDFExtensionTestWithPartialLoading : public PDFExtensionTest {
     enabled.push_back({chrome_pdf::features::kPdfPartialLoading, {}});
     return enabled;
   }
+
+  // TODO(crbug.com/40123601): Partial loading doesn't work with
+  // `features::kPdfOpaqueOrigin` yet, so disable it here to keep testing
+  // partial loading. With it, the PDF plugin's range requests to the PDF URL
+  // are rejected by the network service: their initiator is the PDF URL's
+  // origin (derived from their referrer), which doesn't match the opaque origin
+  // that the PDF frame's URLLoaderFactory is locked to, so
+  // `network::VerifyRequestInitiatorLock()` fails and the renderer is killed.
+  // Supporting this will need a narrowly scoped exception for the PDF's
+  // original (precursor) origin. Don't relax such checks for the whole PDF
+  // process, since that would let a compromised PDF process read cross-origin
+  // data.
+  std::vector<base::test::FeatureRef> GetDisabledFeatures() const override {
+    auto disabled = PDFExtensionTest::GetDisabledFeatures();
+    disabled.push_back(::features::kPdfOpaqueOrigin);
+    return disabled;
+  }
 };
 
 // Historically, https://crrev.com/352991 focused the PDF embed element when it
@@ -520,6 +537,71 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionTest, CSPWithSandboxDoesNotBlockPDF) {
   EXPECT_EQ(
       main_url,
       GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedURL());
+}
+
+// Tests for `pdf_frame_util::GetPdfOrigin()`, in both the OOPIF and GuestView
+// PDF viewers. Enables `features::kPdfOpaqueOrigin`, so that the PDF content
+// frame commits an opaque origin, to check that `GetPdfOrigin()` still returns
+// the origin the PDF was loaded from.
+// TODO(crbug.com/559567801): Fold these tests into PDFExtensionTest once
+// `features::kPdfOpaqueOrigin` is enabled by default and removed.
+class PDFExtensionGetPdfOriginTest : public PDFExtensionTest {
+ protected:
+  std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
+      const override {
+    auto enabled = PDFExtensionTest::GetEnabledFeatures();
+    enabled.push_back({::features::kPdfOpaqueOrigin, {}});
+    return enabled;
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionGetPdfOriginTest, FullPagePdf) {
+  const GURL pdf_url = embedded_test_server()->GetURL("a.com", "/pdf/test.pdf");
+  ASSERT_TRUE(LoadPdf(pdf_url));
+  content::RenderFrameHost* pdf_content_frame =
+      pdf_extension_test_util::GetOnlyPdfPluginFrame(GetActiveWebContents());
+  ASSERT_TRUE(pdf_content_frame);
+
+  const url::Origin pdf_origin = url::Origin::Create(pdf_url);
+  const url::Origin content_origin =
+      pdf_content_frame->GetLastCommittedOrigin();
+  EXPECT_TRUE(content_origin.opaque());
+  EXPECT_EQ(pdf_origin.GetTupleOrPrecursorTupleIfOpaque(),
+            content_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  if (UseOopif()) {
+    EXPECT_EQ(GetActiveWebContents()->GetPrimaryMainFrame(),
+              pdf_frame_util::GetEmbedderHost(pdf_content_frame));
+  }
+  EXPECT_EQ(pdf_origin, pdf_frame_util::GetPdfOrigin(*pdf_content_frame));
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionGetPdfOriginTest, CrossOriginEmbeddedPdf) {
+  // Cross-origin PDF embedded in an iframe.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("a.com", "/iframe.html")));
+  const GURL pdf_url = embedded_test_server()->GetURL("b.com", "/pdf/test.pdf");
+  ASSERT_TRUE(content::NavigateIframeToURL(GetActiveWebContents(),
+                                           /*iframe_id=*/"test", pdf_url));
+  content::RenderFrameHost* iframe =
+      content::ChildFrameAt(GetActiveWebContents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(iframe);
+  ASSERT_TRUE(pdf_extension_test_util::EnsurePDFHasLoaded(iframe));
+  content::RenderFrameHost* pdf_content_frame =
+      pdf_extension_test_util::GetOnlyPdfPluginFrame(GetActiveWebContents());
+  ASSERT_TRUE(pdf_content_frame);
+
+  const url::Origin pdf_origin = url::Origin::Create(pdf_url);
+  const url::Origin content_origin =
+      pdf_content_frame->GetLastCommittedOrigin();
+  EXPECT_TRUE(content_origin.opaque());
+  EXPECT_EQ(pdf_origin.GetTupleOrPrecursorTupleIfOpaque(),
+            content_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  if (UseOopif()) {
+    EXPECT_EQ(iframe, pdf_frame_util::GetEmbedderHost(pdf_content_frame));
+  }
+  EXPECT_EQ(pdf_origin, pdf_frame_util::GetPdfOrigin(*pdf_content_frame));
 }
 
 // This test verifies that Content-Security-Policy's frame-ancestors 'none'
@@ -1287,8 +1369,15 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionTest,
 // Test that a PDF embed lower in a webpage will not trigger a page scroll to
 // it on load. Regression test for https://crbug.com/429553604.
 IN_PROC_BROWSER_TEST_P(PDFExtensionTest, EmbedPdfBottomOfViewport) {
-  ASSERT_TRUE(LoadPdfInFirstChild(embedded_test_server()->GetURL(
-      "/pdf/pdf_embed_bottom_of_viewport.html")));
+  // Don't wait for hit test data, which this test doesn't need. The PDF content
+  // frame is out of view, and with `features::kPdfOpaqueOrigin`, it is
+  // cross-origin to the embedder, so its rendering may be throttled, and it may
+  // never produce hit test data.
+  pdf_extension_test_util::EnsurePDFHasLoadedOptions options;
+  options.wait_for_hit_test_data = false;
+  ASSERT_TRUE(LoadPdfInFirstChild(
+      embedded_test_server()->GetURL("/pdf/pdf_embed_bottom_of_viewport.html"),
+      options));
 
   EXPECT_EQ(0,
             content::EvalJs(GetActiveWebContents(), "document.body.scrollTop"));
@@ -4987,6 +5076,7 @@ INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionBlobNavigationTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFPluginDisabledTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionTestWithPartialLoading);
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionGetPdfOriginTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionScrollTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionLinkClickTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionInternalLinkClickTest);

@@ -25,8 +25,10 @@ import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
+import org.chromium.chrome.browser.tabmodel.undo.UndoClosureSnapshot;
 import org.chromium.components.tabs.TabStripCollection;
 
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
@@ -123,6 +125,7 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
         if (mNativeAndroidBrowserWindow != 0) {
             mDelegateModel.associateWithBrowserWindow(mNativeAndroidBrowserWindow);
         }
+        mDelegateModel.setActive(mActive);
         mDelegateModel
                 .getCurrentTabSupplier()
                 .addSyncObserverAndPostIfNonNull(mDelegateModelCurrentTabSupplierObserver);
@@ -345,6 +348,13 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     @Override
     public void cancelTabClosure(int tabId) {
         mDelegateModel.cancelTabClosure(tabId);
+    }
+
+    @Override
+    public int[] restoreClosedTabsForUndo(UndoClosureSnapshot snapshot, boolean reselect) {
+        int[] result = new int[snapshot.tabs.size()];
+        Arrays.fill(result, Tab.INVALID_TAB_ID);
+        return result;
     }
 
     @Override
@@ -598,11 +608,6 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     }
 
     @Override
-    public void mergeTabsToGroup(int sourceTabId, int destinationTabId) {
-        mDelegateModel.mergeTabsToGroup(sourceTabId, destinationTabId);
-    }
-
-    @Override
     public void mergeListOfTabsToGroup(
             List<Tab> tabs, Tab destinationTab, @Nullable Integer indexInGroup, int notify) {
         mDelegateModel.mergeListOfTabsToGroup(tabs, destinationTab, indexInGroup, notify);
@@ -712,11 +717,6 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     @Override
     public void setTabGroupCollapsed(Token tabGroupId, boolean isCollapsed, boolean animate) {
         mDelegateModel.setTabGroupCollapsed(tabGroupId, isCollapsed, animate);
-    }
-
-    @Override
-    public void deleteTabGroupCollapsed(Token tabGroupId) {
-        mDelegateModel.deleteTabGroupCollapsed(tabGroupId);
     }
 
     @Override

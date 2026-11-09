@@ -44,21 +44,7 @@ extern const base::FeatureParam<int> kGlicOSIconVariantParam;
 
 BASE_DECLARE_FEATURE(kGlicOrphanedReattachment);
 
-BASE_DECLARE_FEATURE(kAutoOpenGlicForPdf);
-extern const base::FeatureParam<bool> kAutoOpenGlicForPdfWithOnboarding;
-extern const base::FeatureParam<base::TimeDelta> kAutoOpenGlicCooldown;
-
 BASE_DECLARE_FEATURE(kGlicInvoke);
-
-// Controls inline cue for text selection.
-BASE_DECLARE_FEATURE(kGlicSelectionPrompt);
-extern const base::FeatureParam<bool> kGlicSelectionShowCopyButtons;
-extern const base::FeatureParam<bool> kGlicSelectionAutoSendPrompt;
-extern const base::FeatureParam<std::string> kGlicSelectionPromptCta;
-inline constexpr char kGlicSelectionPromptCtaTellMe[] = "tell_me_about_this";
-inline constexpr char kGlicSelectionPromptCtaExplain[] = "explain";
-extern const base::FeatureParam<std::string> kGlicSelectionDefaultBlockedSites;
-base::flat_set<std::string> GetGlicSelectionDefaultBlockedSites();
 
 BASE_DECLARE_FEATURE(kGlicSelectionOverlayPrompt);
 BASE_DECLARE_FEATURE(kGlicSelectionOverlayPromptBox);
@@ -67,6 +53,7 @@ BASE_DECLARE_FEATURE_PARAM(std::string,
                            kGlicSelectionOverlayDogfoodFeedbackUrl);
 BASE_DECLARE_FEATURE(kGlicSelectionSuggestions);
 BASE_DECLARE_FEATURE_PARAM(std::string, kGlicSelectionSuggestionsCapabilities);
+BASE_DECLARE_FEATURE(kQuickAnswersSelectionSuggestions);
 
 BASE_DECLARE_FEATURE(kGlicSelectionSmallChip);
 extern const base::FeatureParam<bool> kGlicSelectionSmallChipOnTop;
@@ -74,8 +61,6 @@ extern const base::FeatureParam<bool> kGlicSelectionSmallChipOnTop;
 BASE_DECLARE_FEATURE(kGlicSuggestionContextMenu);
 
 BASE_DECLARE_FEATURE(kGlicCreateTabAdjacent);
-
-BASE_DECLARE_FEATURE(kGlicDynamicChromeTools);
 
 BASE_DECLARE_FEATURE(kGlicLiveMode);
 
@@ -212,9 +197,10 @@ BASE_DECLARE_FEATURE(kGeicActuation);
 // can be rolled out separately.
 BASE_DECLARE_FEATURE(kGeicSsr);
 
-BASE_DECLARE_FEATURE(kGlicMarketingAutoOpen);
-extern const base::FeatureParam<std::string> kGlicMarketingUrlAllowlist;
-extern const base::FeatureParam<int> kGlicMarketingAutoOpenMaxCount;
+// Prompts the user to relaunch Chrome when the Glic provider configuration
+// (e.g. the `GeminiEnterpriseUrl` policy) changes mid-session. Requires
+// `kGeic`.
+BASE_DECLARE_FEATURE(kGeicProviderChangePrompt);
 
 BASE_DECLARE_FEATURE(kGlicHotkeyLocalScope);
 
@@ -251,6 +237,11 @@ BASE_DECLARE_FEATURE(kGlicVoice);
 // 380x567dp.
 BASE_DECLARE_FEATURE(kGlicExperimentalOptInDialogNonScrollable);
 
+#if BUILDFLAG(IS_ANDROID)
+// Enables the native FRE on Android.
+BASE_DECLARE_FEATURE(kGlicNativeFreAndroid);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 BASE_DECLARE_FEATURE(kGlicActionFirstFRE);
 
 BASE_DECLARE_FEATURE(kGlicWarmOnNudge);
@@ -276,6 +267,26 @@ BASE_DECLARE_FEATURE(kGlicActivityHub);
 // Uses the updated copy and title layout for the Glic experimental triggering
 // OS notification. Kill switch: when disabled, the original strings are shown.
 BASE_DECLARE_FEATURE(kGlicExperimentalTriggeringOsNotificationUpdatedStrings);
+
+BASE_DECLARE_FEATURE(kGlicRecordPeriodicInstanceCountMetrics);
+
+BASE_DECLARE_FEATURE(kGlicWhatsNewLuminous);
+
+// Test only. When enabled, Android drops incoming Glic experimental triggering
+// TriggerActuationRequest messages without replying or acking, as if the FCM
+// message never arrived.
+BASE_DECLARE_FEATURE(kGlicForceFcmExperimentalTriggerFailure);
+
+// Allows experimental triggering actuation sessions to wait for a reloaded
+// guest web client to reconnect and re-deliver the prompt when the guest
+// disconnects before sending its first response (b/581951225).
+BASE_DECLARE_FEATURE(kGlicExperimentalTriggeringNavigationReconnectGrace);
+extern const base::FeatureParam<base::TimeDelta>
+    kGlicExperimentalTriggeringNavigationReconnectGracePeriod;
+
+// Highlights the Ask Gemini button when users who started from a secondary
+// entry point close the Glic panel.
+BASE_DECLARE_FEATURE(kGlicAskGeminiWayfinding);
 }  // namespace features
 
 #endif  // CHROME_BROWSER_GLIC_PUBLIC_FEATURES_H_

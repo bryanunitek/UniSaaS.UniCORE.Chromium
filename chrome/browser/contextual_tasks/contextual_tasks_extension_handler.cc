@@ -332,9 +332,18 @@ void ContextualTasksExtensionHandler::HandleLensButtonClick() {
 
   base::RecordAction(base::UserMetricsAction(
       "ContextualTasks.Composebox.UserAction.LensButtonClicked"));
+  base::UmaHistogramBoolean(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked", true);
+
+  auto* user_data = GetOrCreateWebContentsUserData();
+  if (user_data) {
+    base::UmaHistogramEnumeration(
+        "ContextualTasks.Composebox.UserAction.LensButtonClicked.PageState",
+        user_data->GetPageState());
+  }
 
   if (auto* controller = GetLensSearchController()) {
-    if (auto* user_data = GetOrCreateWebContentsUserData()) {
+    if (user_data) {
       controller->SetThumbnailCreatedCallback(base::BindRepeating(
           &contextual_tasks::ContextualTasksWebContentsUserData::
               OnLensThumbnailCreated,
@@ -598,6 +607,7 @@ void ContextualTasksExtensionHandler::AddTabContext(
     return;
   }
 
+  const bool should_attach_tab = tab_contents && session_id.is_valid();
   auto result = contextual_tasks::CaptureAndUploadTabContext(
       tab_id, session_handle,
       /*on_context_uploaded=*/
@@ -613,12 +623,10 @@ void ContextualTasksExtensionHandler::AddTabContext(
             }
           },
           user_data->AsWeakPtr()),
-      /*browser_window_interface=*/GetBrowserWindowInterface());
-  if (result.has_value() && tab_contents && session_id.is_valid()) {
+      /*browser_window_interface=*/GetBrowserWindowInterface(),
+      should_attach_tab ? user_data : nullptr);
+  if (result.has_value() && should_attach_tab) {
     user_data->RecordTabIdMapping(tab_id, session_id.id());
-    // Mark the upload as started before `AttachTabPendingUpload()`, which
-    // synchronously notifies `user_data` to recompute its context state.
-    user_data->OnTabContextUploadStarted(*result);
     // Attach the tab right away, while its page context is captured, so that
     // it is selected (and can be deleted) from now on. Its upload updates the
     // attached tab in place.

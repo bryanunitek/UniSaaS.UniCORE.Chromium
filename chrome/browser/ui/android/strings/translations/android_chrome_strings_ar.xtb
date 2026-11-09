@@ -41,6 +41,7 @@
 <translation id="1142732900304639782">عدم اقتراح ترجمة لهذه المواقع الإلكترونية</translation>
 <translation id="1143193470214071120">يُرجى إغلاق نافذة أو إدارة النوافذ</translation>
 <translation id="1143486892058798649">حفظ الرابط كـ…</translation>
+<translation id="1149644372535087155">‏حفظ كلمات المرور في Chrome</translation>
 <translation id="1149725087019908252">جارٍ فحص ملف <ph name="FILE_NAME" /></translation>
 <translation id="1150263420752757504">‏سيتم فتح تطبيق "<ph name="APP_NAME" />" في Chrome. تعني المتابعة موافقتك على <ph name="BEGIN_LINK1" />بنود خدمة Google<ph name="END_LINK1" /> و<ph name="BEGIN_LINK2" />بنود الخدمة الإضافية لكل من متصفّح Google Chrome ونظام التشغيل Chrome<ph name="END_LINK2" />.</translation>
 <translation id="1154555449933432029">‏ليس لديك كلمات مرور محفوظة في "مدير كلمات المرور في Google".</translation>
@@ -188,6 +189,7 @@
 <translation id="1749561566933687563">مزامنة الإشارات المرجعية</translation>
 <translation id="1750238553597293878">‏مواصلة استخدام كلمات المرور في حسابك على Google</translation>
 <translation id="1753744496844366747">Aa</translation>
+<translation id="1760139219747062315">استعادة النافذة "<ph name="TITLE_OF_WINDOW" />"</translation>
 <translation id="1760873718737761808">{FILE_COUNT,plural, =1{تحتوي القائمة على صفحة واحدة من إجمالي الصفحات.}zero{تحتوي القائمة على # صفحة من إجمالي الصفحات.}two{تحتوي القائمة على صفحتيَن من إجمالي الصفحات.}few{تحتوي القائمة على # صفحات من إجمالي الصفحات.}many{تحتوي القائمة على # صفحةً من إجمالي الصفحات.}other{تحتوي القائمة على # صفحة من إجمالي الصفحات.}}</translation>
 <translation id="1771929606532798550">‏يتم إرسال معلومات إلى Google متعلّقة باستخدامك لمتصفِّح Chrome، ولكن لا يتم ربطها بك\n\nفي حال تعطُّل متصفِّح Chrome، قد تشتمل تفاصيل التعطُّل على بعض المعلومات الشخصية\n\nفي حال مزامنة السجلّ مع حسابك على Google، قد تتضمّن المقاييس أيضًا معلومات عن عناوين URL التي تنتقل إليها</translation>
 <translation id="1778457539567749232">وضع علامة "غير مقروءة"</translation>
@@ -299,6 +301,7 @@
 <translation id="2190355936436201913">(فارغ)</translation>
 <translation id="219283042927675668">علامات التبويب في المجموعة</translation>
 <translation id="2194856509914051091">ملاحظات مهمّة</translation>
+<translation id="2195339740518523951">‏الحصول على أعلى مستوى من الحماية في متصفِّح Chrome</translation>
 <translation id="2196695604589508993">فتح السجلّ</translation>
 <translation id="2205701497928406883">‫"<ph name="TAB_TITLE" />"، علامة تبويب مثبَّتة تشارك محتواها</translation>
 <translation id="22091350895006575">إضافة اسم مستخدِم</translation>
@@ -1257,6 +1260,7 @@
 <translation id="6022659036123304283">‏اجعل Chrome متصفِّحك الدائم</translation>
 <translation id="6023820583797130428">يمكنك فتح القائمة للرجوع</translation>
 <translation id="6026538407078977628">التوسيع إلى وضع ملء الشاشة</translation>
+<translation id="6027619584715411062">سجّل الدخول لاستخدام الإشارات المرجعية وكلمات المرور وغير ذلك على جميع أجهزتك.</translation>
 <translation id="6039379616847168523">الانتقال السريع إلى علامة التبويب التالية</translation>
 <translation id="6040143037577758943">إغلاق</translation>
 <translation id="604124094241169006">تلقائي</translation>
@@ -1602,6 +1606,7 @@
 <translation id="7190921792980745354">هل تريد حظر "<ph name="MEMBER_FULL_NAME" />"؟</translation>
 <translation id="7191430249889272776">تم فتح علامة التبويب في الخلفية.</translation>
 <translation id="7192397795254933433">{NUM_PASSWORDS,plural, =1{يجب تغيير كلمة المرور هذه الآن}zero{يجب تغيير كلمات المرور هذه الآن}two{يجب تغيير كلمتَي المرور هاتين الآن}few{يجب تغيير كلمات المرور هذه الآن}many{يجب تغيير كلمات المرور هذه الآن}other{يجب تغيير كلمات المرور هذه الآن}}</translation>
+<translation id="7192569620455808130">{TAB_COUNT,plural, =1{استعادة نافذة تحتوي على علامة تبويب واحدة (<ph name="TAB_COUNT_ONE" />)}zero{استعادة نافذة تحتوي على <ph name="TAB_COUNT_MANY" /> علامة تبويب}two{استعادة نافذة تحتوي على علامتَي تبويب (<ph name="TAB_COUNT_MANY" />)}few{استعادة نافذة تحتوي على <ph name="TAB_COUNT_MANY" /> علامات تبويب}many{استعادة نافذة تحتوي على <ph name="TAB_COUNT_MANY" /> علامة تبويب}other{استعادة نافذة تحتوي على <ph name="TAB_COUNT_MANY" /> علامة تبويب}}</translation>
 <translation id="7196215469483532480">تم فتح شرح دليل الخصوصية بطول الشاشة.</translation>
 <translation id="7196455519852483601">يمكنك حذف كل أو بعض بيانات السجلّ وملفات تعريف الارتباط وبيانات المواقع الإلكترونية وغير ذلك</translation>
 <translation id="7197682514647286393">حذف بيانات التصفّح بسرعة</translation>
@@ -1856,6 +1861,7 @@
 <translation id="8135406045838672858">‏يتم تلقائيًا استخدام "<ph name="APP_NAME" />" لفتح ملفات PDF التي تم تنزيلها.</translation>
 <translation id="8136382224326893">{NUM_TABS,plural, =1{تم استلام رابط واحد}zero{تم استلام # رابط}two{تم استلام رابطَين}few{تم استلام # روابط}many{تم استلام # رابطًا}other{تم استلام # رابط}}</translation>
 <translation id="8137562778192957619">‏لن تحتاج إلى تذكُّر كلمة المرور هذه لأنها ستُحفظ في "مدير كلمات المرور في Google".</translation>
+<translation id="8149825829235553327">تأمين علامات التبويب في وضع التصفّح المتخفي</translation>
 <translation id="8151185429379586178">أدوات مطوري البرامج</translation>
 <translation id="8152331954420209374">‏الانتقال إلى "عدسة Google"</translation>
 <translation id="8153206878708357851">تفعيل ميزة "التصفُّح النصي بالمؤشر" أو إيقافها</translation>

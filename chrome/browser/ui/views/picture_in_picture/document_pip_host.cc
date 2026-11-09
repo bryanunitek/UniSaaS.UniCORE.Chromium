@@ -17,6 +17,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/accelerator_table.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
@@ -49,6 +50,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -67,6 +69,10 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/ui/views/picture_in_picture/document_pip_native_widget_mac.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "chrome/browser/ui/views/picture_in_picture/document_pip_native_widget_aura_linux.h"
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -307,7 +313,11 @@ void DocumentPipHost::CreateAndShowPipWindow(
   // primary display's origin.
   params.bounds = initial_bounds;
 
+#if BUILDFLAG(IS_LINUX)
+  widget_ = CreateDocumentPipWidgetLinux(this, params);
+#else
   widget_ = std::make_unique<views::Widget>();
+#endif
 #if BUILDFLAG(IS_MAC)
   // Give the borderless PiP window the default macOS styling (rounded corners +
   // drop shadow) so it matches the Browser-backed Document PiP window. The
@@ -363,6 +373,8 @@ void DocumentPipHost::CreateAndShowPipWindow(
 #endif
 
   restore_focus_on_activation_ = true;
+  PictureInPictureWindowManager::GetInstance()->OnPictureInPictureWindowShown(
+      this);
 #if !BUILDFLAG(IS_WIN)
   // Resizable Windows PiP widgets cannot be translucent.
   fade_animator_ = std::make_unique<PictureInPictureWidgetFadeAnimator>();
@@ -887,6 +899,8 @@ void DocumentPipHost::PrepareForWidgetDestruction() {
     return;
   }
 
+  PictureInPictureWindowManager::GetInstance()->OnPictureInPictureWindowHidden(
+      this);
   widget_observation_.Reset();
   contents_view_observation_.Reset();
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -988,6 +1002,14 @@ void DocumentPipHost::EnforceTucking() {
   } else {
     tucker_->Untuck();
   }
+}
+
+void DocumentPipHost::OnUserDesiredBoundsChanged(const gfx::Rect& bounds) {
+  CHECK(widget_);
+  const auto pip_display = display::Screen::Get()->GetDisplayNearestWindow(
+      widget_->GetNativeWindow());
+  PictureInPictureWindowManager::GetInstance()->UpdateCachedBounds(bounds,
+                                                                   pip_display);
 }
 
 views::Widget* DocumentPipHost::GetPipWidget() {
@@ -1168,6 +1190,13 @@ void DocumentPipHost::OnWidgetBoundsChanged(views::Widget* widget,
     exclusive_access_context_->RepositionBubble();
   }
   NotifyPositionRequiresUpdate();
+}
+
+void DocumentPipHost::OnWidgetVisibilityChanged(views::Widget* widget,
+                                                bool visible) {
+  if (visible) {
+    EnforceTucking();
+  }
 }
 
 void DocumentPipHost::OnWidgetDestroying(views::Widget* widget) {

@@ -649,6 +649,9 @@ class ChildProcessSecurityPolicyImpl::ProcessState {
 
   bool MatchesCommittedOrigin(const GURL& url,
                               bool url_is_for_precursor_origin) const {
+    const url::Origin url_origin = url::Origin::Create(url);
+    const url::SchemeHostPort& url_scheme_host_port =
+        url_origin.GetTupleOrPrecursorTupleIfOpaque();
     for (auto& origin : committed_origins_) {
       // If the committed origin is non-opaque, check that the `url` has the
       // same origin.
@@ -663,7 +666,7 @@ class ChildProcessSecurityPolicyImpl::ProcessState {
       // script URL, resulting in an opaque origin with a precursor which needs
       // to pass the check here. This case should be fixed (e.g., by adding that
       // worker's origin to the list of committed origins).
-      if (!origin.opaque() && origin.IsSameOriginWith(url)) {
+      if (!origin.opaque() && origin.IsSameOriginWith(url_origin)) {
         return true;
       }
 
@@ -671,8 +674,7 @@ class ChildProcessSecurityPolicyImpl::ProcessState {
       // a precursor of an opaque origin, and then check if it matches the
       // committed origin's precursor.
       if (origin.opaque() && url_is_for_precursor_origin &&
-          origin.GetTupleOrPrecursorTupleIfOpaque() ==
-              url::SchemeHostPort(url)) {
+          origin.GetTupleOrPrecursorTupleIfOpaque() == url_scheme_host_port) {
         return true;
       }
 
@@ -888,8 +890,7 @@ class ChildProcessSecurityPolicyImpl::ProcessState {
     return false;
   }
 
-  void SetProcessLock(const ProcessLock& lock_to_set,
-                      const IsolationContext& context) {
+  void SetProcessLock(const ProcessLock& lock_to_set) {
     CHECK(!lock_to_set.is_invalid());
     CHECK(lock_to_set.is_unused())
         << "Cannot lock a process to an already used lock: " << lock_to_set;
@@ -937,7 +938,6 @@ class ChildProcessSecurityPolicyImpl::ProcessState {
       // Rust `ProcessLock<Locked>::new()`.
       SetProcessIsUsed(/*shard=*/std::nullopt);
     }
-    AddBrowsingInstanceInfo(context);
   }
 
   // Marks the process as used, and assigns or checks its shard (see
@@ -1288,17 +1288,19 @@ void ChildProcessSecurityPolicyImpl::AddForTesting(
     ChildProcessId child_id,
     BrowserContext* browser_context) {
   Add(child_id);
-  LockProcess(IsolationContext(
-                  BrowsingInstanceId(1), browser_context,
-                  /*is_guest=*/false, /*is_fenced=*/false,
-                  OriginAgentClusterIsolationState::CreateForDefaultIsolation(
-                      browser_context)),
-              child_id,
+  LockProcess(child_id,
               ProcessLock::CreateAllowAnySite(
                   StoragePartitionConfig::CreateDefault(browser_context),
                   WebExposedIsolationInfo::CreateNonIsolated(),
                   /*cross_origin_isolation_key=*/std::nullopt,
                   browser_context->UniqueToken()));
+  IncludeIsolationContext(
+      child_id.value(),
+      IsolationContext(
+          BrowsingInstanceId(1), browser_context,
+          /*is_guest=*/false, /*is_fenced=*/false,
+          OriginAgentClusterIsolationState::CreateForDefaultIsolation(
+              browser_context)));
 }
 
 void ChildProcessSecurityPolicyImpl::Remove(ChildProcessId child_id) {
@@ -1567,10 +1569,9 @@ void ChildProcessSecurityPolicyImpl::GrantCommitOfExternalFileUrl(
   }
 
   // Note: We explicitly continue with C++ state update as well even when in
-  // Rust-only mode, since ProcessState::CanCommitURL and
-  // ProcessState::CanRequestURL have not yet been implemented in Rust. Once
-  // they are supported in Rust, this should be combined into a
-  // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  // Rust-only mode, since ProcessState::CanRequestURL has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
   GrantCommitOfExternalFileUrl_Cpp(child_id, url);
 }
 
@@ -1741,10 +1742,9 @@ void ChildProcessSecurityPolicyImpl::GrantCommitOrigin(
   }
 
   // Note: We explicitly continue with C++ state update as well even when in
-  // Rust-only mode, since ProcessState::CanCommitURL and
-  // ProcessState::CanRequestURL have not yet been implemented in Rust. Once
-  // they are supported in Rust, this should be combined into a
-  // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  // Rust-only mode, since ProcessState::CanRequestURL has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
   GrantCommitOrigin_Cpp(child_id, origin);
 }
 
@@ -1771,10 +1771,9 @@ void ChildProcessSecurityPolicyImpl::GrantRequestOrigin(
   }
 
   // Note: We explicitly continue with C++ state update as well even when in
-  // Rust-only mode, since ProcessState::CanCommitURL and
-  // ProcessState::CanRequestURL have not yet been implemented in Rust. Once
-  // they are supported in Rust, this should be combined into a
-  // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  // Rust-only mode, since ProcessState::CanRequestURL has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
   GrantRequestOrigin_Cpp(child_id, origin);
 }
 
@@ -1799,10 +1798,9 @@ void ChildProcessSecurityPolicyImpl::GrantCommitScheme(
   }
 
   // Note: We explicitly continue with C++ state update as well even when in
-  // Rust-only mode, since ProcessState::CanCommitURL and
-  // ProcessState::CanRequestURL have not yet been implemented in Rust. Once
-  // they are supported in Rust, this should be combined into a
-  // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  // Rust-only mode, since ProcessState::CanRequestURL has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
   GrantCommitScheme_Cpp(child_id, scheme);
 }
 
@@ -1827,10 +1825,9 @@ void ChildProcessSecurityPolicyImpl::GrantRequestScheme(
   }
 
   // Note: We explicitly continue with C++ state update as well even when in
-  // Rust-only mode, since ProcessState::CanCommitURL and
-  // ProcessState::CanRequestURL have not yet been implemented in Rust. Once
-  // they are supported in Rust, this should be combined into a
-  // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  // Rust-only mode, since ProcessState::CanRequestURL has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
   GrantRequestScheme_Cpp(child_id, scheme);
 }
 
@@ -2043,6 +2040,13 @@ bool ChildProcessSecurityPolicyImpl::CanCommitURL(int child_id,
 
 bool ChildProcessSecurityPolicyImpl::CanCommitURL(ChildProcessId child_id,
                                                   const GURL& url) {
+  RUST_CPP_PROCESS_STATE_RETURN_FUNCTION(
+      rust::child_process_security_policy::can_commit_url(child_id, url),
+      CanCommitURL_Cpp(child_id, url));
+}
+
+bool ChildProcessSecurityPolicyImpl::CanCommitURL_Cpp(ChildProcessId child_id,
+                                                      const GURL& url) {
   if (!url.is_valid()) {
     LogCanCommitUrlFailureReason("invalid_url");
     return false;  // Can't commit invalid URLs.
@@ -2082,7 +2086,7 @@ bool ChildProcessSecurityPolicyImpl::CanCommitURL(ChildProcessId child_id,
     }
     // No need to log a failure reason here, because it will be logged in the
     // sole recursive call if that call returns false.
-    return CanCommitURL(child_id, GURL(origin.Serialize()));
+    return CanCommitURL_Cpp(child_id, GURL(origin.Serialize()));
   }
 
   // Allow data URLs to commit in any process. Note that the precursor origin
@@ -2509,6 +2513,20 @@ bool ChildProcessSecurityPolicyImpl::MatchesCommittedOriginForTesting(
     ChildProcessId child_id,
     const GURL& url,
     bool url_is_for_precursor_origin) {
+  RUST_CPP_PROCESS_STATE_RETURN_FUNCTION(
+      rust::child_process_security_policy::
+          matches_committed_origin_for_testing(  // IN-TEST
+              child_id,
+              // Make a copy for Rust to own.
+              std::make_unique<GURL>(url), url_is_for_precursor_origin),
+      MatchesCommittedOriginForTesting_Cpp(  // IN-TEST
+          child_id, url, url_is_for_precursor_origin));
+}
+
+bool ChildProcessSecurityPolicyImpl::MatchesCommittedOriginForTesting_Cpp(
+    ChildProcessId child_id,
+    const GURL& url,
+    bool url_is_for_precursor_origin) {
   base::AutoLock lock(lock_);
 
   if (auto* process_state = process_states_.GetProcessStateForQuery(child_id)) {
@@ -2519,6 +2537,15 @@ bool ChildProcessSecurityPolicyImpl::MatchesCommittedOriginForTesting(
 }
 
 size_t ChildProcessSecurityPolicyImpl::GetCommittedOriginCountForTesting(
+    ChildProcessId child_id) {
+  RUST_CPP_PROCESS_STATE_RETURN_FUNCTION(
+      rust::child_process_security_policy::
+          committed_origin_count_for_testing(  // IN-TEST
+              child_id),
+      GetCommittedOriginCountForTesting_Cpp(child_id));  // IN-TEST
+}
+
+size_t ChildProcessSecurityPolicyImpl::GetCommittedOriginCountForTesting_Cpp(
     ChildProcessId child_id) {
   base::AutoLock lock(lock_);
 
@@ -3054,6 +3081,7 @@ bool ChildProcessSecurityPolicyImpl::CanCommitMaybeOpaqueNewOrigin(
     ChildProcessId child_id,
     const GURL& url,
     bool url_is_precursor_of_opaque_origin) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   base::AutoLock lock(lock_);
 
   const ProcessState* process_state =
@@ -3117,16 +3145,12 @@ bool ChildProcessSecurityPolicyImpl::CanCommitMaybeOpaqueNewOrigin(
   std::string keep_alive_durations;
   std::string shutdown_delay_ref_count;
   std::string process_rfh_count;
-  if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    if (auto* process = RenderProcessHostImpl::FromID(child_id)) {
-      keep_alive_durations = process->GetKeepAliveDurations();
-      shutdown_delay_ref_count =
-          base::NumberToString(process->GetShutdownDelayRefCount());
-      process_rfh_count =
-          base::NumberToString(process->GetRenderFrameHostCount());
-    }
-  } else {
-    keep_alive_durations = "no durations available: on IO thread.";
+  if (auto* process = RenderProcessHostImpl::FromID(child_id)) {
+    keep_alive_durations = process->GetKeepAliveDurations();
+    shutdown_delay_ref_count =
+        base::NumberToString(process->GetShutdownDelayRefCount());
+    process_rfh_count =
+        base::NumberToString(process->GetRenderFrameHostCount());
   }
 
   // Returning false here will often result in a renderer kill.  Set some crash
@@ -3163,7 +3187,6 @@ bool ChildProcessSecurityPolicyImpl::CanAccessMaybeOpaqueOrigin(
 
   const ProcessState* process_state =
       process_states_.GetProcessStateForQuery(child_id);
-  ProcessLock expected_process_lock;
   std::string failure_reason;
 
   if (!process_state) {
@@ -3218,10 +3241,14 @@ bool ChildProcessSecurityPolicyImpl::CanAccessMaybeOpaqueOrigin(
 
   // Returning false here will often result in a renderer kill.  Set some crash
   // keys that will help understand the circumstances of that kill.
+  // Note: Unlike CanCommitMaybeOpaqueNewOrigin(), this function does not
+  // compute an expected ProcessLock; pass "{  no-site-info }" (matching
+  // ProcessLock().ToString()) to preserve continuity with existing crash
+  // queries.
   // TODO(crbug.com/476412562): Find a way to scope these keys so that they do
   // not appear in later unrelated crash reports.
   LogCanAccessDataForOriginCrashKeys(
-      expected_process_lock.ToString(),
+      /*expected_process_lock=*/"{  no-site-info }",
       GetKilledProcessOriginLock(process_state),
       url.DeprecatedGetOriginAsURL().spec(), failure_reason,
       keep_alive_durations, shutdown_delay_ref_count, process_rfh_count,
@@ -3243,6 +3270,8 @@ void ChildProcessSecurityPolicyImpl::IncludeIsolationContext(
     int child_id,
     const IsolationContext& isolation_context) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  // TODO(crbug.com/522872468): The Rust implementation does not yet track
+  // BrowsingInstance isolation state.
   base::AutoLock lock(lock_);
   // TODO(crbug.com/379869738) Remove FromUnsafeValue.
   auto* state = process_states_.GetProcessStateForMutation(
@@ -3252,7 +3281,6 @@ void ChildProcessSecurityPolicyImpl::IncludeIsolationContext(
 }
 
 void ChildProcessSecurityPolicyImpl::LockProcess(
-    const IsolationContext& context,
     ChildProcessId child_id,
     const ProcessLock& process_lock) {
   // LockProcess should only be called on the UI thread (OTOH, it is okay to
@@ -3260,10 +3288,6 @@ void ChildProcessSecurityPolicyImpl::LockProcess(
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (IsRustEnabled(GetRustPolicy(CpspRustFeature::kProcessState))) {
-    // TODO(crbug.com/522872468): The `IsolationContext` is currently ignored by
-    // the Rust implementation, which does not yet track BrowsingInstance
-    // isolation state (`browsing_instance_default_isolation_states_`). Support
-    // this in Rust (ideally decoupled from `LockProcess()`).
     rust::child_process_security_policy::lock_process(child_id, process_lock);
   }
 
@@ -3272,17 +3296,16 @@ void ChildProcessSecurityPolicyImpl::LockProcess(
   // partially been implemented by the Rust version so far. Once ProcessState
   // is fully supported in Rust, this should be combined into a
   // RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
-  LockProcess_Cpp(context, child_id, process_lock);
+  LockProcess_Cpp(child_id, process_lock);
 }
 
 void ChildProcessSecurityPolicyImpl::LockProcess_Cpp(
-    const IsolationContext& context,
     ChildProcessId child_id,
     const ProcessLock& process_lock) {
   base::AutoLock lock(lock_);
   auto* state = process_states_.GetProcessStateForMutation(child_id);
   CHECK(state);
-  state->SetProcessLock(process_lock, context);
+  state->SetProcessLock(process_lock);
 }
 
 void ChildProcessSecurityPolicyImpl::SetProcessIsUsed(
@@ -3319,8 +3342,8 @@ void ChildProcessSecurityPolicyImpl::LockProcessForTesting(
     ChildProcessId child_id,
     const GURL& url) {
   SiteInfo site_info = SiteInfo::CreateForTesting(isolation_context, url);
-  LockProcess(isolation_context, child_id,
-              ProcessLock::FromSiteInfo(site_info));
+  LockProcess(child_id, ProcessLock::FromSiteInfo(site_info));
+  IncludeIsolationContext(child_id.value(), isolation_context);
 }
 
 ProcessLock ChildProcessSecurityPolicyImpl::GetProcessLock(
@@ -4695,6 +4718,24 @@ void ChildProcessSecurityPolicyImpl::AddCommittedOrigin(
     int child_id,
     const url::Origin& origin) {
   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  if (IsRustEnabled(GetRustPolicy(CpspRustFeature::kProcessState))) {
+    rust::child_process_security_policy::add_committed_origin(
+        // TODO(crbug.com/379869738) Remove FromUnsafeValue.
+        ChildProcessId::FromUnsafeValue(child_id),
+        // Make a copy for Rust to own.
+        std::make_unique<url::Origin>(origin));
+  }
+
+  // Note: We explicitly continue with C++ state update as well even when in
+  // Rust-only mode, since CanAccessMaybeOpaqueOrigin() has not yet been
+  // implemented in Rust. Once it is supported in Rust, this should be combined
+  // into a RUST_CPP_PROCESS_STATE_VOID_FUNCTION call.
+  AddCommittedOrigin_Cpp(child_id, origin);
+}
+
+void ChildProcessSecurityPolicyImpl::AddCommittedOrigin_Cpp(
+    int child_id,
+    const url::Origin& origin) {
   base::AutoLock lock(lock_);
   // TODO(crbug.com/379869738) Remove FromUnsafeValue.
   auto* state = process_states_.GetProcessStateForMutation(

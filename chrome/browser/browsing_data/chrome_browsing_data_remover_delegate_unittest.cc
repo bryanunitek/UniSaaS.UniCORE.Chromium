@@ -45,7 +45,7 @@
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/zero_suggest_cache_service_factory.h"
-#include "chrome/browser/autofill/entity_suppression_manager_factory.h"
+#include "chrome/browser/autofill/personal_context_entity_metadata_manager_factory.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -105,9 +105,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
-#include "components/autofill/core/browser/data_manager/autofill_ai/entity_suppression_manager.h"
-#include "components/autofill/core/browser/data_manager/autofill_ai/entity_suppression_sync_bridge.h"
-#include "components/autofill/core/browser/data_manager/autofill_ai/entity_suppression_sync_bridge_test_util.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/personal_context_entity_metadata_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
@@ -117,6 +115,8 @@
 #include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
+#include "components/autofill/core/browser/webdata/personal_context/personal_context_entity_metadata_sync_bridge.h"
+#include "components/autofill/core/browser/webdata/personal_context/personal_context_entity_metadata_sync_bridge_test_util.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -2760,42 +2760,45 @@ TEST_F(ChromeBrowsingDataRemoverDelegateTest,
        EntitySuppressionsClearedOnAutofillRemoval) {
   base::test::ScopedFeatureList feature_list{
       autofill::features::kAutofillAmbientAutofillSuppression};
-  std::unique_ptr<autofill::EntitySuppressionSyncBridge> bridge =
-      autofill::CreateTestEntitySuppressionSyncBridge();
+  std::unique_ptr<autofill::PersonalContextEntityMetadataSyncBridge> bridge =
+      autofill::CreateTestPersonalContextEntityMetadataSyncBridge();
   ASSERT_TRUE(base::test::RunUntil([&]() { return bridge->IsLoaded(); }));
-  auto* suppression_manager = static_cast<autofill::EntitySuppressionManager*>(
-      autofill::EntitySuppressionManagerFactory::GetInstance()
-          ->SetTestingFactoryAndUse(
-              GetProfile(),
-              base::BindOnce(
-                  [](std::unique_ptr<autofill::EntitySuppressionSyncBridge>
-                         bridge,
-                     content::BrowserContext*)
-                      -> std::unique_ptr<KeyedService> {
-                    return std::make_unique<autofill::EntitySuppressionManager>(
-                        std::move(bridge));
-                  },
-                  std::move(bridge))));
+  auto* entity_metadata_manager =
+      static_cast<autofill::PersonalContextEntityMetadataManager*>(
+          autofill::PersonalContextEntityMetadataManagerFactory::GetInstance()
+              ->SetTestingFactoryAndUse(
+                  GetProfile(),
+                  base::BindOnce(
+                      [](std::unique_ptr<
+                             autofill::PersonalContextEntityMetadataSyncBridge>
+                             bridge,
+                         content::BrowserContext*)
+                          -> std::unique_ptr<KeyedService> {
+                        return std::make_unique<
+                            autofill::PersonalContextEntityMetadataManager>(
+                            std::move(bridge));
+                      },
+                      std::move(bridge))));
 
   // Suppress one entity two hours ago and one now.
   const autofill::EntityInstance old_entity =
       autofill::test::GetPassportEntityInstance();
   const autofill::EntityInstance new_entity =
       autofill::test::GetDriversLicenseEntityInstance();
-  ASSERT_TRUE(suppression_manager->SuppressEntity(old_entity));
+  ASSERT_TRUE(entity_metadata_manager->SuppressEntity(old_entity));
   task_environment()->AdvanceClock(base::Hours(2));
-  ASSERT_TRUE(suppression_manager->SuppressEntity(new_entity));
+  ASSERT_TRUE(entity_metadata_manager->SuppressEntity(new_entity));
 
   // Removal for the last hour only clears the new suppression.
   BlockUntilBrowsingDataRemoved(AnHourAgo(), base::Time::Max(),
                                 constants::DATA_TYPE_FORM_DATA, false);
-  EXPECT_TRUE(suppression_manager->IsSuppressed(old_entity));
-  EXPECT_FALSE(suppression_manager->IsSuppressed(new_entity));
+  EXPECT_TRUE(entity_metadata_manager->IsSuppressed(old_entity));
+  EXPECT_FALSE(entity_metadata_manager->IsSuppressed(new_entity));
 
   // Removal for all-time clears the remaining suppression.
   BlockUntilBrowsingDataRemoved(base::Time(), base::Time::Max(),
                                 constants::DATA_TYPE_FORM_DATA, false);
-  EXPECT_FALSE(suppression_manager->IsSuppressed(old_entity));
+  EXPECT_FALSE(entity_metadata_manager->IsSuppressed(old_entity));
 }
 
 TEST_F(ChromeBrowsingDataRemoverDelegateTest, ZeroSuggestPrefsBasedCacheClear) {
@@ -4977,28 +4980,15 @@ class ChromeBrowsingDataRemoverDelegateRelatedWebsiteSetsTest
   ContentSettingPatternSource GetExpectedSetting(
       std::string_view primaryUrl,
       std::string_view secondaryUrl) {
-    switch (GetContentSettingsType()) {
-      case ContentSettingsType::STORAGE_ACCESS:
-        return ContentSettingPatternSource(
-            ContentSettingsPattern::FromURLToSchemefulSitePattern(
-                GURL(primaryUrl)),  // e.g. https://[*.]example.com
-            ContentSettingsPattern::FromURLToSchemefulSitePattern(
-                GURL(secondaryUrl)),  // e.g. https://[*.]testsite.com
-            content_settings::ContentSettingToValue(CONTENT_SETTING_ALLOW),
-            content_settings::ProviderType::kPrefProvider, /*incognito=*/false,
-            GetMetadata());
-      case ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS:
-        return ContentSettingPatternSource(
-            ContentSettingsPattern::FromURLNoWildcard(
-                GURL(primaryUrl)),  // e.g. https://subdomain.example.com:112
-            ContentSettingsPattern::FromURLToSchemefulSitePattern(
-                GURL(secondaryUrl)),
-            content_settings::ContentSettingToValue(CONTENT_SETTING_ALLOW),
-            content_settings::ProviderType::kPrefProvider, /*incognito=*/false,
-            GetMetadata());
-      default:
-        NOTREACHED();
-    }
+    CHECK_EQ(GetContentSettingsType(), ContentSettingsType::STORAGE_ACCESS);
+    return ContentSettingPatternSource(
+        ContentSettingsPattern::FromURLToSchemefulSitePattern(
+            GURL(primaryUrl)),  // e.g. https://[*.]example.com
+        ContentSettingsPattern::FromURLToSchemefulSitePattern(
+            GURL(secondaryUrl)),  // e.g. https://[*.]testsite.com
+        content_settings::ContentSettingToValue(CONTENT_SETTING_ALLOW),
+        content_settings::ProviderType::kPrefProvider, /*incognito=*/false,
+        GetMetadata());
   }
 };
 
@@ -5047,13 +5037,11 @@ TEST_P(ChromeBrowsingDataRemoverDelegateRelatedWebsiteSetsTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     ChromeBrowsingDataRemoverDelegateRelatedWebsiteSetsTest,
-    testing::Combine(
-        testing::Bool(),  // IsDecidedByRelatedWebsiteSets.
-        testing::Values(ContentSettingsType::STORAGE_ACCESS,
-                        ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS),
-        testing::Values(FilterOrigins::kByPrimaryUrl,
-                        FilterOrigins::kBySecondaryUrl,
-                        FilterOrigins::kByBothUrls)));
+    testing::Combine(testing::Bool(),  // IsDecidedByRelatedWebsiteSets.
+                     testing::Values(ContentSettingsType::STORAGE_ACCESS),
+                     testing::Values(FilterOrigins::kByPrimaryUrl,
+                                     FilterOrigins::kBySecondaryUrl,
+                                     FilterOrigins::kByBothUrls)));
 
 // Regression test for https://crbug.com/502363986.
 TEST_F(ChromeBrowsingDataRemoverDelegateTest,
@@ -5069,24 +5057,15 @@ TEST_F(ChromeBrowsingDataRemoverDelegateTest,
   content_settings::ContentSettingConstraints rws_constraints;
   rws_constraints.set_lifetime(base::Days(30));
   rws_constraints.set_decided_by_related_website_sets(true);
-  settings_map->SetContentSettingDefaultScope(
-      kRequestedSubdomain, kTopLevel,
-      ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS, CONTENT_SETTING_ALLOW,
-      rws_constraints);
   settings_map->SetContentSettingCustomScope(
       ContentSettingsPattern::FromURLNoWildcard(kRequestedSubdomain),
       ContentSettingsPattern::FromURLToSchemefulSitePattern(kTopLevel),
       ContentSettingsType::STORAGE_ACCESS, CONTENT_SETTING_ALLOW,
       rws_constraints);
 
-  // 1 wildcard setting each, plus 1 specific setting each.
+  // 1 wildcard setting, plus 1 specific setting.
   ASSERT_EQ(
       settings_map->GetSettingsForOneType(ContentSettingsType::STORAGE_ACCESS)
-          .size(),
-      2u);
-  ASSERT_EQ(
-      settings_map
-          ->GetSettingsForOneType(ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS)
           .size(),
       2u);
 
@@ -5102,11 +5081,6 @@ TEST_F(ChromeBrowsingDataRemoverDelegateTest,
       content::BrowsingDataRemover::DATA_TYPE_RELATED_WEBSITE_SETS_PERMISSIONS,
       std::move(filter_builder));
 
-  EXPECT_EQ(
-      settings_map
-          ->GetSettingsForOneType(ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS)
-          .size(),
-      1u);
   EXPECT_EQ(
       settings_map->GetSettingsForOneType(ContentSettingsType::STORAGE_ACCESS)
           .size(),

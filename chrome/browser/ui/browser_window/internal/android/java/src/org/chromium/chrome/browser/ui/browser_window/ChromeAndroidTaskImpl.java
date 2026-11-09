@@ -457,6 +457,13 @@ final class ChromeAndroidTaskImpl
             mChromeAndroidTaskImpl.removeAllFeaturesForTabModel(incognitoModel);
             var incognitoProfile = incognitoModel.getProfile();
             if (incognitoProfile != null) {
+                // Features scoped to this Activity and the incognito Profile (e.g. the ones added
+                // for an incognito-only Activity) depend on the incognito BrowserWindow.
+                mChromeAndroidTaskImpl.removeAllFeaturesForActivityAndProfile(
+                        mInternalActivityScopedObjects
+                                .mActivityScopedObjects
+                                .mActivityWindowAndroid,
+                        incognitoProfile);
                 var browserWindow =
                         mInternalActivityScopedObjects.mAndroidBrowserWindows.get(incognitoProfile);
                 if (browserWindow != null) {
@@ -789,12 +796,6 @@ final class ChromeAndroidTaskImpl
     }
 
     @Override
-    public void removeAllFeaturesForActivity(ActivityWindowAndroid activityWindowAndroid) {
-        ThreadUtils.assertOnUiThread();
-        removeAllFeaturesForActivityInternal(activityWindowAndroid);
-    }
-
-    @Override
     public List<Profile> getValidProfilesForActivity(ActivityWindowAndroid activityWindowAndroid) {
         ThreadUtils.assertOnUiThread();
 
@@ -918,19 +919,21 @@ final class ChromeAndroidTaskImpl
                     == internalActivityScopedObjects.mActivityScopedObjects.mActivityWindowAndroid;
             assert browserWindow.getNativePtr() != null : "Native object has not been created.";
 
-            var profile = browserWindow.getProfile();
+            internalActivityScopedObjects.mAndroidBrowserWindows.remove(browserWindow.getProfile());
+        }
+
+        // Note: Notify observers after removing from mAndroidBrowserWindows (so iterators exclude
+        // the closing window) and before dissociating the TabModel or destroying browserWindow.
+        if (browserWindow.getNativePtr() != null) {
+            browserWindowObserverNotifier.notifyBrowserWindowDestroyed(browserWindow);
+        }
+
+        if (internalActivityScopedObjects != null) {
             internalActivityScopedObjects
                     .mActivityScopedObjects
                     .mTabModelSelector
-                    .getModel(profile.isOffTheRecord())
+                    .getModel(browserWindow.getProfile().isOffTheRecord())
                     .dissociateWithBrowserWindow();
-            internalActivityScopedObjects.mAndroidBrowserWindows.remove(profile);
-        }
-
-        // Note: Notify observers immediately before browserWindow.destroy(), and after everything
-        // else.
-        if (browserWindow.getNativePtr() != null) {
-            browserWindowObserverNotifier.notifyBrowserWindowDestroyed(browserWindow);
         }
         browserWindow.destroy();
     }
@@ -1354,6 +1357,13 @@ final class ChromeAndroidTaskImpl
     }
 
     @Override
+    public long getActiveNativeBrowserWindowPtr() {
+        ThreadUtils.assertOnUiThread();
+        var activeWindow = getActiveBrowserWindow();
+        return activeWindow != null ? activeWindow.getOrCreateLegacyNativePtr() : 0;
+    }
+
+    @Override
     public void addAndroidBrowserWindowObserver(AndroidBrowserWindowObserver observer) {
         mAndroidBrowserWindowObserverNotifier.addObserver(observer);
     }
@@ -1472,9 +1482,13 @@ final class ChromeAndroidTaskImpl
                     new InternalActivityScopedObjects(activityScopedObjects, newBrowserWindow);
             mActivityScopedObjectsDeque.addFirst(internalActivityScopedObjects);
 
-            if (activityScopedObjects.mSupportedProfileType == SupportedProfileType.MIXED) {
+            // Both mixed and incognito-only Activities use an IncognitoTabModel, which destroys
+            // its native TabListInterface when it becomes empty.
+            if (activityScopedObjects.mSupportedProfileType != SupportedProfileType.REGULAR) {
                 internalActivityScopedObjects.addIncognitoTabModelObserver(this);
+            }
 
+            if (activityScopedObjects.mSupportedProfileType == SupportedProfileType.MIXED) {
                 // If the activity was recreated in Incognito mode, the current model is Incognito.
                 // However, the regular TabModel also exists. We need to explicitly create its
                 // AndroidBrowserWindow here to reflect this reality, since it won't be caught by
@@ -1700,6 +1714,14 @@ final class ChromeAndroidTaskImpl
 
     private void removeAllFeaturesForTabModel(TabModel tabModel) {
         removeFeaturesIf(key -> tabModel == key.mTabModel);
+    }
+
+    private void removeAllFeaturesForActivityAndProfile(
+            ActivityWindowAndroid activityWindowAndroid, Profile profile) {
+        removeFeaturesIf(
+                key ->
+                        activityWindowAndroid == key.mActivityWindowAndroid
+                                && profile.equals(key.mProfile));
     }
 
     private void removeAllActivityScopedObjects() {

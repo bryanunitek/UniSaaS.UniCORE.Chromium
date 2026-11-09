@@ -68,6 +68,11 @@ BASE_DECLARE_FEATURE(kApiOdfsConfigPrivate);
 // Controls the availability of the contextualTasksPrivate API.
 BASE_DECLARE_FEATURE(kApiContextualTasksPrivate);
 
+// Controls the availability of the
+// `contextualTasksPrivate.registerAimThreadForPromo` API for ABA search
+// journeys.
+BASE_DECLARE_FEATURE(kApiContextualTasksPrivateAba);
+
 // Controls the availability of the glicPrivate API.
 BASE_DECLARE_FEATURE(kApiGlicPrivate);
 
@@ -199,14 +204,14 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kMaxScriptSizeForBackgroundCompilation);
 // prompting the user.
 BASE_DECLARE_FEATURE(kExtensionAutoRejectIncognitoConnectability);
 
-// If enabled (the default), extensions calling chrome.debugger.attach are
-// rejected upfront when enterprise policy configures runtime_blocked_hosts or
-// disables/restricts screenshots. If disabled (kill switch), extension debugger
-// attachment reverts to the pre-existing behavior prior to M155: falling back
-// to per-URL IsPolicyBlockedHost checks and allowing attachment when
-// screenshots are disabled. Note that disabling this feature has security
-// implications.
-// See https://developer.chrome.com/blog/debugger-enterprise-policy-restrictions.
+// If enabled, extensions calling chrome.debugger.attach are rejected upfront
+// when enterprise policy configures runtime_blocked_hosts or disables/restricts
+// screenshots. If disabled (the default), extension debugger attachment reverts
+// to the pre-existing behavior prior to M155: falling back to per-URL
+// IsPolicyBlockedHost checks and allowing attachment when screenshots are
+// disabled. Note that disabling this feature has security implications.
+// See
+// https://developer.chrome.com/blog/debugger-enterprise-policy-restrictions.
 BASE_DECLARE_FEATURE(kExtensionDebuggerStrictPolicyRestrictions);
 
 // If enabled (the default), ExtensionDownloader decides whether to require Web

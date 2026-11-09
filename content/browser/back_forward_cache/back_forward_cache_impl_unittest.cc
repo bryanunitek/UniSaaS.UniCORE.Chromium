@@ -7,8 +7,10 @@
 #include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/memory_pressure_source.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -33,9 +35,12 @@ GURL GetNextUrl() {
 }
 
 void SimulateMemoryPressure(base::MemoryPressureLevel memory_pressure_level) {
+  base::MemoryPressureListenerRegistry::SimulatePressureNotification(
+      memory_pressure_level);
+  // Flush the eviction tasks posted by the notification.
   base::RunLoop run_loop;
-  base::MemoryPressureListenerRegistry::SimulatePressureNotificationAsync(
-      memory_pressure_level, run_loop.QuitClosure());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
   run_loop.Run();
 }
 
@@ -332,6 +337,7 @@ class BackForwardCacheMemoryPressureTest
   }
 
  private:
+  base::MemoryPressureSource memory_pressure_source_;
   base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -413,13 +419,17 @@ class BackForwardCacheMemoryPressureStatefulTest
   }
 
   void SimulateMemoryPressure(base::MemoryPressureLevel memory_pressure_level) {
+    base::MemoryPressureListenerRegistry::SimulatePressureNotification(
+        memory_pressure_level);
+    // Flush the eviction tasks posted by the notification.
     base::RunLoop run_loop;
-    base::MemoryPressureListenerRegistry::SimulatePressureNotificationAsync(
-        memory_pressure_level, run_loop.QuitClosure());
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, run_loop.QuitClosure());
     run_loop.Run();
   }
 
  private:
+  base::MemoryPressureSource memory_pressure_source_;
   base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -528,13 +538,17 @@ class BackForwardCacheVisibilityPressureTest
   }
 
   void SimulateMemoryPressure(base::MemoryPressureLevel memory_pressure_level) {
+    base::MemoryPressureListenerRegistry::SimulatePressureNotification(
+        memory_pressure_level);
+    // Flush the eviction tasks posted by the notification.
     base::RunLoop run_loop;
-    base::MemoryPressureListenerRegistry::SimulatePressureNotificationAsync(
-        memory_pressure_level, run_loop.QuitClosure());
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, run_loop.QuitClosure());
     run_loop.Run();
   }
 
  private:
+  base::MemoryPressureSource memory_pressure_source_;
   base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };

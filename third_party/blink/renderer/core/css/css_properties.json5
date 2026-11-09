@@ -430,6 +430,12 @@
       default: [],
     },
 
+    // Maps runtime feature names to the keywords they enable.
+    runtime_enabled_keywords: {
+      default: {},
+      valid_type: "dict",
+    },
+
     // - default_value: "keyword-value"
     // This specifies the default value for this field.
     // - for keyword fields, this is the initial keyword
@@ -2166,7 +2172,7 @@
     },
     {
       name: "background-attachment",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       keywords: ["scroll", "fixed", "local"],
       typedom_types: ["Keyword"],
       separator: " ",
@@ -2205,7 +2211,7 @@
     },
     {
       name: "background-clip",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       keywords: ["border-box", "padding-box", "content-box", "text", "border-area"],
       typedom_types: ["Keyword"],
       separator: " ",
@@ -2224,7 +2230,7 @@
     },
     {
       name: "background-color",
-      property_methods: ["CSSValueFromComputedStyleInternal", "ColorIncludingFallback"],
+      property_methods: ["CSSValueFromComputedStyleInternal", "ColorIncludingFallback", "InitialValue"],
       parse_helper: "ConsumeColorMaybeQuirky",
       interpolable: true,
       compositable: true,
@@ -2256,7 +2262,7 @@
     },
     {
       name: "background-image",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       interpolable: true,
       keywords: ["none"],
       typedom_types: ["Keyword", "Image"],
@@ -2277,7 +2283,7 @@
     },
     {
       name: "background-origin",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       keywords: ["border-box", "padding-box", "content-box"],
       typedom_types: ["Keyword"],
       separator: " ",
@@ -2295,7 +2301,7 @@
     },
     {
       name: "background-position-x",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       interpolable: true,
       style_builder_template: "background_layer",
       style_builder_template_args: {
@@ -2314,7 +2320,7 @@
     },
     {
       name: "background-position-y",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       interpolable: true,
       style_builder_template: "background_layer",
       style_builder_template_args: {
@@ -2333,7 +2339,7 @@
     },
     {
       name: "background-repeat",
-      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal"],
+      property_methods: ["ParseSingleValue", "CSSValueFromComputedStyleInternal", "InitialValue"],
       style_builder_template: "background_layer",
       style_builder_template_args: {
         fill_type: "Repeat",
@@ -2347,7 +2353,7 @@
     },
     {
       name: "background-size",
-      property_methods: ["CSSValueFromComputedStyleInternal"],
+      property_methods: ["CSSValueFromComputedStyleInternal", "InitialValue"],
       parse_helper: "ParseBackgroundSize",
       interpolable: true,
       keywords: ["auto", "cover", "contain"],
@@ -5450,6 +5456,11 @@
       field_group: "*",
       field_template: "keyword",
       keywords: ["normal", "flex-visual", "flex-flow", "grid-rows", "grid-columns", "grid-order", "source-order"],
+      runtime_enabled_keywords: {
+        CSSGridLanesLayout: [
+          "grid-lanes-flow", "grid-lanes-track", "grid-lanes-order"
+        ],
+      },
       typedom_types: ["Keyword"],
       default_value: "normal",
       invalidate: ["layout"],
@@ -5475,6 +5486,9 @@
       computed_style_protected_functions: ["getter"],
       style_builder_custom_functions: ["value"],
       keywords: ["none", "both", "horizontal", "vertical", "block", "inline"],
+      runtime_enabled_keywords: {
+        CSSResizeAuto: ["auto"],
+      },
       typedom_types: ["Keyword"],
       default_value: "none",
       invalidate: ["paint"],
@@ -5909,7 +5923,10 @@
       default_value: "cc::SnapStop::kNormal",
       type_name: "cc::SnapStop",
       converter: "ConvertSnapStop",
-      keywords: ["normal", "always", "before"],
+      keywords: ["normal", "always"],
+      runtime_enabled_keywords: {
+        CSSScrollSnapStopBefore: ["before"],
+      },
       typedom_types: ["Keyword"],
     },
     {
@@ -6233,8 +6250,11 @@
       field_template: "keyword",
       keywords: [
         "left", "right", "center", "justify", "-webkit-left", "-webkit-right",
-        "-webkit-center", "start", "end", "match-parent"
+        "-webkit-center", "start", "end"
       ],
+      runtime_enabled_keywords: {
+        CSSTextAlignMatchParent: ["match-parent"],
+      },
       // `match-parent` is an experimental keyword and currently behind the
       // CSSTextAlignMatchParent flag. Since it is not fully supported yet,
       // it is not being exposed to devtools.
@@ -6255,9 +6275,12 @@
       inherited: true,
       field_group: "*",
       field_template: "keyword",
-      keywords: ["auto", "start", "end", "left", "right", "center", "justify",
-        "match-parent"
+      keywords: [
+        "auto", "start", "end", "left", "right", "center", "justify"
       ],
+      runtime_enabled_keywords: {
+        CSSTextAlignMatchParent: ["match-parent"],
+      },
       // `match-parent` is an experimental keyword and currently behind the
       // CSSTextAlignMatchParent flag. Since it is not fully supported yet,
       // it is not being exposed to devtools.
@@ -6403,7 +6426,10 @@
       inherited: true,
       field_group: "*",
       field_template: "keyword",
-      keywords: ["none", "auto", "all"],
+      keywords: ["none", "auto"],
+      runtime_enabled_keywords: {
+        CSSTextDecorationSkipInkAll: ["all"],
+      },
       typedom_types: ["Keyword"],
       default_value: "auto",
       valid_for_first_letter: true,
@@ -7021,7 +7047,11 @@
       // we invalidate for EffectiveAppearance rather than appearance
       keywords: ["auto", "none", "checkbox", "radio", "button", "listbox",
                 "menulist", "menulist-button", "meter", "progress-bar",
-                "searchfield", "textfield", "textarea", "base-select"]
+                "searchfield", "textfield", "textarea", "base-select"],
+      runtime_enabled_keywords: {
+        AppearanceBase: ["base"],
+        NonStandardAppearanceValueSliderVertical: ["slider-vertical"],
+      },
     },
     {
       name: "-webkit-appearance",
@@ -7064,10 +7094,11 @@
       inherited: true,
       field_group: "inherited",
       field_template: "primitive",
-      default_value: "0",
+      include_paths: ["third_party/blink/renderer/platform/geometry/layout_unit.h"],
+      default_value: "LayoutUnit()",
       name_for_methods: "HorizontalBorderSpacing",
-      type_name: "short",
-      converter: "ConvertComputedLength<short>",
+      type_name: "LayoutUnit",
+      converter: "ConvertLayoutUnit",
       valid_for_first_letter: true,
       invalidate: ["layout", "paint"],
       affected_by_zoom: true,
@@ -7091,10 +7122,11 @@
       inherited: true,
       field_group: "inherited",
       field_template: "primitive",
-      default_value: "0",
+      include_paths: ["third_party/blink/renderer/platform/geometry/layout_unit.h"],
+      default_value: "LayoutUnit()",
       name_for_methods: "VerticalBorderSpacing",
-      type_name: "short",
-      converter: "ConvertComputedLength<short>",
+      type_name: "LayoutUnit",
+      converter: "ConvertLayoutUnit",
       valid_for_first_letter: true,
       invalidate: ["layout", "paint"],
       affected_by_zoom: true,
@@ -8176,7 +8208,10 @@
       inherited: true,
       field_group: "*",
       field_template: "keyword",
-      keywords: ["auto", "none", "text", "all", "contain"],
+      keywords: ["auto", "none", "text", "all"],
+      runtime_enabled_keywords: {
+        CSSUserSelectContain: ["contain"],
+      },
       // `contain` is an experimental keyword and currenly behind the
       // CSSUserSelectContain flag.
       // Since it is not fully supported yet, we are not exposing it to
@@ -9688,7 +9723,6 @@
     {
       name: "corner-top-left",
       longhands: ["border-top-left-radius", "corner-top-left-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9697,7 +9731,6 @@
     {
       name: "corner-top-right",
       longhands: ["border-top-right-radius", "corner-top-right-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9706,7 +9739,6 @@
     {
       name: "corner-bottom-left",
       longhands: ["border-bottom-left-radius", "corner-bottom-left-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9715,7 +9747,6 @@
     {
       name: "corner-bottom-right",
       longhands: ["border-bottom-right-radius", "corner-bottom-right-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9724,7 +9755,6 @@
     {
       name: "corner-start-start",
       longhands: ["border-start-start-radius", "corner-start-start-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9733,7 +9763,6 @@
     {
       name: "corner-start-end",
       longhands: ["border-start-end-radius", "corner-start-end-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9742,7 +9771,6 @@
     {
       name: "corner-end-start",
       longhands: ["border-end-start-radius", "corner-end-start-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9751,7 +9779,6 @@
     {
       name: "corner-end-end",
       longhands: ["border-end-end-radius", "corner-end-end-shape"],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9763,7 +9790,6 @@
         "border-top-left-radius", "corner-top-left-shape",
         "border-top-right-radius", "corner-top-right-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9775,7 +9801,6 @@
         "border-top-right-radius", "corner-top-right-shape",
         "border-bottom-right-radius", "corner-bottom-right-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9787,7 +9812,6 @@
         "border-bottom-left-radius", "corner-bottom-left-shape",
         "border-bottom-right-radius", "corner-bottom-right-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9799,7 +9823,6 @@
         "border-top-left-radius", "corner-top-left-shape",
         "border-bottom-left-radius", "corner-bottom-left-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9811,7 +9834,6 @@
         "border-start-start-radius", "corner-start-start-shape",
         "border-start-end-radius", "corner-start-end-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9823,7 +9845,6 @@
         "border-end-start-radius", "corner-end-start-shape",
         "border-end-end-radius", "corner-end-end-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9835,7 +9856,6 @@
         "border-start-start-radius", "corner-start-start-shape",
         "border-end-start-radius", "corner-end-start-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9847,7 +9867,6 @@
         "border-start-end-radius", "corner-start-end-shape",
         "border-end-end-radius", "corner-end-end-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -9861,7 +9880,6 @@
         "border-bottom-right-radius", "corner-bottom-right-shape",
         "border-bottom-left-radius", "corner-bottom-left-shape"
       ],
-      keywords: ["normal"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       runtime_flag: "CSSCornersShorthand",
       valid_for_permission_element: true,
@@ -10050,7 +10068,7 @@
     },
     {
       name: "outline",
-      longhands: ["outline-color", "outline-style", "outline-width"],
+      longhands: ["outline-width", "outline-style", "outline-color"],
       property_methods: ["ParseShorthand", "CSSValueFromComputedStyleInternal"],
       valid_for_page_context: true,
       keywords: ["auto", "none", "inset", "groove", "ridge", "outset", "dotted",

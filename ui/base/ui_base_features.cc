@@ -315,6 +315,18 @@ BASE_FEATURE(kEyeDropper,
 );
 
 bool IsEyeDropperEnabled() {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, the system EyeDropper API (Intent.ACTION_OPEN_EYE_DROPPER) is
+  // only available starting in Android CinnamonBun (API level 37). Return
+  // false on older Android versions to match
+  // SetCustomizedRuntimeFeaturesFromCombinedArgs in runtime_features.cc, which
+  // disables the blink runtime feature in order to prevent the IDL from being
+  // registered.
+  if (base::android::android_info::sdk_int() <
+      base::android::android_info::SDK_VERSION_CINNAMON_BUN) {
+    return false;
+  }
+#endif
   return base::FeatureList::IsEnabled(features::kEyeDropper);
 }
 
@@ -523,6 +535,9 @@ BASE_FEATURE(kRemoveEnsureRFHVisibilityConsistent,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kColorIdCssStyleSheetOptimization,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOmitNativeFrameOnShadowlessMenus,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsGlassFrameEnabled() {

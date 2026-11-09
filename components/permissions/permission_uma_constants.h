@@ -9,7 +9,9 @@
 
 namespace permissions {
 
-// This enum backs a UMA histogram, so it must be treated as append-only.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(PermissionAction)
 enum class PermissionAction {
   GRANTED = 0,
   DENIED = 1,
@@ -18,9 +20,9 @@ enum class PermissionAction {
   REVOKED = 4,
   GRANTED_ONCE = 5,
 
-  // Always keep this at the end.
-  NUM,
+  kMaxValue = GRANTED_ONCE,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/permissions/enums.xml:PermissionAction)
 
 enum class ActivityIndicatorState {
   kInUse = 0,
@@ -76,7 +78,7 @@ enum class RequestTypeForUma {
   PERMISSION_IDLE_DETECTION = 27,
   // PERMISSION_FILE_HANDLING = 28,
   // PERMISSION_U2F_API_REQUEST = 29,
-  PERMISSION_TOP_LEVEL_STORAGE_ACCESS = 30,
+  // PERMISSION_TOP_LEVEL_STORAGE_ACCESS = 30, // Removed in M159.
   // PERMISSION_MIDI = 31,
   PERMISSION_FILE_SYSTEM_ACCESS = 32,
   CAPTURED_SURFACE_CONTROL = 33,

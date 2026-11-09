@@ -452,6 +452,7 @@ base::DictValue NewTabPageUI::GetLoadTimeData(
       {"linkRemove", IDS_NTP_CUSTOM_LINKS_REMOVE},
       {"shortcutReorder", IDS_NTP_CUSTOM_LINKS_REORDER},
       {"shortcutReorderA11y", IDS_NTP_SHORTCUT_REORDER_A11Y},
+      {"shortcutMovedA11y", IDS_NTP_SHORTCUT_MOVED_A11Y},
       {"linkRemoveA11y", IDS_NTP_MOST_VISITED_SITES_REMOVE},
       {"linkRemovedMsg", IDS_NTP_CONFIRM_MSG_SHORTCUT_REMOVED},
       {"shortcutMoreActions", IDS_NTP_CUSTOM_LINKS_MORE_ACTIONS},
@@ -753,6 +754,9 @@ base::DictValue NewTabPageUI::GetLoadTimeData(
            ntp_realbox::IsNtpRealboxNextEnabled(profile) &&
                base::FeatureList::IsEnabled(
                    ntp_realbox::kNtpRealboxDynamicAiModeButton));
+  dict.Set("ntpRealboxDynamicAiModeButtonPreventEarlyPaint",
+           base::FeatureList::IsEnabled(
+               ntp_realbox::kNtpRealboxDynamicAiModeButtonPreventEarlyPaint));
 
   if (ntp_realbox::IsNtpRealboxNextEnabled(profile)) {
     if (base::FeatureList::IsEnabled(
@@ -822,6 +826,8 @@ base::DictValue NewTabPageUI::GetLoadTimeData(
   dict.Set("enableThreadsRail", enable_threads_rail);
   dict.Set("enableThreadsRailHybrid",
            ntp_features::kNtpThreadsRailHybridParam.Get());
+  dict.Set("threadsRailPreloadDebounceMs",
+           ntp_features::kNtpThreadsRailPreloadDebounceMsParam.Get());
   if (enable_threads_rail && lhs_rail_config) {
     base::DictValue lhs_rail_config_dict;
     base::ListValue items_list;
@@ -1028,11 +1034,6 @@ NewTabPageUI::NewTabPageUI(content::WebUI* web_ui)
       ntp_custom_background_service_(
           NtpCustomBackgroundServiceFactory::GetForProfile(profile_)),
       ntp_custom_background_service_observation_(this),
-      // We initialize navigation_start_time_ to a reasonable value to account
-      // for the unlikely case where the NewTabPageHandler is created before we
-      // received the DidStartNavigation event.
-      navigation_start_time_(base::Time::Now()),
-      navigation_start_time_ticks_(base::TimeTicks::Now()),
       module_id_details_(
           ntp::MakeModuleIdDetails(NewTabPageUI::IsManagedProfile(profile_),
                                    profile_)) {
@@ -1109,12 +1110,6 @@ NewTabPageUI::~NewTabPageUI() {
       return;
     }
   }
-}
-
-// static
-bool NewTabPageUI::IsNewTabPageOrigin(const GURL& url) {
-  return url.DeprecatedGetOriginAsURL() ==
-         chrome::ChromeUINewTabPageURLAsGURL().DeprecatedGetOriginAsURL();
 }
 
 // static
@@ -1338,8 +1333,7 @@ void NewTabPageUI::CreatePageHandler(
       SyncServiceFactory::GetForProfile(profile_),
       segmentation_platform::SegmentationPlatformServiceFactory::GetForProfile(
           profile_),
-      web_contents(), navigation_start_time_, navigation_start_time_ticks_,
-      &module_id_details_);
+      web_contents(), &module_id_details_);
 }
 
 void NewTabPageUI::ConnectToParentDocument(
@@ -1375,7 +1369,7 @@ void NewTabPageUI::CreateCustomizeButtonsHandler(
   promo_helper = std::make_unique<NewTabPageFeaturePromoHelper>();
 #endif
   customize_buttons_handler_ = std::make_unique<CustomizeButtonsHandler>(
-      std::move(pending_page_handler), std::move(pending_page), web_ui(),
+      std::move(pending_page_handler), std::move(pending_page), web_contents(),
       webui::GetTabInterface(web_contents()), std::move(promo_helper));
 }
 
@@ -1387,10 +1381,8 @@ void NewTabPageUI::CreatePageHandler(
   most_visited_page_handler_ = std::make_unique<MostVisitedHandler>(
       std::move(pending_page_handler), std::move(pending_page), profile_,
       web_contents(),
-      std::make_unique<NTPUserDataLogger>(profile_,
-                                          chrome::ChromeUINewTabPageURLAsGURL(),
-                                          navigation_start_time_ticks_),
-      navigation_start_time_);
+      std::make_unique<NTPUserDataLogger>(
+          profile_, chrome::ChromeUINewTabPageURLAsGURL()));
   most_visited_pref_observer_ = std::make_unique<MostVisitedPrefObserver>(
       profile_, most_visited_page_handler_.get());
 }
@@ -1417,6 +1409,9 @@ void NewTabPageUI::CreatePageHandler(
                           base::Unretained(this)),
       base::BindRepeating(&NewTabPageUI::ClearContextualSessionHandle,
                           base::Unretained(this)));
+  if (omnibox::IsDynamicAimFulfillmentEnabledForRealbox()) {
+    composebox_handler_->OptInToDynamicAimFulfillment();
+  }
 }
 
 void NewTabPageUI::CreateHelpBubbleHandler(
@@ -1513,21 +1508,17 @@ void NewTabPageUI::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
   if (navigation_handle->IsInPrimaryMainFrame() &&
       navigation_handle->GetURL() == chrome::ChromeUINewTabPageURLAsGURL()) {
-    navigation_start_time_ = base::Time::Now();
-    navigation_start_time_ticks_ = base::TimeTicks::Now();
-
+    const base::Time now = base::Time::Now();
     OnLoad();
 
     auto prev_navigation_time =
         profile_->GetPrefs()->GetTime(kPrevNavigationTimePrefName);
     if (!prev_navigation_time.is_null()) {
-      base::UmaHistogramCustomTimes(
-          "NewTabPage.TimeSinceLastNTP",
-          navigation_start_time_ - prev_navigation_time, base::Seconds(1),
-          base::Days(1), 100);
+      base::UmaHistogramCustomTimes("NewTabPage.TimeSinceLastNTP",
+                                    now - prev_navigation_time,
+                                    base::Seconds(1), base::Days(1), 100);
     }
-    profile_->GetPrefs()->SetTime(kPrevNavigationTimePrefName,
-                                  navigation_start_time_);
+    profile_->GetPrefs()->SetTime(kPrevNavigationTimePrefName, now);
     base::UmaHistogramBoolean("NewTabPage.HasCredentials",
                               HasCredentials(profile_));
   }
@@ -1535,8 +1526,6 @@ void NewTabPageUI::DidStartNavigation(
 
 void NewTabPageUI::OnLoad() {
   base::DictValue update;
-  update.Set("navigationStartTime",
-             navigation_start_time_.InMillisecondsFSinceUnixEpoch());
   const bool modules_enabled = ntp::HasModulesEnabled(
       module_id_details_, IdentityManagerFactory::GetForProfile(profile_));
   update.Set("modulesEnabled", modules_enabled);

@@ -43,6 +43,7 @@ import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.device.gamepad.GamepadList;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.util.KeyEventUtils;
 
 import java.lang.annotation.Retention;
@@ -471,7 +472,6 @@ public class KeyboardShortcuts {
                 R.string.keyboard_shortcut_reload_page,
                 R.string.keyboard_shortcut_tab_group_header,
                 new KeyCombo[] {
-                    new KeyCombo(KeyEvent.KEYCODE_F5, KeyEvent.META_SHIFT_ON),
                     new KeyCombo(KeyEvent.KEYCODE_F5, NO_MODIFIER),
                     new KeyCombo(KeyEvent.KEYCODE_REFRESH, NO_MODIFIER)
                 });
@@ -482,6 +482,7 @@ public class KeyboardShortcuts {
                 R.string.keyboard_shortcut_tab_group_header,
                 new KeyCombo[] {
                     new KeyCombo(KeyEvent.KEYCODE_F5, KeyEvent.META_CTRL_ON),
+                    new KeyCombo(KeyEvent.KEYCODE_F5, KeyEvent.META_SHIFT_ON),
                     new KeyCombo(KeyEvent.KEYCODE_REFRESH, KeyEvent.META_CTRL_ON),
                     new KeyCombo(KeyEvent.KEYCODE_REFRESH, KeyEvent.META_SHIFT_ON)
                 });
@@ -657,7 +658,12 @@ public class KeyboardShortcuts {
                 new KeyCombo(
                         KeyEvent.KEYCODE_DEL, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
                 R.string.keyboard_shortcut_clear_browsing_data,
-                R.string.keyboard_shortcut_chrome_feature_group_header);
+                R.string.keyboard_shortcut_chrome_feature_group_header,
+                new KeyCombo[] {
+                    new KeyCombo(
+                            KeyEvent.KEYCODE_FORWARD_DEL,
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON))
+                });
 
         // Top controls.
         new KeyboardShortcutDefinition(
@@ -1374,7 +1380,8 @@ public class KeyboardShortcuts {
      * @return The formatted shortcut text, or {@code null}.
      */
     public static @Nullable String getShortcutText(@IdRes int menuItemId) {
-        if (!ChromeFeatureList.sAndroidKeyboardShortcutHints.isEnabled()) {
+        if (!ChromeFeatureList.sAndroidKeyboardShortcutHints.isEnabled()
+                || !DeviceInput.supportsAlphabeticKeyboard()) {
             return null;
         }
 

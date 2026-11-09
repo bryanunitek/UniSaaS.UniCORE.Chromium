@@ -445,7 +445,6 @@ source_set("tab_dialogs_impl") {
   deps = [
     ":hung_renderer_view",
     "//chrome/browser/ui/views/passwords:password_bubble_view_base",
-    "//chrome/browser/ui/views/site_data",
     "//chrome/browser/ui/views/web_apps",
     "//ui/views",
   ]
@@ -1781,7 +1780,6 @@ source_set("browser_tests") {
     "//chrome/browser/ui/webui/top_chrome:test_support",
     "//chrome/browser/web_applications:features",
     "//chrome/test:test_support",
-    "//chrome/test:test_support_ui",
     "//chrome/test/base:in_process_browser_test",
     "//chrome/test/base:ui_test_utils",
     "//components/permissions:test_support",
@@ -1852,7 +1850,6 @@ source_set("browser_tests") {
       "//chrome/browser/ui:uninstall_browser_prompt",
       "//chrome/browser/ui/views/accessibility:dump_accessibility_events_views_browsertest_base",
       "//chrome/browser/ui/webui/signin:inline_login",
-      "//chrome/browser/ui/webui/signin:login_ui_service",
       "//chrome/browser/ui/webui/signin:test_support_ui",
       "//chrome/credential_provider/common:common_constants",
       "//chrome/test/base:testing_browser_process",
@@ -2009,7 +2006,6 @@ if (!is_chromeos_device) {
       "//chrome/browser/ui/views/toolbar:interactive_ui_tests",
       "//chrome/browser/ui/webui:chrome_web_contents_handler",
       "//chrome/test:test_support",
-      "//chrome/test:test_support_ui",
       "//components/enterprise/data_controls/content/browser",
       "//components/enterprise/data_controls/core/browser:test_support",
       "//content/test:browsertest_support",

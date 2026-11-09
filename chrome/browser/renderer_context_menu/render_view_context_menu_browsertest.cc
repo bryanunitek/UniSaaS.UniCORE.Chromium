@@ -83,15 +83,12 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/read_anything/read_anything_entry_point_controller.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "chrome/browser/ui/tabs/features.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
-#include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
@@ -503,18 +500,10 @@ class ContextMenuBrowserTestBase : public MixinBasedInProcessBrowserTest {
 class ContextMenuBrowserTest : public ContextMenuBrowserTestBase {
  protected:
   ContextMenuBrowserTest() {
-    // TODO(b:481331402): 4 tests are failing when enabling
-    //   `kWebUIOmniboxPopup`. The respective menu items are becoming enabled
-    //   when they should be disabled. These are just test issues, the menu
-    //   items are actually correctly disabled in non-test builds.
-    //   - ...SaveLinkAsEntryIsDisabledForBlockedUrls/LinkPreviewDisabled
-    //   - ...SaveLinkAsEntryIsDisabledForBlockedUrls/LinkPreviewEnabled
-    //   - ...SaveImageAsEntryIsDisabledForBlockedUrls/LinkPreviewDisabled
-    //   - ...SaveImageAsEntryIsDisabledForBlockedUrls/LinkPreviewEnabled
     scoped_feature_list_.InitWithFeatures(
         {features::kGlic, media::kContextMenuSaveVideoFrameAs,
          media::kContextMenuSearchForVideoFrame},
-        {omnibox::internal::kWebUIOmniboxPopup});
+        {});
   }
 
  private:
@@ -3410,16 +3399,23 @@ class LensOverlayBrowserTest : public LensBrowserBaseTest {
         IDC_CONTENT_CONTEXT_SEARCHWEBFOR, event_flags, std::move(callback));
     RightClickToOpenContextMenu();
   }
+
+  // Loads a page with rendered content so that the simulated right click
+  // opens a context menu. On some builders, right clicking the initial empty
+  // tab never opens the menu and the region search tests time out.
+  void LoadPageForContextMenu() {
+    ASSERT_TRUE(
+        ui_test_utils::NavigateToURL(browser(), GURL("data:text/html,text")));
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
                        RegionSearchContextMenuOpensLensOverlay) {
+  ASSERT_NO_FATAL_FAILURE(LoadPageForContextMenu());
+
   // State should start in off.
-  auto* controller = browser()
-                         ->GetTabStripModel()
-                         ->GetActiveTab()
-                         ->GetTabFeatures()
-                         ->lens_overlay_controller();
+  auto* controller = LensOverlayController::From(
+      browser()->GetTabStripModel()->GetActiveTab());
   ASSERT_EQ(controller->state(), LensOverlayController::State::kOff);
 
   OpenContextMenuAndSelectRegionSearchEntrypoint(ui::EF_MOUSE_BUTTON,
@@ -3438,11 +3434,8 @@ IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page));
 
   // State should start in off.
-  auto* controller = browser()
-                         ->GetTabStripModel()
-                         ->GetActiveTab()
-                         ->GetTabFeatures()
-                         ->lens_overlay_controller();
+  auto* controller = LensOverlayController::From(
+      browser()->GetTabStripModel()->GetActiveTab());
   ASSERT_EQ(controller->state(), LensOverlayController::State::kOff);
 
   OpenContextMenuAndSelectSelectAll(
@@ -3467,6 +3460,8 @@ IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
                        RegionSearchContextMenuDoesNotOpenRegionSearch) {
+  ASSERT_NO_FATAL_FAILURE(LoadPageForContextMenu());
+
   bool run = false;
   OpenContextMenuAndSelectRegionSearchEntrypoint(
       ui::EF_MOUSE_BUTTON,
@@ -3483,6 +3478,8 @@ IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
                        RegionSearchContextMenuOpensRegionSearchForKeyboard) {
+  ASSERT_NO_FATAL_FAILURE(LoadPageForContextMenu());
+
   bool run = false;
   // EF_NONE event_type will be treated as a keyboard press.
   OpenContextMenuAndSelectRegionSearchEntrypoint(
@@ -4698,63 +4695,6 @@ IN_PROC_BROWSER_TEST_F(ContextMenuBrowserTest, OpenLinkInExistingSplitTabTop) {
   size_t index = model_and_index->second;
   EXPECT_EQ(model->GetLabelAt(index),
             l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_OPENLINKTOPVIEW));
-}
-
-class ContextMenuSplitViewHorizontalDirectAccessBrowserTest
-    : public ContextMenuBrowserTest {
- public:
-  ContextMenuSplitViewHorizontalDirectAccessBrowserTest() {
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/{{tabs::kSplitViewHorizontal,
-                               {{"split_view_horizontal_direct_access",
-                                 "true"}}}},
-        /*disabled_features=*/{});
-  }
-
-  void TestOpenLinkNewSplit(size_t index,
-                            SplitViewLayoutMenuModel::CommandId command_id,
-                            split_tabs::SplitTabLayout expected_layout) {
-    const GURL test_url("http://www.example.com/");
-    TabStripModel* const tab_strip_model = browser()->GetTabStripModel();
-    ASSERT_EQ(tab_strip_model->count(), 1);
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url));
-
-    std::unique_ptr<TestRenderViewContextMenu> menu =
-        CreateContextMenuMediaTypeNone(test_url, test_url);
-
-    std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
-        menu->GetMenuModelAndItemIndex(static_cast<int>(command_id));
-    ASSERT_TRUE(model_and_index);
-    auto [submenu, _] = model_and_index.value();
-
-    EXPECT_EQ(2u, submenu->GetItemCount());
-    EXPECT_EQ(static_cast<int>(command_id), submenu->GetCommandIdAt(index));
-    submenu->ActivatedAt(index);
-
-    EXPECT_EQ(tab_strip_model->count(), 2);
-    EXPECT_TRUE(tab_strip_model->GetActiveTab()->GetSplit().has_value());
-    EXPECT_EQ(
-        expected_layout,
-        tab_strip_model
-            ->GetSplitData(tab_strip_model->GetActiveTab()->GetSplit().value())
-            ->visual_data()
-            ->split_layout());
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(ContextMenuSplitViewHorizontalDirectAccessBrowserTest,
-                       OpenLinkNewSplitSideBySide) {
-  TestOpenLinkNewSplit(0, SplitViewLayoutMenuModel::CommandId::kSideBySide,
-                       split_tabs::SplitTabLayout::kSideBySide);
-}
-
-IN_PROC_BROWSER_TEST_F(ContextMenuSplitViewHorizontalDirectAccessBrowserTest,
-                       OpenLinkNewSplitStacked) {
-  TestOpenLinkNewSplit(1, SplitViewLayoutMenuModel::CommandId::kStacked,
-                       split_tabs::SplitTabLayout::kStacked);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

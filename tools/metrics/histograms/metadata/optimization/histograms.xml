@@ -41,6 +41,8 @@ chromium-metrics-reviews@google.com.
   <variant name="Classifier" summary="Classifier base model"/>
   <variant name="Gemma4" summary="Gemma4 base model"/>
   <variant name="LanguageDetection" summary="Language Detection base model"/>
+  <variant name="LayaEnWint8" summary="Laya EN Wint8 base model"/>
+  <variant name="LayaMlWint8" summary="Laya ML Wint8 base model"/>
   <variant name="ProofreaderSmallExpert"
       summary="Proofreader Small Expert base model"/>
   <variant name="SpeechRecognitionSmallExpert"
@@ -741,7 +743,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OptimizationGuide.AIPageContent.ExtractionConcurrency"
-    enum="AIPageContentExtractionConcurrency" expires_after="2027-02-28">
+    enum="AIPageContentExtractionConcurrency" expires_after="2027-05-02">
   <owner>alexmt@chromium.org</owner>
   <owner>khushalsagar@chromium.org</owner>
   <summary>
@@ -753,7 +755,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OptimizationGuide.AIPageContent.ExtractionsBetweenNavigations"
-    units="extractions" expires_after="2027-02-28">
+    units="extractions" expires_after="2027-05-02">
   <owner>alexmt@chromium.org</owner>
   <owner>khushalsagar@chromium.org</owner>
   <summary>
@@ -764,7 +766,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OptimizationGuide.AIPageContent.ExtractionsPerPage"
-    units="extractions" expires_after="2027-02-28">
+    units="extractions" expires_after="2027-05-02">
   <owner>alexmt@chromium.org</owner>
   <owner>khushalsagar@chromium.org</owner>
   <summary>
@@ -882,7 +884,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OptimizationGuide.AIPageContent.TimeSinceLastExtraction"
-    units="ms" expires_after="2027-02-28">
+    units="ms" expires_after="2027-05-02">
   <owner>alexmt@chromium.org</owner>
   <owner>khushalsagar@chromium.org</owner>
   <summary>
@@ -1183,6 +1185,48 @@ chromium-metrics-reviews@google.com.
     loaded into memory by the prediction manager.
   </summary>
   <token key="OptimizationTarget" variants="OptimizationTarget"/>
+</histogram>
+
+<histogram
+    name="OptimizationGuide.ModelExecution.AccessTokenLatency.{ModelExecutionFeature}"
+    units="ms" expires_after="2027-04-30">
+  <owner>jkeitel@google.com</owner>
+  <owner>chrome-intelligence-core@google.com</owner>
+  <summary>
+    Records the time spent waiting for an OAuth access token from
+    IdentityManager during a model execution request for
+    {ModelExecutionFeature}. Recorded when a non-empty access token is
+    successfully received before the network request is sent.
+  </summary>
+  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
+</histogram>
+
+<histogram
+    name="OptimizationGuide.ModelExecution.AccessTokenPrewarmLatency.{ModelExecutionFeature}"
+    units="ms" expires_after="2027-04-30">
+  <owner>jkeitel@google.com</owner>
+  <owner>chrome-intelligence-core@google.com</owner>
+  <summary>
+    Records the time spent prefetching an OAuth access token from
+    IdentityManager when PrewarmModelExecution is called for
+    {ModelExecutionFeature}. Recorded only when a non-empty access token is
+    successfully received.
+  </summary>
+  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
+</histogram>
+
+<histogram
+    name="OptimizationGuide.ModelExecution.ConnectLatency.{ModelExecutionFeature}"
+    units="ms" expires_after="2027-04-30">
+  <owner>jkeitel@google.com</owner>
+  <owner>chrome-intelligence-core@google.com</owner>
+  <summary>
+    Records the time spent establishing a network connection (DNS lookup +
+    TCP/TLS or QUIC handshake) during a model execution HTTP request for
+    {ModelExecutionFeature}. Recorded when the URL load completes. Emits 0 ms
+    when an existing or preconnected HTTP/2 or HTTP/3 session is reused.
+  </summary>
+  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
 </histogram>
 
 <histogram

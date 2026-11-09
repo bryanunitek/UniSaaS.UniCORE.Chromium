@@ -64,6 +64,7 @@ class SharedURLLoaderFactory;
 
 namespace one_time_tokens {
 class GmailOtpBackend;
+class GmailOtpService;
 class SmsOtpService;
 }  // namespace one_time_tokens
 
@@ -164,7 +165,7 @@ class SingleFieldFillRouter;
 class TouchToFillAutofillDelegate;
 class ValuablesDataManager;
 class AutofillAiPersonalContextAccessManager;
-class EntitySuppressionManager;
+class PersonalContextEntityMetadataManager;
 class VotesUploader;
 class PasswordManagerAutofillHelperDelegate;
 class WalletPassAccessManager;
@@ -498,10 +499,12 @@ class AutofillClient {
   const AutofillAiPersonalContextAccessManager*
   GetAutofillAiPersonalContextAccessManager() const;
 
-  // Returns the per-profile `EntitySuppressionManager` associated with the
-  // client.
-  virtual EntitySuppressionManager* GetEntitySuppressionManager();
-  const EntitySuppressionManager* GetEntitySuppressionManager() const;
+  // Returns the per-profile `PersonalContextEntityMetadataManager` associated
+  // with the client.
+  virtual PersonalContextEntityMetadataManager*
+  GetPersonalContextEntityMetadataManager();
+  const PersonalContextEntityMetadataManager*
+  GetPersonalContextEntityMetadataManager() const;
 
   // Returns the per-profile `AutofillAiModelCache`. Returns `nullptr` if the
   // `kAutofillAiServerModel` is not enabled.
@@ -1035,6 +1038,9 @@ class AutofillClient {
 
   // May return null on platforms where no SmsOtpService is supported.
   virtual one_time_tokens::SmsOtpService* GetSmsOtpService() const;
+
+  // May return null on platforms where no GmailOtpService is supported.
+  virtual one_time_tokens::GmailOtpService* GetGmailOtpService();
 
   // May return null on platforms where no GmailOtpBackend is supported.
   virtual one_time_tokens::GmailOtpBackend* GetGmailOtpBackend() const;

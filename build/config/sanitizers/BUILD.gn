@@ -289,6 +289,11 @@ config("default_sanitizer_ldflags") {
         # need to use this symbol to report control flow coverage
         # to the main binary
         ldflags += [ "-Wl,-undefined,dynamic_lookup" ]
+
+        # Centipede's pc-table and control-flow coverage can push the __DATA
+        # segment of large binaries such as unit_tests past the 65,536-page
+        # limit of Mach-O chained fixups.
+        ldflags += [ "-Wl,-no_fixup_chains" ]
       }
     }
 
@@ -766,7 +771,11 @@ config("not_fuzzed") {
 # See: https://clang.llvm.org/docs/AllocToken.html
 config("alloc_token") {
   if (use_alloc_token) {
-    cflags = [ "-fsanitize=alloc-token" ]
+    cflags = [
+      "-fsanitize=alloc-token",
+      "-Xclang",
+      "-falloc-token-mode=typefunchashpointersplit",
+    ]
     if (is_linux || is_chromeos) {
       ldflags = [
         # go/keep-sorted start
@@ -793,11 +802,11 @@ config("alloc_token") {
   }
 }
 
-# Weak fallbacks of the __alloc_token_* functions, linked into every binary via
-# //build/config:common_deps. These are source_sets so that the fallbacks are
+# Weak fallbacks of the __alloc_token_* functions, linked into binaries that
+# use the alloc_token config. These are source_sets so that the fallbacks are
 # linked, and exported, even if the binary itself doesn't reference them.
 source_set("alloc_token_aliases") {
-  visibility = [ "//build/config:common_deps_without_libcxx" ]
+  visibility = [ "//build/config:alloc_token_aliases" ]
   if (use_alloc_token) {
     sources = [ "//build/sanitizers/alloc_token_aliases.c" ]
   }
@@ -805,7 +814,7 @@ source_set("alloc_token_aliases") {
 }
 
 source_set("alloc_token_aliases_cxx") {
-  visibility = [ "//build/config:common_deps" ]
+  visibility = [ "//build/config:alloc_token_aliases" ]
   if (use_alloc_token) {
     sources = [ "//build/sanitizers/alloc_token_aliases_cxx.cc" ]
   }

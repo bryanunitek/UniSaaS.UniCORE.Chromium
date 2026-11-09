@@ -57,9 +57,9 @@
 #include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/pointer/touch_ui_controller.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_test_api.h"
 #include "ui/events/base_event_utils.h"
@@ -331,11 +331,11 @@ IN_PROC_BROWSER_TEST_P(TabViewTest, IconDataChanged) {
   TestWebContentsObserver observer(web_contents);
   base::RunLoop run_loop;
   observer.SetStartLoadingCallback(run_loop.QuitClosure());
-  browser()->OpenURL(
-      content::OpenURLParams::CreateBrowserInitiated(
-          embedded_test_server()->GetURL("/title1.html"),
-          WindowOpenDisposition::kCurrentTab, ui::PAGE_TRANSITION_LINK),
-      base::DoNothing());
+  browser()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                         embedded_test_server()->GetURL("/title1.html"),
+                         ui::mojom::WindowOpenDisposition::kCurrentTab,
+                         ui::PAGE_TRANSITION_LINK),
+                     base::DoNothing());
   run_loop.Run();
   EXPECT_TRUE(icon->GetShowingLoadingAnimation());
   ASSERT_TRUE(content::WaitForLoadStop(web_contents));
@@ -756,26 +756,43 @@ IN_PROC_BROWSER_TEST_P(TabViewTest, LogsTabCloseMetrics_SplitView) {
 
 IN_PROC_BROWSER_TEST_P(TabViewTest,
                        SplitTabsAnchorHoverCardToParentSplitViewContainer) {
+  TabHoverCardController::set_disable_animations_for_testing(true);
+  base::ScopedClosureRunner reset_animations(base::BindOnce(
+      &TabHoverCardController::set_disable_animations_for_testing, false));
   AppendSplitTab();
-
-  // Get the view for both tabs in the split.
-  // Note: tab at index 0 is a normal tab.
   tabs::TabInterface* tab_1 = tab_strip_model()->GetTabAtIndex(1);
   tabs::TabInterface* tab_2 = tab_strip_model()->GetTabAtIndex(2);
-
   TabCollectionNode* split_tab_node =
       unpinned_collection_node()->GetChildNodeOfType(
           TabCollectionNode::Type::SPLIT);
   SplitTabView* split_tab_view =
       views::AsViewClass<SplitTabView>(split_tab_node->view());
-
   TabView* tab_1_view = views::AsViewClass<TabView>(
       split_tab_node->GetNodeForHandle(tab_1->GetHandle())->view());
-  ASSERT_EQ(tab_1_view->GetAnchor().GetIfView(), split_tab_view);
-
   TabView* tab_2_view = views::AsViewClass<TabView>(
       split_tab_node->GetNodeForHandle(tab_2->GetHandle())->view());
-  ASSERT_EQ(tab_2_view->GetAnchor().GetIfView(), split_tab_view);
+  views::View* expected_anchor_1 =
+      GetParam() == TabStripOrientation::kVertical
+          ? static_cast<views::View*>(split_tab_view)
+          : static_cast<views::View*>(tab_1_view);
+  views::View* expected_anchor_2 =
+      GetParam() == TabStripOrientation::kVertical
+          ? static_cast<views::View*>(split_tab_view)
+          : static_cast<views::View*>(tab_2_view);
+
+  hover_card_controller()->UpdateHoverCard(
+      tab_1_view, TabSlotController::HoverCardUpdateType::kHover);
+
+  ASSERT_TRUE(hover_card_controller()->hover_card_for_testing());
+  EXPECT_EQ(hover_card_controller()->hover_card_for_testing()->GetAnchorView(),
+            expected_anchor_1);
+
+  hover_card_controller()->UpdateHoverCard(
+      tab_2_view, TabSlotController::HoverCardUpdateType::kHover);
+
+  ASSERT_TRUE(hover_card_controller()->hover_card_for_testing());
+  EXPECT_EQ(hover_card_controller()->hover_card_for_testing()->GetAnchorView(),
+            expected_anchor_2);
 }
 
 IN_PROC_BROWSER_TEST_P(TabViewTest,
@@ -2981,4 +2998,43 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabViewDeclutterInactiveCloseHideDisabledTest,
                           GetLayoutConstant(LayoutConstant::kTabHeight));
   LayoutTab(inactive_tab);
   EXPECT_TRUE(inactive_tab->close_button_for_testing()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_P(TabViewTest,
+                       ThrobberPaintsToLayerAndLogsUpdateThrobberNotCached) {
+  const auto disable_rich_animations =
+      gfx::AnimationTestApi::SetRichAnimationRenderMode(
+          gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
+
+  TabView* tab_view = GetTabView(0);
+  ASSERT_TRUE(tab_view);
+  RunScheduledLayouts();
+
+  TabIcon* icon = tab_view->GetTabIconForTesting();
+  ASSERT_TRUE(icon);
+  ASSERT_FALSE(icon->GetContentsBounds().IsEmpty());
+  ASSERT_EQ(icon->layer(), nullptr);
+
+  base::HistogramTester histogram_tester;
+
+  tabs::TabData loading_data = tab_view->data();
+  loading_data.network_state = tabs::TabNetworkState::kWaiting;
+  tab_view->SetDataForTesting(loading_data);
+  tab_view->StepLoadingAnimation(base::Milliseconds(100));
+
+  EXPECT_NE(icon->layer(), nullptr);
+  if (base::TimeTicks::IsHighResolution()) {
+    histogram_tester.ExpectTotalCount("Tab.Icon.UpdateThrobber.Time.NotCached",
+                                      1);
+  }
+
+  tabs::TabData idle_data = loading_data;
+  idle_data.network_state = tabs::TabNetworkState::kNone;
+  tab_view->SetDataForTesting(idle_data);
+
+  EXPECT_EQ(icon->layer(), nullptr);
+  if (base::TimeTicks::IsHighResolution()) {
+    histogram_tester.ExpectTotalCount("Tab.Icon.UpdateThrobber.Time.NotCached",
+                                      2);
+  }
 }

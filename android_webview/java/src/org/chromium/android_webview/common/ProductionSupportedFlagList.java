@@ -258,6 +258,11 @@ public final class ProductionSupportedFlagList {
                 "Enable improved visibility detection form fields sent to the Android "
                         + "Autofill framework."),
         Flag.baseFeature(
+                "AndroidAutofillFillNonSensitiveCardFieldsInMainFrame",
+                "When filling from a cross-origin payment iframe, lets cardholder name and"
+                        + " expiration date fields in the main frame be filled if their values"
+                        + " pass strict checks."),
+        Flag.baseFeature(
                 AndroidAutofillFeatures.ANDROID_AUTOFILL_FIELDS_UPDATED_ON_SELECT_NAME,
                 "Enable updating autofill field origin on select control change."),
         Flag.baseFeature(
@@ -285,6 +290,9 @@ public final class ProductionSupportedFlagList {
                 AutofillFeatures.AUTOFILL_ENABLE_SKIPPING_UNRECOGNIZED_ATTRIBUTE,
                 "Allows autofill to ignore suppressing predicitons on fields with"
                         + " autocomplete=unrecognized."),
+        Flag.baseFeature(
+                AutofillFeatures.AUTOFILL_EXTRACT_SHADOW_DOM_IFRAMES,
+                "When enabled, Autofill also extracts iframes inside shadow DOM."),
         Flag.baseFeature(
                 AutofillFeatures.AUTOFILL_FIX_IFRAME_OWNERSHIP,
                 "Make Autofill's iframe ownership consistent with form control ownership."),
@@ -316,6 +324,10 @@ public final class ProductionSupportedFlagList {
         Flag.baseFeature(
                 AutofillFeatures.AUTOFILL_PAGE_LANGUAGE_DETECTION,
                 "Enables Autofill to retrieve the page language for form parsing."),
+        Flag.baseFeature(
+                AutofillFeatures.AUTOFILL_QUERY_PER_IFRAME_STRUCTURAL_SIGNATURES,
+                "Controls whether iframe subqueries use their host form's structural signature and"
+                        + " omit main-form-only metadata."),
         Flag.baseFeature(
                 AutofillFeatures.AUTOFILL_USE_IN_ADDRESS_MODEL,
                 "When enabled, Autofill uses a custom address model for India."),
@@ -354,6 +366,10 @@ public final class ProductionSupportedFlagList {
                 "If enabled, the missing merge modes will be re-enabled on nodes. To do that,"
                         + "MergeMode::kMergeChildrenAndReformatIfNeeded will be also added to all"
                         + "the nodes where required."),
+        Flag.baseFeature(
+                AutofillFeatures.AUTOFILL_STRICTER_PHONE_EXTENSION_REGEX,
+                "When enabled, applies a stricter phone extension regex to avoid false"
+                        + " positives."),
         Flag.baseFeature(
                 FeatureConstants.KEYBOARD_ACCESSORY_PAYMENT_VIRTUAL_CARD_FEATURE,
                 "When enabled, merchant bound virtual cards will be offered in the keyboard "
@@ -915,6 +931,9 @@ public final class ProductionSupportedFlagList {
         Flag.baseFeature(
                 MediaFeatures.MEDIA_CODEC_BLOCK_MODEL,
                 "Controls use of MediaCodec's LinearBlock mode."),
+        Flag.baseFeature(
+                MediaFeatures.MEDIA_CODEC_BLOCK_MODEL_ENCRYPTED,
+                "Controls use of MediaCodec's LinearBlock mode for encrypted playback."),
         Flag.baseFeature(BlinkFeatures.FETCH_LATER_API, "Enables FetchLater API."),
         Flag.baseFeature(
                 ContentFeatures.IO_THREAD_INTERACTIVE_THREAD_TYPE,
@@ -1175,6 +1194,9 @@ public final class ProductionSupportedFlagList {
         Flag.baseFeature(
                 AwFeatures.WEBVIEW_CONTENT_RESTRICTION_SUPPORT,
                 "Enables content restriction support in WebView."),
+        Flag.baseFeature(
+                AwFeatures.WEBVIEW_CONTENT_RESTRICTION_REQUEST_BODY_SUPPORT,
+                "Enables access to request body for content restriction in WebView."),
         Flag.baseFeature(
                 BaseFeatures.REBINDING_CHILD_SERVICE_CONNECTION_CONTROLLER,
                 "Use a single connection and rebindService() to manage the binding to a child"
@@ -1525,6 +1547,25 @@ public final class ProductionSupportedFlagList {
         Flag.baseFeature(
                 "V8Flag_code_cache_source_hash_sha256",
                 "Auto-generated flag for V8Flag_code_cache_source_hash_sha256."),
+        Flag.baseFeature(
+                NetFeatures.COOKIE_MONSTER_PER_KEY_DELETE,
+                "Uses per-key loading for single-domain CookieMonster deletes instead of"
+                        + " triggering a global cookie store load."),
+        Flag.baseFeature(
+                SafeBrowsingFeatures.PRIORITIZE_SAFE_BROWSING_NAVIGATION_CALLBACKS,
+                "Prioritizes Safe Browsing database lookup callbacks for navigation requests."),
+        Flag.baseFeature(
+                "YieldToLooperPeriodically",
+                "When enabled, periodically yield to Android Looper in MessagePumpAndroid."),
+        Flag.baseFeature(
+                NetFeatures.QUIC_ENABLE_PORT_MIGRATION,
+                "Controls whether QUIC sessions are allowed to migrate to a different port when"
+                        + " the current path is degrading."),
+        Flag.baseFeature(
+                NetFeatures.QUIC_PRECONNECT_INITIAL_RTT,
+                "When enabled, Profile#preconnect configures the client-side initial RTT on"
+                        + " uncached QUIC sessions to reduce the initial handshake Probe Timeout"
+                        + " (PTO) delay."),
         // Add new commandline switches and features above. The final entry should have a
         // trailing comma for cleaner diffs.
     };

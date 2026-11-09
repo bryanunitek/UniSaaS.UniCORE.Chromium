@@ -5,13 +5,18 @@
 #include "components/pdf/renderer/pdf_accessibility_table_detector.h"
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
 #include <ranges>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/containers/extend.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/function_ref.h"
 #include "base/numerics/safe_conversions.h"
 #include "components/pdf/renderer/pdf_accessibility_text_utils.h"
 #include "pdf/accessibility_structs.h"
@@ -60,6 +65,42 @@ constexpr float kGlyphCrossingInsetPx = 1.0f;
 // cover to count as running alongside or through its text, so lines that only
 // overlap at their ends are ignored.
 constexpr float kMinVerticalCoverageRatio = 0.5f;
+
+// Pages with more horizontal or vertical lines than this (maps, CAD drawings,
+// dense charts) are skipped to bound the cost of grouping lines.
+constexpr size_t kMaxRulingLinesPerDirection = 1000;
+
+// How far apart, in pixels, a horizontal and a vertical line can be and still
+// count as meeting. Strokes at a corner often stop slightly short.
+constexpr float kLineConnectionTolerancePx = 3.0f;
+
+// Line positions within this many pixels of a cluster's first position become
+// one row or column boundary, so slightly offset cell borders line up.
+constexpr float kClusterTolerancePx = 5.0f;
+
+// Minimum number of rows and of columns in a table.
+constexpr size_t kMinTableRowsAndColumns = 2;
+
+// How far, in pixels, a run must extend past an interior column boundary on
+// both sides to count as crossing it.
+constexpr float kColumnCrossingTolerancePx = 3.0f;
+
+// Maximum fraction of runs that cross a column boundary. Above it, the lines
+// are likely chart gridlines drawn through labels.
+constexpr float kMaxColumnCrossingRunFraction = 0.10f;
+
+// How far a line may extend past the grid's outer boundary. Longer lines are
+// likely chart axes, timelines or page rules.
+constexpr float kMaxLineOvershootPx = 20.0f;
+
+// Minimum fraction of cells, after trimming empty edges, that must contain
+// text. Grids with mostly empty cells are more likely forms or decorative
+// boxes than data tables.
+constexpr float kMinPopulatedCellFraction = 0.50f;
+
+// Maximum fraction of vertical-text runs. Above it, the grid is likely a
+// sideways table, whose rows and columns would come out swapped.
+constexpr float kMaxVerticalRunFraction = 0.50f;
 
 // An axis-aligned line segment. `position` is the fixed perpendicular
 // coordinate (y for horizontal, x for vertical), and `start` to `end` is the
@@ -385,6 +426,413 @@ void RemapTextRunRange(base::span<const uint32_t> first_split_run_indices,
   range.count = end - start;
 }
 
+// Disjoint-set (union-find) structure used to group connected line indices.
+class DisjointSet {
+ public:
+  explicit DisjointSet(size_t n) : parent_(n) {
+    std::ranges::iota(parent_, 0u);
+  }
+
+  size_t Find(size_t i) {
+    while (parent_[i] != i) {
+      // Shorten the path as it walks.
+      parent_[i] = parent_[parent_[i]];
+      i = parent_[i];
+    }
+    return i;
+  }
+
+  void Union(size_t i, size_t j) {
+    size_t root_i = Find(i);
+    size_t root_j = Find(j);
+    if (root_i != root_j) {
+      parent_[root_i] = root_j;
+    }
+  }
+
+ private:
+  std::vector<size_t> parent_;
+};
+
+// Horizontal and vertical lines connected to each other through touching or
+// crossing lines, i.e. one candidate table. Has at least one horizontal and one
+// vertical line. Holds indices into `h_lines` and `v_lines`.
+struct LineGroup {
+  std::vector<size_t> horizontal_indices;
+  std::vector<size_t> vertical_indices;
+};
+
+// Returns whether horizontal `h_line` and vertical `v_line` touch or cross,
+// allowing either to fall short of the other by at most
+// `kLineConnectionTolerancePx`.
+bool LinesConnect(const RulingLine& h_line, const RulingLine& v_line) {
+  const float x = v_line.start.x();
+  const float y = h_line.start.y();
+  return x >= h_line.start.x() - kLineConnectionTolerancePx &&
+         x <= h_line.end.x() + kLineConnectionTolerancePx &&
+         y >= v_line.start.y() - kLineConnectionTolerancePx &&
+         y <= v_line.end.y() + kLineConnectionTolerancePx;
+}
+
+// Groups horizontal and vertical lines that touch or cross within
+// `kLineConnectionTolerancePx`. `v_lines` must be sorted by x. Lines that
+// touch no other line are dropped. For example, these lines form two groups:
+//
+//   +----+----+       +----+
+//   |    |    |       |    |       ------
+//   +----+----+       +----+
+//   |    |    |
+//   |         |
+//   +---------+
+//
+// The middle vertical line stops short of the bottom line, but within the
+// tolerance, so it joins the left group. The box is farther away, so it forms
+// its own group. The line on the right touches nothing, so it's dropped.
+std::vector<LineGroup> GroupConnectedLines(
+    base::span<const RulingLine> h_lines,
+    base::span<const RulingLine> v_lines) {
+  const size_t num_h_lines = h_lines.size();
+  const size_t num_v_lines = v_lines.size();
+  DisjointSet uf(num_h_lines + num_v_lines);
+
+  // Join each horizontal line with the vertical lines it connects to. Only
+  // vertical lines within the horizontal line's x-range, padded by
+  // `kLineConnectionTolerancePx`, can connect, so binary search for those.
+  for (size_t h_idx = 0; h_idx < num_h_lines; ++h_idx) {
+    const RulingLine& h_line = h_lines[h_idx];
+    const gfx::Range candidates = GetVerticalLineIndicesInXRange(
+        v_lines, gfx::RangeF(h_line.start.x() - kLineConnectionTolerancePx,
+                             h_line.end.x() + kLineConnectionTolerancePx));
+    for (size_t v_idx = candidates.start(); v_idx < candidates.end(); ++v_idx) {
+      if (LinesConnect(h_line, v_lines[v_idx])) {
+        uf.Union(h_idx, num_h_lines + v_idx);
+      }
+    }
+  }
+
+  // Collect the lines of each connected group. `uf.Find()` returns the same ID
+  // for every line in a group, so that ID is used as the group's index.
+  std::vector<LineGroup> groups(num_h_lines + num_v_lines);
+  for (size_t h_idx = 0; h_idx < num_h_lines; ++h_idx) {
+    groups[uf.Find(h_idx)].horizontal_indices.push_back(h_idx);
+  }
+  for (size_t v_idx = 0; v_idx < num_v_lines; ++v_idx) {
+    groups[uf.Find(num_h_lines + v_idx)].vertical_indices.push_back(v_idx);
+  }
+
+  // Keep only groups with both horizontal and vertical lines.
+  std::erase_if(groups, [](const LineGroup& group) {
+    return group.horizontal_indices.empty() || group.vertical_indices.empty();
+  });
+  return groups;
+}
+
+// Groups nearby values in `coords` and returns each group's mean, in ascending
+// order. A group spans up to `kClusterTolerancePx` from its smallest value.
+// For example, {0, 30, 34, 60} gives {0, 32, 60}.
+std::vector<float> ClusterCoordinates(std::vector<float> coords) {
+  std::ranges::sort(coords);
+  std::vector<float> clusters;
+  for (auto it = coords.begin(); it != coords.end();) {
+    auto cluster_end =
+        std::upper_bound(it, coords.end(), *it + kClusterTolerancePx);
+    clusters.push_back(std::accumulate(it, cluster_end, 0.0f) /
+                       static_cast<float>(std::distance(it, cluster_end)));
+    it = cluster_end;
+  }
+  return clusters;
+}
+
+// Returns the fixed coordinate of each line in `indices`: y for horizontal
+// lines, x for vertical lines.
+std::vector<float> LinePositions(base::span<const RulingLine> lines,
+                                 base::span<const size_t> indices) {
+  return base::ToVector(indices, [&](size_t idx) {
+    const RulingLine& line = lines[idx];
+    return line.is_horizontal ? line.start.y() : line.start.x();
+  });
+}
+
+// Returns whether either endpoint of `line` is outside `bounds`.
+bool IsLineOutsideBounds(const RulingLine& line, const gfx::RectF& bounds) {
+  return !bounds.InclusiveContains(line.start) ||
+         !bounds.InclusiveContains(line.end);
+}
+
+// Returns whether any ruling line in `group` extends beyond the grid boundary
+// defined by `column_boundaries` and `row_boundaries` by more than
+// `kMaxLineOvershootPx`. For example, the middle vertical line below extends
+// past the bottom of the grid, like a chart axis:
+//   +----+----+
+//   |    |    |
+//   +----+----+
+//   |    |    |
+//   +----+----+
+//        |
+//        |
+bool HasOvershootingLines(const LineGroup& group,
+                          base::span<const RulingLine> h_lines,
+                          base::span<const RulingLine> v_lines,
+                          base::span<const float> column_boundaries,
+                          base::span<const float> row_boundaries) {
+  // Each line's fixed coordinate is within `kClusterTolerancePx` of a boundary,
+  // so only its length can reach outside `allowed_bounds`.
+  gfx::RectF allowed_bounds = gfx::BoundingRect(
+      gfx::PointF(column_boundaries.front(), row_boundaries.front()),
+      gfx::PointF(column_boundaries.back(), row_boundaries.back()));
+  allowed_bounds.Outset(kMaxLineOvershootPx);
+
+  for (size_t idx : group.horizontal_indices) {
+    if (IsLineOutsideBounds(h_lines[idx], allowed_bounds)) {
+      return true;
+    }
+  }
+  for (size_t idx : group.vertical_indices) {
+    if (IsLineOutsideBounds(v_lines[idx], allowed_bounds)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns index `i` such that `boundaries[i] <= value < boundaries[i + 1]`,
+// clamped to the first and last intervals.
+size_t FindInterval(base::span<const float> boundaries, float value) {
+  CHECK_GE(boundaries.size(), 2u);
+  // Count the interval starts at or below `value`.
+  const base::span<const float> starts =
+      boundaries.first(boundaries.size() - 1);
+  const size_t count = std::ranges::upper_bound(starts, value) - starts.begin();
+  return count > 0 ? count - 1 : 0;
+}
+
+// The text run indices in each grid cell, as `cells[row][col]`:
+// - Outer: rows.
+// - Middle: columns.
+// - Inner: indices into `text_runs` of the runs in that cell (empty if none).
+using RunIndicesByCell = std::vector<std::vector<std::vector<size_t>>>;
+
+// Puts each text run in the cell that contains its center. Runs centered
+// outside the grid are skipped.
+RunIndicesByCell AssignRunsToCells(
+    base::span<const chrome_pdf::AccessibilityTextRunInfo> text_runs,
+    const RulingGrid& grid) {
+  const size_t row_count = grid.row_boundaries.size() - 1;
+  const size_t col_count = grid.column_boundaries.size() - 1;
+  RunIndicesByCell cells(row_count,
+                         std::vector<std::vector<size_t>>(col_count));
+
+  const gfx::RectF grid_bounds = gfx::BoundingRect(
+      gfx::PointF(grid.column_boundaries.front(), grid.row_boundaries.front()),
+      gfx::PointF(grid.column_boundaries.back(), grid.row_boundaries.back()));
+
+  for (size_t run_idx = 0; run_idx < text_runs.size(); ++run_idx) {
+    const gfx::PointF center = text_runs[run_idx].bounds.CenterPoint();
+    if (!grid_bounds.InclusiveContains(center)) {
+      continue;
+    }
+    cells[FindInterval(grid.row_boundaries, center.y())]
+         [FindInterval(grid.column_boundaries, center.x())]
+             .push_back(run_idx);
+  }
+  return cells;
+}
+
+// Returns the total number of run indices across all cells.
+size_t CountAssignedRuns(const RunIndicesByCell& cells) {
+  size_t count = 0;
+  for (const auto& row : cells) {
+    for (const auto& cell_runs : row) {
+      count += cell_runs.size();
+    }
+  }
+  return count;
+}
+
+// Returns the number of text runs in `cells` that satisfy `predicate`, which
+// takes a text run index.
+size_t CountRunsIf(const RunIndicesByCell& cells,
+                   base::FunctionRef<bool(size_t run_index)> predicate) {
+  size_t count = 0;
+  for (const auto& row : cells) {
+    for (const auto& cell_runs : row) {
+      count += std::ranges::count_if(cell_runs, predicate);
+    }
+  }
+  return count;
+}
+
+// Returns the number of text runs in `cells` that cross an interior column
+// boundary, i.e. extend more than `kColumnCrossingTolerancePx` past it on both
+// sides. For example, "Revenue" crosses the boundary below, but "Cost" stays
+// within its column:
+//   +-----+-----+
+//   | Reve|nue  |
+//   | Cost|     |
+//   +-----+-----+
+size_t CountRunsCrossingColumns(
+    const RunIndicesByCell& cells,
+    base::span<const chrome_pdf::AccessibilityTextRunInfo> text_runs,
+    base::span<const float> column_boundaries) {
+  base::span<const float> interior_boundaries =
+      column_boundaries.subspan(1u, column_boundaries.size() - 2);
+  return CountRunsIf(cells, [&](size_t run_index) {
+    const gfx::RectF& bounds = text_runs[run_index].bounds;
+    return std::ranges::any_of(interior_boundaries, [&](float boundary_x) {
+      return bounds.x() < boundary_x - kColumnCrossingTolerancePx &&
+             bounds.right() > boundary_x + kColumnCrossingTolerancePx;
+    });
+  });
+}
+
+// Returns the number of text runs in `cells` with vertical text direction.
+size_t CountVerticalRuns(
+    const RunIndicesByCell& cells,
+    base::span<const chrome_pdf::AccessibilityTextRunInfo> text_runs) {
+  return CountRunsIf(cells, [&](size_t run_index) {
+    return IsVerticalTextDirection(text_runs[run_index].direction);
+  });
+}
+
+// Smallest row and column ranges that cover every non-empty cell, and how many
+// cells are non-empty.
+struct PopulatedRange {
+  gfx::Range rows;
+  gfx::Range cols;
+  size_t populated_cell_count = 0;
+};
+
+// Finds the smallest block of rows and columns that contains every cell with
+// text, and counts those cells. At least one cell must have text. For example,
+// with text in the X cells below, the block is rows 1-3 and columns 0-1, with 4
+// populated cells:
+//   . . . .
+//   X X . .
+//   X . . .
+//   . X . .
+PopulatedRange FindPopulatedRange(const RunIndicesByCell& cells) {
+  size_t min_row = cells.size();
+  size_t max_row = 0;
+  size_t min_col = cells[0].size();
+  size_t max_col = 0;
+  size_t populated_cell_count = 0;
+
+  for (size_t r = 0; r < cells.size(); ++r) {
+    for (size_t c = 0; c < cells[r].size(); ++c) {
+      if (!cells[r][c].empty()) {
+        ++populated_cell_count;
+        min_row = std::min(min_row, r);
+        max_row = std::max(max_row, r);
+        min_col = std::min(min_col, c);
+        max_col = std::max(max_col, c);
+      }
+    }
+  }
+
+  CHECK_GT(populated_cell_count, 0u);
+  return {gfx::Range(min_row, max_row + 1), gfx::Range(min_col, max_col + 1),
+          populated_cell_count};
+}
+
+// Builds a table from the cells in the given rows and columns, at least one of
+// which must have a run. Moves each cell's run indices from `cells` into the
+// table. The table's anchor is its lowest run index, i.e. its first text in
+// reading order.
+HeuristicTable BuildTable(RunIndicesByCell cells,
+                          const RulingGrid& grid,
+                          gfx::Range rows,
+                          gfx::Range cols) {
+  const std::vector<float>& row_boundaries = grid.row_boundaries;
+  const std::vector<float>& column_boundaries = grid.column_boundaries;
+  HeuristicTable table;
+  table.bounds = gfx::BoundingRect(
+      gfx::PointF(column_boundaries[cols.start()],
+                  row_boundaries[rows.start()]),
+      gfx::PointF(column_boundaries[cols.end()], row_boundaries[rows.end()]));
+  size_t anchor_text_run_index = std::numeric_limits<size_t>::max();
+  table.rows.reserve(rows.length());
+
+  // Row `r` spans from row boundary `r` to `r + 1`, across all of `cols`.
+  for (size_t r = rows.start(); r < rows.end(); ++r) {
+    HeuristicTableRow row;
+    row.bounds = gfx::BoundingRect(
+        gfx::PointF(column_boundaries[cols.start()], row_boundaries[r]),
+        gfx::PointF(column_boundaries[cols.end()], row_boundaries[r + 1]));
+    row.cells.reserve(cols.length());
+
+    // Cell `(r, c)` spans from column boundary `c` to `c + 1`. Its run indices
+    // move into the table, and the lowest one updates the anchor.
+    for (size_t c = cols.start(); c < cols.end(); ++c) {
+      HeuristicTableCell cell;
+      cell.bounds = gfx::BoundingRect(
+          gfx::PointF(column_boundaries[c], row_boundaries[r]),
+          gfx::PointF(column_boundaries[c + 1], row_boundaries[r + 1]));
+      cell.text_run_indices = std::move(cells[r][c]);
+      if (!cell.text_run_indices.empty()) {
+        anchor_text_run_index =
+            std::min(anchor_text_run_index, cell.text_run_indices.front());
+      }
+      row.cells.push_back(std::move(cell));
+    }
+    table.rows.push_back(std::move(row));
+  }
+  // At least one cell has a run, so the anchor was set.
+  CHECK_NE(anchor_text_run_index, std::numeric_limits<size_t>::max());
+  table.anchor_text_run_index = anchor_text_run_index;
+  return table;
+}
+
+// Removes tables that share a text run with an earlier table, keeping the
+// larger table when anchors are equal. Returns the kept tables sorted by
+// anchor. `text_run_count` is the number of text runs on the page.
+//
+// For example, the outer grid below holds the nested grid's runs in its
+// top-left cell. The outer grid's anchor is never later, and it is larger, so
+// this keeps the outer grid and removes the nested one:
+//   +---------+---------+
+//   | +--+--+ |         |
+//   | |  |  | |         |
+//   | +--+--+ |         |
+//   | |  |  | |         |
+//   | +--+--+ |         |
+//   +---------+---------+
+//   |         |         |
+//   +---------+---------+
+std::vector<HeuristicTable> RemoveOverlappingTables(
+    std::vector<HeuristicTable> tables,
+    size_t text_run_count) {
+  if (tables.size() < 2) {
+    return tables;
+  }
+
+  // Sort by anchor, then largest first, since a nested grid can share its outer
+  // grid's anchor.
+  std::ranges::sort(
+      tables, [](const HeuristicTable& a, const HeuristicTable& b) {
+        if (a.anchor_text_run_index != b.anchor_text_run_index) {
+          return a.anchor_text_run_index < b.anchor_text_run_index;
+        }
+        return a.bounds.size().GetArea() > b.bounds.size().GetArea();
+      });
+
+  std::vector<HeuristicTable> kept_tables;
+  kept_tables.reserve(tables.size());
+  std::vector<bool> run_in_kept_table(text_run_count);
+  for (HeuristicTable& table : tables) {
+    const std::vector<size_t> run_indices = GetTableTextRunIndices(table);
+    if (std::ranges::any_of(run_indices, [&run_in_kept_table](size_t i) {
+          return run_in_kept_table[i];
+        })) {
+      continue;
+    }
+    for (size_t i : run_indices) {
+      run_in_kept_table[i] = true;
+    }
+    kept_tables.push_back(std::move(table));
+  }
+  return kept_tables;
+}
+
 }  // namespace
 
 std::vector<RulingLine> ExtractRulingLines(
@@ -470,6 +918,104 @@ void RemapTextRunIndices(base::span<const uint32_t> first_split_run_indices,
   for (chrome_pdf::AccessibilityImageInfo& image : page_objects.images) {
     image.text_run_index = first_split_run_indices[image.text_run_index];
   }
+}
+
+std::vector<RulingGrid> DetectRulingGrids(
+    base::span<const RulingLine> ruling_lines) {
+  const base::span<const RulingLine> v_lines = GetVerticalLines(ruling_lines);
+  // `GetVerticalLines()` checks that horizontal lines come first.
+  const base::span<const RulingLine> h_lines =
+      ruling_lines.first(ruling_lines.size() - v_lines.size());
+  if (h_lines.size() > kMaxRulingLinesPerDirection ||
+      v_lines.size() > kMaxRulingLinesPerDirection || h_lines.empty() ||
+      v_lines.empty()) {
+    return {};
+  }
+
+  // For each group of connected lines, compute the row and column boundaries.
+  // Collect groups with at least 2x2 cells into `grids`.
+  std::vector<RulingGrid> grids;
+  for (const LineGroup& group : GroupConnectedLines(h_lines, v_lines)) {
+    std::vector<float> row_boundaries =
+        ClusterCoordinates(LinePositions(h_lines, group.horizontal_indices));
+    if (row_boundaries.size() < kMinTableRowsAndColumns + 1) {
+      continue;
+    }
+
+    std::vector<float> column_boundaries =
+        ClusterCoordinates(LinePositions(v_lines, group.vertical_indices));
+    if (column_boundaries.size() < kMinTableRowsAndColumns + 1) {
+      continue;
+    }
+    if (HasOvershootingLines(group, h_lines, v_lines, column_boundaries,
+                             row_boundaries)) {
+      continue;
+    }
+
+    grids.push_back(RulingGrid{
+        .row_boundaries = std::move(row_boundaries),
+        .column_boundaries = std::move(column_boundaries),
+    });
+  }
+  return grids;
+}
+
+std::vector<HeuristicTable> DetectGridTables(
+    base::span<const chrome_pdf::AccessibilityTextRunInfo> text_runs,
+    base::span<const RulingLine> ruling_lines) {
+  std::vector<HeuristicTable> tables;
+  for (const RulingGrid& grid : DetectRulingGrids(ruling_lines)) {
+    RunIndicesByCell cells = AssignRunsToCells(text_runs, grid);
+    const size_t total_assigned_runs = CountAssignedRuns(cells);
+    // Skip grids with no text runs (e.g., a drawing).
+    if (total_assigned_runs == 0) {
+      continue;
+    }
+
+    // Skip grids where column lines run through text (e.g. chart gridlines
+    // drawn behind or across labels).
+    if (CountRunsCrossingColumns(cells, text_runs, grid.column_boundaries) >
+        kMaxColumnCrossingRunFraction * total_assigned_runs) {
+      continue;
+    }
+
+    // Skip grids composed predominantly of vertical text runs (e.g.
+    // sideways tables, which need separate rotation handling).
+    if (CountVerticalRuns(cells, text_runs) >
+        kMaxVerticalRunFraction * total_assigned_runs) {
+      continue;
+    }
+
+    // Find the block of rows and columns that have text, leaving out empty
+    // outer ones. Skip grids smaller than 2x2.
+    const PopulatedRange populated = FindPopulatedRange(cells);
+    if (populated.rows.length() < kMinTableRowsAndColumns ||
+        populated.cols.length() < kMinTableRowsAndColumns) {
+      continue;
+    }
+
+    // Skip grids that are mostly empty.
+    const size_t cell_count = populated.rows.length() * populated.cols.length();
+    if (populated.populated_cell_count <
+        kMinPopulatedCellFraction * cell_count) {
+      continue;
+    }
+
+    tables.push_back(
+        BuildTable(std::move(cells), grid, populated.rows, populated.cols));
+  }
+
+  return RemoveOverlappingTables(std::move(tables), text_runs.size());
+}
+
+std::vector<size_t> GetTableTextRunIndices(const HeuristicTable& table) {
+  std::vector<size_t> indices;
+  for (const HeuristicTableRow& row : table.rows) {
+    for (const HeuristicTableCell& cell : row.cells) {
+      base::Extend(indices, cell.text_run_indices);
+    }
+  }
+  return indices;
 }
 
 }  // namespace pdf

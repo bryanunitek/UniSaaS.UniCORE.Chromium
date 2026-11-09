@@ -46,8 +46,8 @@ if (is_android) {
     deps = [
       "//components/vrp_flags:buildflags",
       "//third_party/rust/font_types/v0_12:lib",
-      "//third_party/rust/read_fonts/v0_45:lib",
-      "//third_party/rust/skrifa/v0_48:lib",
+      "//third_party/rust/read_fonts/v0_46:lib",
+      "//third_party/rust/skrifa/v0_49:lib",
     ]
   }
 }
@@ -780,6 +780,12 @@ source_set("browser") {
     "cookie_store/cookie_store_manager.h",
     "cpu_performance/cpu_performance.cc",
     "cpu_performance/cpu_performance.h",
+    "cross_origin_storage/cross_origin_storage_file_handle_impl.cc",
+    "cross_origin_storage/cross_origin_storage_file_handle_impl.h",
+    "cross_origin_storage/cross_origin_storage_file_writer_impl.cc",
+    "cross_origin_storage/cross_origin_storage_file_writer_impl.h",
+    "cross_origin_storage/cross_origin_storage_manager_impl.cc",
+    "cross_origin_storage/cross_origin_storage_manager_impl.h",
     "cross_origin_storage/cross_origin_storage_registry.cc",
     "cross_origin_storage/cross_origin_storage_registry.h",
     "cross_origin_storage/cross_origin_storage_staging_writer.cc",
@@ -871,6 +877,8 @@ source_set("browser") {
     "devtools/protocol/devtools_network_resource_loader.h",
     "devtools/protocol/digital_credentials_handler.cc",
     "devtools/protocol/digital_credentials_handler.h",
+    "devtools/protocol/display_capture_launcher.cc",
+    "devtools/protocol/display_capture_launcher.h",
     "devtools/protocol/dom_handler.cc",
     "devtools/protocol/dom_handler.h",
     "devtools/protocol/emulation_handler.cc",
@@ -1384,6 +1392,8 @@ source_set("browser") {
     "notifications/platform_notification_context_impl.h",
     "notifications/platform_notification_service_proxy.cc",
     "notifications/platform_notification_service_proxy.h",
+    "notifications/platform_notification_service_routing.cc",
+    "notifications/platform_notification_service_routing.h",
     "origin_agent_cluster_isolation_state.cc",
     "origin_agent_cluster_isolation_state.h",
     "origin_agent_cluster_isolation_state_bridge.cc",
@@ -1775,6 +1785,7 @@ source_set("browser") {
     "renderer_host/media/video_capture_host.h",
     "renderer_host/media/video_capture_manager.cc",
     "renderer_host/media/video_capture_manager.h",
+    "renderer_host/media/video_capture_provider.cc",
     "renderer_host/media/video_capture_provider.h",
     "renderer_host/media/video_capture_provider_switcher.cc",
     "renderer_host/media/video_capture_provider_switcher.h",
@@ -1926,6 +1937,8 @@ source_set("browser") {
     "renderer_host/visible_time_request_trigger.h",
     "resource_broker/resource_broker_host.cc",
     "resource_broker/resource_broker_host.h",
+    "resource_broker/resource_broker_routing.cc",
+    "resource_broker/resource_broker_routing.h",
     "resource_coordinator_service.cc",
     "sandboxed_opaque_origin_creator.cc",
     "sandboxed_opaque_origin_creator.h",
@@ -1941,18 +1954,12 @@ source_set("browser") {
     "scheduler/browser_task_queues.h",
     "scheduler/browser_ui_thread_scheduler.cc",
     "scheduler/browser_ui_thread_scheduler.h",
-    "scheduler/responsiveness/calculator.cc",
-    "scheduler/responsiveness/calculator.h",
     "scheduler/responsiveness/jank_monitor_impl.cc",
     "scheduler/responsiveness/jank_monitor_impl.h",
-    "scheduler/responsiveness/message_loop_observer.cc",
-    "scheduler/responsiveness/message_loop_observer.h",
     "scheduler/responsiveness/metric_source.cc",
     "scheduler/responsiveness/metric_source.h",
     "scheduler/responsiveness/native_event_observer.cc",
     "scheduler/responsiveness/native_event_observer.h",
-    "scheduler/responsiveness/watcher.cc",
-    "scheduler/responsiveness/watcher.h",
     "scoped_active_url.cc",
     "scoped_active_url.h",
     "scoped_browser_file_access.cc",
@@ -3482,10 +3489,7 @@ source_set("browser") {
       "devtools/devtools_frontend_host_impl.h",
     ]
 
-    deps += [
-      "//content/browser/devtools:devtools_resources",
-      "//content/browser/devtools:devtools_resources_extern",
-    ]
+    deps += [ "//content/browser/devtools:devtools_resources_extern" ]
   }
 
   if (!is_android && !is_ios && !is_fuchsia) {

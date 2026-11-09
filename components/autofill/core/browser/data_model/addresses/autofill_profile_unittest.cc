@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -2060,8 +2061,8 @@ TEST_F(AutofillProfileTest, Compare_StructuredTypes) {
   ASSERT_NE(value1, value2);
   ASSERT_NE(status1, status2);
   std::vector<AddressCountryCode> country_codes = base::ToVector(
-      country_data_map->country_codes(), [](const std::string& country_code) {
-        return AddressCountryCode(country_code);
+      country_data_map->country_codes(), [](FixedCountryCode country_code) {
+        return AddressCountryCode(std::string(country_code));
       });
   // Include the legacy country code as well.
   country_codes.push_back(i18n_model_definition::kLegacyHierarchyCountryCode);
@@ -2388,7 +2389,7 @@ TEST_F(AutofillProfileTest, JavaObjectConversion_ExistingProfile) {
   const AutofillProfile profile =
       test::GetFullProfile(AddressCountryCode("DE"));
   const base::android::ScopedJavaLocalRef<jobject> jprofile =
-      profile.CreateJavaObject("en-US");
+      profile.CreateJavaObject();
   ASSERT_TRUE(jprofile);
 
   // Reconstruct C++ profile using `existing_profile`.
@@ -2406,7 +2407,7 @@ TEST_F(AutofillProfileTest, JavaObjectConversion_WithoutExistingProfile) {
   const AutofillProfile profile =
       test::GetFullProfile(AddressCountryCode("DE"));
   const base::android::ScopedJavaLocalRef<jobject> jprofile =
-      profile.CreateJavaObject("en-US");
+      profile.CreateJavaObject();
   ASSERT_TRUE(jprofile);
 
   const AutofillProfile reconstructed = AutofillProfile::CreateFromJavaObject(
@@ -2432,21 +2433,18 @@ TEST_F(AutofillProfileTest, JavaObjectConversion_WithoutExistingProfile) {
             profile.GetRawInfo(EMAIL_ADDRESS));
 }
 
-// Tests that `AutofillProfile.getInfo()` returns `GetRawInfo()` in Java except
-// for the full name.
-// TODO(crbug.com/40278253): Reconsider if this current behavior is the desired
-// behavior.
+// Tests that `AutofillProfile.getInfo()` returns `GetRawInfo()` in Java.
 TEST_F(AutofillProfileTest, JavaObjectConversion_getInfo) {
   JNIEnv* env = base::android::AttachCurrentThread();
   const AutofillProfile profile =
       test::GetFullProfile(AddressCountryCode("DE"));
   const base::android::ScopedJavaLocalRef<jobject> jprofile =
-      profile.CreateJavaObject("en-US");
+      profile.CreateJavaObject();
   ASSERT_TRUE(jprofile);
 
-  // In Java, `getInfo(NAME_FULL)` returns `GetInfo(NAME_FULL)`.
+  // In Java, `getInfo(NAME_FULL)` returns `GetRawInfo(NAME_FULL)`.
   EXPECT_EQ(Java_AutofillProfile_getInfo(env, jprofile, NAME_FULL),
-            profile.GetInfo(NAME_FULL, "en-US"));
+            profile.GetRawInfo(NAME_FULL));
   // In Java, `getInfo(ADDRESS_HOME_COUNTRY)` returns
   // `GetRawInfo(ADDRESS_HOME_COUNTRY)` (e.g. "DE"), not the localized country
   // name.
@@ -2460,7 +2458,7 @@ TEST_F(AutofillProfileTest,
   const AutofillProfile profile =
       test::GetFullProfile(AddressCountryCode("DE"));
   const base::android::ScopedJavaLocalRef<jobject> jprofile =
-      profile.CreateJavaObject("en-US");
+      profile.CreateJavaObject();
   ASSERT_TRUE(jprofile);
 
   // Modify some fields in Java.

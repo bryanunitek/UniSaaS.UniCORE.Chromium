@@ -98,6 +98,9 @@ inline constexpr char kChromeUIContentSettingsURL[] =
     "chrome://settings/content";
 inline constexpr char16_t kChromeUICookieSettingsURL[] =
     u"chrome://settings/cookies";
+#if !BUILDFLAG(IS_ANDROID)
+inline constexpr char kChromeUICraftHost[] = "craft";
+#endif
 inline constexpr char kChromeUICrashesHost[] = "crashes";
 inline constexpr char kChromeUICrashesUrl[] = "chrome://crashes";
 inline constexpr char kChromeUICreditsHost[] = "credits";
@@ -415,8 +418,6 @@ inline constexpr char kChromeUILensUntrustedSidePanelURL[] =
 inline constexpr char kChromeUIMultistepFilterInternalsHost[] =
     "multistep-filter-internals";
 inline constexpr char kChromeUINearbyInternalsHost[] = "nearby-internals";
-inline constexpr char kChromeUINearbyShareHost[] = "nearby";
-inline constexpr char kChromeUINearbyShareURL[] = "chrome://nearby/";
 inline constexpr char kChromeUIOnDeviceInternalsHost[] = "on-device-internals";
 inline constexpr char kChromeUIReadLaterHost[] = "read-later.top-chrome";
 inline constexpr char kChromeUIReadLaterURL[] =
@@ -572,7 +573,6 @@ inline constexpr char kGlicLoginSettingsSubpage[] = "ai/gemini/login";
 inline constexpr char kGoogleServicesSubpage[] = "googleServices";
 inline constexpr char kHandlerSettingsSubPage[] = "handlers";
 inline constexpr char kHelpSubPage[] = "help";
-inline constexpr char kHistorySearchSubpage[] = "ai/historySearch";
 inline constexpr char kImportDataSubPage[] = "importData";
 inline constexpr char kLanguageOptionsSubPage[] = "languages";
 inline constexpr char kLanguagesSubPage[] = "languages/details";

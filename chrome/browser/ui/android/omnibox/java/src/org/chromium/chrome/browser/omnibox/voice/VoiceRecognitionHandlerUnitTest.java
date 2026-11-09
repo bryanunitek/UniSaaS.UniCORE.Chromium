@@ -49,6 +49,7 @@ import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
@@ -60,7 +61,6 @@ import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.V
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceResult;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.util.BrowserUiUtils;
@@ -110,7 +110,7 @@ public class VoiceRecognitionHandlerUnitTest {
     @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJni;
     @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private Runnable mOnCanceled;
-    @Mock private VoicePlateIntentFactory mVoicePlateIntentFactory;
+    @Mock private VoicePlateIntegration mVoicePlateIntegration;
     @Captor private ArgumentCaptor<List<VoiceResult>> mVoiceResults;
     @Captor private ArgumentCaptor<WindowAndroid.IntentCallback> mIntentCallback;
     @Captor private ArgumentCaptor<AutocompleteInput> mInputCaptor;
@@ -128,6 +128,7 @@ public class VoiceRecognitionHandlerUnitTest {
     @Before
     public void setUp() throws InterruptedException, ExecutionException {
         VoiceRecognitionUtil.setHasRecognitionIntentHandlerForTesting(true);
+        VoicePlateIntegration.setInstanceForTesting(mVoicePlateIntegration);
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
         AutocompleteControllerJni.setInstanceForTesting(mAutocompleteControllerJniMock);
         lenient()
@@ -140,7 +141,6 @@ public class VoiceRecognitionHandlerUnitTest {
         lenient().doReturn(mProfile).when(mProfile).getOriginalProfile();
         lenient().doReturn(mProfile2).when(mProfile2).getOriginalProfile();
         lenient().doReturn(true).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
-        ProfileManager.setLastUsedProfileForTesting(mProfile);
 
         lenient()
                 .doReturn(DEFAULT_SEARCH_URL)
@@ -153,7 +153,7 @@ public class VoiceRecognitionHandlerUnitTest {
         var activity = Robolectric.buildActivity(Activity.class).setup().get();
 
         mWindowAndroid = spy(new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true));
-        mIntentHandler = spy(new VoiceRecognitionIntentHandler(mWindowAndroid));
+        mIntentHandler = spy(new VoiceRecognitionIntentHandler(mWindowAndroid, mProfileSupplier));
         mHandler =
                 new VoiceRecognitionHandler(
                         mOmniboxStub,
@@ -161,8 +161,8 @@ public class VoiceRecognitionHandlerUnitTest {
                         mAutocompleteCoordinator,
                         mWindowAndroid,
                         mProfileSupplier,
-                        mIntentHandler,
-                        mVoicePlateIntentFactory);
+                        mIntentHandler);
+        mProfileSupplier.set(mProfile);
         mHandler.addObserver(mObserver);
 
         mWindowAndroid.setAndroidPermissionDelegate(mPermissionDelegate);
@@ -230,11 +230,10 @@ public class VoiceRecognitionHandlerUnitTest {
                 .showCancelableIntent(any(Intent.class), mIntentCallback.capture(), any());
     }
 
-    /** Makes the Voice Plate intent factory report the request as eligible for the Voice Plate. */
+    /** Makes the Voice Plate integration report the request as eligible for the Voice Plate. */
     private void enableVoicePlate() {
-        doReturn(mVoicePlateIntent)
-                .when(mVoicePlateIntentFactory)
-                .createIntent(any(), any(), anyInt());
+        doReturn(true).when(mVoicePlateIntegration).isEligible(any());
+        doReturn(mVoicePlateIntent).when(mVoicePlateIntegration).createIntent(any(), any());
     }
 
     @Test
@@ -270,22 +269,34 @@ public class VoiceRecognitionHandlerUnitTest {
 
     @Test
     public void testIsVoiceSearchEnabled_UpdateAfterProfileSet() {
-        doReturn(true).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
-        verify(mObserver, never()).onVoiceAvailabilityImpacted();
-        assertTrue(mHandler.isVoiceSearchEnabled());
+        clearInvocations(mPrefChangeRegistrarJni, mObserver);
+        SettableMonotonicObservableSupplier<Profile> profileSupplier =
+                ObservableSuppliers.createMonotonic();
+        var intentHandler = new VoiceRecognitionIntentHandler(mWindowAndroid, profileSupplier);
+        var handler =
+                new VoiceRecognitionHandler(
+                        mOmniboxStub,
+                        mDataProvider,
+                        mAutocompleteCoordinator,
+                        mWindowAndroid,
+                        profileSupplier,
+                        intentHandler);
+        handler.addObserver(mObserver);
 
-        mProfileSupplier.set(mProfile);
         doReturn(false).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
-        assertFalse(mHandler.isVoiceSearchEnabled());
+        verify(mObserver, never()).onVoiceAvailabilityImpacted();
+        assertTrue(handler.isVoiceSearchEnabled());
+
+        profileSupplier.set(mProfile);
+        assertFalse(handler.isVoiceSearchEnabled());
         verify(mPrefChangeRegistrarJni).add(FAKE_PREF_REGISTRAR, Pref.AUDIO_CAPTURE_ALLOWED);
         verify(mObserver).onVoiceAvailabilityImpacted();
+        handler.destroy();
     }
 
     @Test
     public void testOnProfileUpdated_recreatesPrefChangeRegistrarAndCleansUpOnDestroy() {
-        mProfileSupplier.set(mProfile);
         verify(mPrefChangeRegistrarJni).add(FAKE_PREF_REGISTRAR, Pref.AUDIO_CAPTURE_ALLOWED);
-        verify(mObserver).onVoiceAvailabilityImpacted();
         clearInvocations(mPrefChangeRegistrarJni, mObserver);
 
         mProfileSupplier.set(mProfile2);
@@ -357,10 +368,6 @@ public class VoiceRecognitionHandlerUnitTest {
 
     @Test
     public void testIgnoreProfileAfterDestroy() {
-        mProfileSupplier.set(mProfile);
-        verify(mObserver).onVoiceAvailabilityImpacted();
-        clearInvocations(mObserver);
-
         mHandler.destroy();
         mProfileSupplier.set(mProfile2);
         // Stop propagating changes after destroy.
@@ -415,8 +422,8 @@ public class VoiceRecognitionHandlerUnitTest {
     }
 
     @Test
-    public void testVoicePlate_passesProfileAndSourceToFactory() {
-        mProfileSupplier.set(mProfile);
+    public void testVoicePlate_passesProfileToIntegration() {
+        enableVoicePlate();
         setVoiceResult(
                 /* resultCode= */ Activity.RESULT_CANCELED,
                 /* text= */ null,
@@ -424,8 +431,8 @@ public class VoiceRecognitionHandlerUnitTest {
 
         mHandler.startVoiceRecognition(VoiceInteractionSource.NTP, mOnCanceled);
 
-        verify(mVoicePlateIntentFactory)
-                .createIntent(any(), eq(mProfile), eq(VoiceInteractionSource.NTP));
+        verify(mVoicePlateIntegration).isEligible(mProfile);
+        verify(mVoicePlateIntegration).createIntent(any(), eq(mProfile));
     }
 
     @Test
@@ -467,6 +474,50 @@ public class VoiceRecognitionHandlerUnitTest {
     }
 
     @Test
+    public void testVoicePlate_stoppedWithPartialTranscript_populatesFocusedOmnibox() {
+        enableVoicePlate();
+        setVoiceResult(
+                /* resultCode= */ Activity.RESULT_OK,
+                /* text= */ "partial query",
+                /* confidence= */ 1.0f);
+        doReturn(true).when(mVoicePlateIntegration).isVoiceSearchStopped(any());
+
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, mOnCanceled);
+
+        verify(mOmniboxStub).beginInput(mInputCaptor.capture());
+        assertEquals("partial query", mInputCaptor.getValue().getUserText());
+        verify(mOmniboxStub, never()).loadUrlFromVoice(any());
+        verify(mOnCanceled, never()).run();
+    }
+
+    @Test
+    public void testVoicePlate_stoppedWithEmptyTranscript_treatsAsCanceled() {
+        enableVoicePlate();
+        setVoiceResult(
+                /* resultCode= */ Activity.RESULT_OK, /* text= */ "", /* confidence= */ 1.0f);
+        doReturn(true).when(mVoicePlateIntegration).isVoiceSearchStopped(any());
+
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, mOnCanceled);
+
+        verify(mOnCanceled).run();
+        verify(mIntentHandler).recordVoiceSearchResult(false);
+        verifyNoInteractions(mOmniboxStub);
+    }
+
+    @Test
+    public void testCallback_recordsWordCountHistogram() {
+        setVoiceResult(
+                /* resultCode= */ Activity.RESULT_OK,
+                /* text= */ "  weather   in   mountain view  ",
+                /* confidence= */ 1.0f);
+
+        try (var watcher =
+                HistogramWatcher.newSingleRecordWatcher("Omnibox.VoiceSearch.WordCount", 4)) {
+            mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, mOnCanceled);
+        }
+    }
+
+    @Test
     public void testParseResults_ForcedConfidence_IgnoresScores() {
         var bundle = new Bundle();
         bundle.putStringArrayList(
@@ -474,7 +525,7 @@ public class VoiceRecognitionHandlerUnitTest {
 
         List<VoiceResult> results =
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
-                        bundle, /* forceHighConfidence= */ true);
+                        bundle, /* forcedConfidence= */ 1.0f);
 
         RecognitionTestHelper.assertVoiceResultsAreEqual(
                 results, new String[] {"a", "b"}, new float[] {1.0f, 1.0f});
@@ -493,6 +544,35 @@ public class VoiceRecognitionHandlerUnitTest {
         verify(mOnCanceled).run();
         verify(mIntentHandler).recordVoiceSearchDismissedEvent(eq(VoiceInteractionSource.OMNIBOX));
         verifyNoInteractions(mOmniboxStub);
+    }
+
+    @Test
+    public void testVoicePlate_serviceRefused_fallsBackToSystemRecognizer() {
+        enableVoicePlate();
+        setVoiceResult(
+                /* resultCode= */ Activity.RESULT_OK, /* text= */ "testing", /* confidence= */ 0.f);
+        var refusedData = new Intent();
+        doReturn(true)
+                .when(mVoicePlateIntegration)
+                .isServiceRefused(Activity.RESULT_CANCELED, refusedData);
+        doAnswer(
+                        inv -> {
+                            WindowAndroid.IntentCallback cb = inv.getArgument(1);
+                            cb.onIntentCompleted(Activity.RESULT_CANCELED, refusedData);
+                            return 0;
+                        })
+                .when(mWindowAndroid)
+                .showCancelableIntent(eq(mVoicePlateIntent), any(), any());
+
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, mOnCanceled);
+
+        verify(mWindowAndroid, times(2))
+                .showCancelableIntent(mIntentCaptor.capture(), any(), any());
+        assertEquals(mVoicePlateIntent, mIntentCaptor.getAllValues().get(0));
+        assertNull(mIntentCaptor.getAllValues().get(1).getComponent());
+        verify(mIntentHandler, never()).recordVoiceSearchDismissedEvent(anyInt());
+        verify(mOmniboxStub).beginInput(any());
+        verify(mOnCanceled, never()).run();
     }
 
     @Test
@@ -656,7 +736,7 @@ public class VoiceRecognitionHandlerUnitTest {
     public void testParseResults_EmptyBundle() {
         assertNull(
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
-                        new Bundle(), /* forceHighConfidence= */ false));
+                        new Bundle(), /* forcedConfidence= */ null));
     }
 
     @Test
@@ -665,12 +745,12 @@ public class VoiceRecognitionHandlerUnitTest {
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(
                                 new String[] {"blah"}, new float[] {0f, 1f}),
-                        /* forceHighConfidence= */ false));
+                        /* forcedConfidence= */ null));
         assertNull(
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(
                                 new String[] {"blah", "foo"}, new float[] {7f}),
-                        /* forceHighConfidence= */ false));
+                        /* forcedConfidence= */ null));
     }
 
     @Test
@@ -681,7 +761,7 @@ public class VoiceRecognitionHandlerUnitTest {
         List<VoiceResult> results =
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(texts, confidences),
-                        /* forceHighConfidence= */ false);
+                        /* forcedConfidence= */ null);
         assertEquals(3, results.size());
         RecognitionTestHelper.assertVoiceResultsAreEqual(results, texts, confidences);
     }
@@ -689,9 +769,6 @@ public class VoiceRecognitionHandlerUnitTest {
     @Test
     public void testParseResults_VoiceResponseURLConversion() {
         doReturn(false).when(mMatch).isSearchSuggestion();
-        // Needed to interact with classifier, which requires a valid profile.
-        mProfileSupplier.set(mProfile);
-
         doReturn(mMatch).when(mAutocompleteController).classify(any());
 
         String[] texts = new String[] {"a", "www. b .co .uk", "engadget .com", "www.google.com"};
@@ -699,7 +776,7 @@ public class VoiceRecognitionHandlerUnitTest {
         List<VoiceResult> rawResults =
                 VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(texts, confidences),
-                        /* forceHighConfidence= */ false);
+                        /* forcedConfidence= */ null);
 
         mHandler.handleTranscriptionResult(rawResults);
 
